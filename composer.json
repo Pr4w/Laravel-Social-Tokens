@@ -1,0 +1,39 @@
+{
+    "name": "pr4w/laravel-social-tokens",
+    "description": "Persist, renew and manage OAuth social account tokens on top of Laravel Socialite.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "socialite", "oauth", "tokens", "social media"],
+    "require": {
+        "php": "^8.2",
+        "illuminate/contracts": "^11.0|^12.0",
+        "illuminate/database": "^11.0|^12.0",
+        "illuminate/bus": "^11.0|^12.0",
+        "illuminate/console": "^11.0|^12.0",
+        "illuminate/support": "^11.0|^12.0",
+        "laravel/socialite": "^5.5"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0",
+        "pestphp/pest": "^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Pr4w\\SocialTokens\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Pr4w\\SocialTokens\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Pr4w\\SocialTokens\\SocialTokensServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

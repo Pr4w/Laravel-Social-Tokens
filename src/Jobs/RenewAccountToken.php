@@ -1,0 +1,109 @@
+<?php
+
+namespace Pr4w\SocialTokens\Jobs;
+
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Pr4w\SocialTokens\Enums\RenewalOutcome;
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use RuntimeException;
+use Throwable;
+
+/**
+ * Renews a single account's token. One job per account so a failure on one
+ * provider never blocks the others, and so retry/backoff are per account.
+ */
+class RenewAccountToken implements ShouldQueue
+{
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public function __construct(public SocialAccount $account)
+    {
+        $this->onConnection(config('social-tokens.queue.connection'));
+        $this->onQueue(config('social-tokens.queue.queue'));
+    }
+
+    public function tries(): int
+    {
+        return (int) config('social-tokens.queue.tries', 4);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    public function backoff(): array
+    {
+        return config('social-tokens.queue.backoff', [60, 300, 900]);
+    }
+
+    public function handle(ConnectorRegistry $registry): void
+    {
+        $account = $this->account->fresh();
+
+        if ($account === null || ! $account->status->isUsable()) {
+            return; // already reconnected, revoked, or deleted
+        }
+
+        $connector = $registry->for($account->provider);
+
+        // Providers that cannot renew unattended: flag for reconnection ahead
+        // of expiry instead of attempting a doomed call. This is the expected
+        // path for LinkedIn without MDP, not an error.
+        if (! $connector->renewalStrategy()->canRenewUnattended()) {
+            $account->markNeedsReconnect('Provider requires manual re-authorisation.');
+
+            return;
+        }
+
+        // A dead refresh token can never produce a new access token.
+        if ($account->isRefreshTokenExpired()) {
+            $account->markNeedsReconnect('Refresh token has expired.');
+
+            return;
+        }
+
+        $result = $connector->renew($account);
+
+        match ($result->outcome) {
+            RenewalOutcome::Success => $account->applyRenewal($result, $connector),
+            RenewalOutcome::Terminal => $account->markNeedsReconnect($result->reason),
+            RenewalOutcome::Transient => $this->handleTransient($account, $result->reason),
+        };
+    }
+
+    /**
+     * Transient failure: retry while there is still a usable window. Once the
+     * access token has actually expired and we are out of retries, the failed()
+     * hook escalates to needs_reconnect.
+     */
+    protected function handleTransient(SocialAccount $account, ?string $reason): void
+    {
+        throw new RuntimeException('Transient renewal failure: '.($reason ?? 'unknown'));
+    }
+
+    /**
+     * Called by the queue after the final attempt fails.
+     */
+    public function failed(Throwable $exception): void
+    {
+        $account = $this->account->fresh();
+
+        if ($account === null || ! $account->status->isUsable()) {
+            return;
+        }
+
+        // If the token is already expired, the connection is effectively broken
+        // and needs human attention. Otherwise leave it active: a later run of
+        // the dispatcher will try again while the window is still open.
+        if ($account->isAccessTokenExpired(0)) {
+            $account->markNeedsReconnect('Renewal failed after retries: '.$exception->getMessage());
+        }
+    }
+}
