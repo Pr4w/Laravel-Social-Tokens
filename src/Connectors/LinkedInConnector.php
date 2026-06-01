@@ -11,21 +11,27 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
- * LinkedIn publishing via the Posts API.
+ * LinkedIn publishing via the Posts API (part of the Community Management API).
  *
  * Token facts (verified against LinkedIn / Microsoft developer docs):
  *  - access token lives 60 days
- *  - refresh tokens are ONLY issued to approved Marketing Developer Platform
- *    (MDP) partners, and live 365 days
+ *  - refresh tokens are issued to approved partner programs (Community
+ *    Management / Marketing Developer Platform), and live 365 days
  *  - the refresh token TTL does NOT reset on use: it counts down from issuance,
- *    so even MDP partners must have the member re-authorise within a year
+ *    so the member must re-authorise within a year regardless
  *
- * Therefore the strategy is config driven:
- *  - default: ReauthOnly. The token is flagged for reconnection ahead of the
- *    60 day expiry so the user re-authorises in time.
- *  - with 'refresh_enabled' => true (MDP partners): StableRefreshToken, using
- *    the standard refresh_token grant. The eventual 365 day cap still surfaces
- *    as a needs_reconnect once the refresh token's own window closes.
+ * Scope note:
+ *  - posting to a PERSONAL profile uses w_member_social
+ *  - posting to a COMPANY page uses w_organization_social, restricted to members
+ *    with an admin role on that page (ADMINISTRATOR / DIRECT_SPONSORED_CONTENT_
+ *    POSTER / RECRUITING_POSTER)
+ *  - the default below targets company pages via the Community Management API;
+ *    override 'scopes' in config to change it
+ *
+ * Strategy is config driven:
+ *  - default: ReauthOnly, the account is flagged for reconnection ahead of the
+ *    60 day expiry
+ *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
  */
 class LinkedInConnector extends AbstractConnector
 {
@@ -38,7 +44,14 @@ class LinkedInConnector extends AbstractConnector
 
     public function publishingScopes(): array
     {
-        return ['openid', 'profile', 'email', 'w_member_social'];
+        return $this->config['scopes'] ?? [
+            'openid',
+            'profile',
+            'email',
+            'w_member_social',        // personal profile posting
+            'w_organization_social',  // company page posting (Community Management)
+            'r_organization_social',  // read company page posts
+        ];
     }
 
     public function renewalStrategy(): RenewalStrategy
@@ -50,15 +63,11 @@ class LinkedInConnector extends AbstractConnector
 
     public function leadTime(): CarbonInterval
     {
-        // Generous, so the reconnection nudge reaches the user days before the
-        // 60 day token actually dies.
         return CarbonInterval::days(5);
     }
 
     public function renew(SocialAccount $account): RenewalResult
     {
-        // Only reachable when refresh is enabled (MDP). Callers check
-        // canRenewUnattended() first, but guard anyway.
         if (empty($account->refresh_token)) {
             return RenewalResult::terminalFailure('No refresh token (re-authorisation required).');
         }
@@ -100,8 +109,6 @@ class LinkedInConnector extends AbstractConnector
         return RenewalResult::success(
             accessToken: $accessToken,
             expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            // LinkedIn returns a refresh token, but with the SAME decreasing TTL.
-            // Persist it and track its expiry so the one year cap surfaces.
             refreshToken: $body['refresh_token'] ?? null,
             refreshExpiresAt: isset($body['refresh_token_expires_in'])
                 ? now()->addSeconds((int) $body['refresh_token_expires_in'])
