@@ -45,12 +45,24 @@ class LinkedInConnector extends AbstractConnector
     public function publishingScopes(): array
     {
         return $this->config['scopes'] ?? [
-            'openid',
-            'profile',
-            'email',
-            'w_member_social',        // personal profile posting
-            'w_organization_social',  // company page posting (Community Management)
-            'r_organization_social',  // read company page posts
+            'r_basicprofile',
+            'rw_organization_admin',
+            'w_member_social',
+
+            'r_member_postAnalytics',
+            'r_member_profileAnalytics',
+
+            'w_organization_social',
+            'r_organization_social',
+
+            'r_organization_followers',
+
+            'r_organization_social_feed',
+            'w_organization_social_feed',
+
+            'w_member_social_feed',
+
+            'r_1st_connections_size'
         ];
     }
 
