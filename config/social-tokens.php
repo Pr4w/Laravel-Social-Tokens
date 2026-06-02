@@ -4,6 +4,7 @@ use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
+use Pr4w\SocialTokens\Connectors\GoogleConnector;
 
 return [
 
@@ -82,7 +83,7 @@ return [
 
         // Placeholder. YouTube Shorts (StableRefreshToken strategy).
         'google' => [
-            'driver' => null,
+            'driver' => GoogleConnector::class,
             'client_id' => env('GOOGLE_CLIENT_ID'),
             'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         ],
