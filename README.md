@@ -78,6 +78,11 @@ Renewal failures are classified:
 - terminal (invalid_grant, revoked, refresh token expired): the account moves to
   `needs_reconnect` and an event fires, no further attempts
 
+Renewals run under a per-account lock so a scheduled job and a synchronous
+`validAccessTokenFor()` can never refresh the same account at once (which would
+break rotating-refresh-token providers like TikTok). This needs a cache store
+that supports atomic locks: redis, memcached, database, dynamodb, or file.
+
 ## Posting
 
 The publishing layer never touches refresh tokens. It asks for a valid access
