@@ -25,7 +25,7 @@ return new class extends Migration
             $table->string('name')->nullable();
             $table->string('nickname')->nullable();
             $table->string('email')->nullable();
-            $table->string('avatar')->nullable();
+            $table->text('avatar')->nullable();
 
             // Credentials. Encrypted at rest via model casts.
             $table->text('access_token')->nullable();

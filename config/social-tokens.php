@@ -1,10 +1,10 @@
 <?php
 
+use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
-use Pr4w\SocialTokens\Connectors\GoogleConnector;
 
 return [
 
