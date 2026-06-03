@@ -40,6 +40,7 @@ class InstagramConnector extends AbstractConnector
             'pages_show_list',
             'pages_read_engagement',
             'business_management',
+            'pages_manage_posts'
         ];
     }
 
