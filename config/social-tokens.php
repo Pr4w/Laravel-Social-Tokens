@@ -30,6 +30,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Logging
+    |--------------------------------------------------------------------------
+    |
+    | When true, renewal errors a connector does not recognise are logged via
+    | Log::error with full context (provider, account, reason, raw payload), so
+    | you can catalogue them into explicit terminal/transient cases over time.
+    | Known errors (classified transient or terminal) are never logged.
+    |
+    */
+    'log_unknown_errors' => true,
+
+    /*
+    |--------------------------------------------------------------------------
     | Job retry behaviour
     |--------------------------------------------------------------------------
     */

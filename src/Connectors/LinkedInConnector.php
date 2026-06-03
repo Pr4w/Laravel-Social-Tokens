@@ -107,15 +107,27 @@ class LinkedInConnector extends AbstractConnector
             $error = (string) $body['error'];
             $description = (string) ($body['error_description'] ?? '');
 
-            // invalid_grant: refresh token expired or revoked, the one year cap
-            // has likely been reached. The member must re-authorise.
-            return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
+            // Known terminal cases: refresh token expired/revoked, the one year
+            // cap reached, or bad client. The member must re-authorise.
+            $terminal = ['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_request'];
+
+            if (in_array($error, $terminal, true)) {
+                return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
+            }
+
+            return RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
+                'error' => $error,
+                'error_description' => $description,
+            ]);
         }
 
         $accessToken = $body['access_token'] ?? null;
 
         if ($accessToken === null) {
-            return RenewalResult::transientFailure('Malformed response, no access_token.');
+            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
         }
 
         return RenewalResult::success(

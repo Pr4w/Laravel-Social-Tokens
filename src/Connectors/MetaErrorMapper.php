@@ -23,6 +23,10 @@ final class MetaErrorMapper
 
         return $terminal
             ? RenewalResult::terminalFailure(trim("{$code} {$type}: {$message}"))
-            : RenewalResult::transientFailure(trim("{$code} {$type}: {$message}"));
+            : RenewalResult::unknownFailure(trim("{$code} {$type}: {$message}"), [
+                'code' => $code,
+                'type' => $type,
+                'message' => $message,
+            ]);
     }
 }

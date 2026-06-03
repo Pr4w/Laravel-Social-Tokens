@@ -87,7 +87,10 @@ class GoogleConnector extends AbstractConnector
         $accessToken = $body['access_token'] ?? null;
 
         if ($accessToken === null) {
-            return RenewalResult::transientFailure('Malformed response, no access_token.');
+            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
         }
 
         return RenewalResult::success(
@@ -130,6 +133,9 @@ class GoogleConnector extends AbstractConnector
 
         return in_array($error, $terminal, true)
             ? RenewalResult::terminalFailure(trim("{$error}: {$description}"))
-            : RenewalResult::transientFailure(trim("{$error}: {$description}"));
+            : RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
+                'error' => $error,
+                'error_description' => $description,
+            ]);
     }
 }

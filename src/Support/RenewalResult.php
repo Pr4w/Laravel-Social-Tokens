@@ -19,6 +19,8 @@ final class RenewalResult
         public readonly ?CarbonInterface $refreshExpiresAt = null,
         public readonly array $profile = [],
         public readonly ?string $reason = null,
+        public readonly bool $unknown = false,
+        public readonly array $context = [],
     ) {
     }
 
@@ -47,6 +49,22 @@ final class RenewalResult
     public static function terminalFailure(string $reason): self
     {
         return new self(outcome: RenewalOutcome::Terminal, reason: $reason);
+    }
+
+    /**
+     * An error the connector did not recognise. Behaves as transient for control
+     * flow (safe default: retry), but is flagged and carries context so it gets
+     * logged centrally and can be catalogued into an explicit terminal/transient
+     * case later.
+     */
+    public static function unknownFailure(string $reason, array $context = []): self
+    {
+        return new self(
+            outcome: RenewalOutcome::Transient,
+            reason: $reason,
+            unknown: true,
+            context: $context,
+        );
     }
 
     public function succeeded(): bool

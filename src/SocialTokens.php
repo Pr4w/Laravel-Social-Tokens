@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens;
 
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
@@ -55,6 +56,15 @@ class SocialTokens
                 }
 
                 $result = $connector->renew($account);
+
+                if ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
+                    Log::error('[social-tokens] Uncatalogued renewal error', [
+                        'provider' => $account->provider,
+                        'account_id' => $account->getKey(),
+                        'reason' => $result->reason,
+                        'context' => $result->context,
+                    ]);
+                }
 
                 if ($result->succeeded()) {
                     $account->applyRenewal($result, $connector);

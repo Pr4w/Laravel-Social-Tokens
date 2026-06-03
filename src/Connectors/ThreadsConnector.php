@@ -35,7 +35,6 @@ class ThreadsConnector extends AbstractConnector
         return [
             'threads_basic',
             'threads_content_publish',
-            'threads_manage_insights'
         ];
     }
 
@@ -79,7 +78,10 @@ class ThreadsConnector extends AbstractConnector
         $accessToken = $body['access_token'] ?? null;
 
         if ($accessToken === null) {
-            return RenewalResult::transientFailure('Malformed response, no access_token.');
+            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
         }
 
         return RenewalResult::success(

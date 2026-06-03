@@ -34,7 +34,7 @@ class TikTokConnector extends AbstractConnector
 
     public function publishingScopes(): array
     {
-        return ['user.info.basic', 'video.upload', 'video.publish', 'user.info.profile', 'user.info.stats'];
+        return ['user.info.basic', 'video.upload', 'video.publish'];
     }
 
     public function renewalStrategy(): RenewalStrategy
@@ -83,7 +83,10 @@ class TikTokConnector extends AbstractConnector
         $accessToken = $body['access_token'] ?? null;
 
         if ($accessToken === null) {
-            return RenewalResult::transientFailure('Malformed response, no access_token.');
+            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
         }
 
         return RenewalResult::success(
@@ -137,9 +140,11 @@ class TikTokConnector extends AbstractConnector
             return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
         }
 
-        // Unknown errors are treated as transient so we do not burn an account
-        // on a provider hiccup. A closed expiry window upgrades this to terminal
-        // in the job.
-        return RenewalResult::transientFailure(trim("{$error}: {$description}"));
+        // Unrecognised: flagged as unknown so it gets logged and catalogued.
+        // Behaves as transient so a provider hiccup does not burn the account.
+        return RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
+            'error' => $error,
+            'error_description' => $description,
+        ]);
     }
 }
