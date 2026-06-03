@@ -1,5 +1,6 @@
 <?php
 
+use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
@@ -75,6 +76,13 @@ return [
             'driver' => InstagramConnector::class,
             'client_id' => env('INSTAGRAM_CLIENT_ID'),       // Meta App ID
             'client_secret' => env('INSTAGRAM_CLIENT_SECRET'), // Meta App secret
+            'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
+        ],
+
+        'facebook' => [
+            'driver' => FacebookConnector::class,
+            'client_id' => env('INSTAGRAM_CLIENT_ID'),       // same Meta app as Instagram
+            'client_secret' => env('INSTAGRAM_CLIENT_SECRET'),
             'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
         ],
 
