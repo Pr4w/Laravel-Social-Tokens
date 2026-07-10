@@ -24,21 +24,6 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class InstagramConnector extends AbstractConnector
 {
-    public function publishingScopes(): array
-    {
-        return [
-            'instagram_basic',
-            'instagram_content_publish',
-            'instagram_manage_insights',
-            'pages_show_list',
-            'pages_read_engagement',
-            'business_management',
-            'pages_manage_posts',
-            'read_insights',
-            'pages_read_user_content'
-        ];
-    }
-
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::ExtendLongLived;

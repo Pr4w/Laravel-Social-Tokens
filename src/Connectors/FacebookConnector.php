@@ -25,16 +25,6 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class FacebookConnector extends AbstractConnector
 {
-    public function publishingScopes(): array
-    {
-        return [
-            'pages_show_list',
-            'pages_read_engagement',
-            'pages_manage_posts',
-            'business_management',
-        ];
-    }
-
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;
@@ -170,18 +160,20 @@ class FacebookConnector extends AbstractConnector
 
     /**
      * List the Pages a user token can manage, each carrying its own page access
-     * token. Shared by renew() (find one page) and the seeding action (all pages).
+     * token. Shared by renew() (find one page), the page-seeding action (all
+     * pages), and the Instagram action (which requests the linked IG account
+     * field via $fields).
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
-    public function fetchPages(string $userToken): array|RenewalResult
+    public function fetchPages(string $userToken, string $fields = 'id,name,access_token,picture{url}'): array|RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
 
         $response = $this->attempt(fn () => Http::withToken($userToken)
             ->acceptJson()
             ->get("https://graph.facebook.com/{$version}/me/accounts", [
-                'fields' => 'id,name,access_token,picture{url}',
+                'fields' => $fields,
             ]));
 
         if ($response instanceof RenewalResult) {

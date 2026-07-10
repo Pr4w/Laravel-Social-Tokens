@@ -26,11 +26,6 @@ class TikTokConnector extends AbstractConnector
     protected const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
     protected const REVOKE_URL = 'https://open.tiktokapis.com/v2/oauth/revoke/';
 
-    public function publishingScopes(): array
-    {
-        return ['user.info.basic', 'video.upload', 'video.publish', 'video.list', 'user.info.stats', 'user.info.profile'];
-    }
-
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;

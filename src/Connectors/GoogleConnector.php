@@ -25,17 +25,6 @@ class GoogleConnector extends AbstractConnector
     protected const TOKEN_URL = 'https://oauth2.googleapis.com/token';
     protected const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 
-    public function publishingScopes(): array
-    {
-        return [
-            'openid',
-            'email',
-            'profile',
-            'https://www.googleapis.com/auth/youtube.upload',
-            'https://www.googleapis.com/auth/youtube.readonly',
-        ];
-    }
-
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::StableRefreshToken;

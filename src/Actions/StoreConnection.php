@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Laravel\Socialite\Contracts\User as SocialiteUser;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
+use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
@@ -26,6 +27,7 @@ class StoreConnection
         protected ConnectorRegistry $registry,
         protected StoreAccountFromSocialite $single,
         protected StoreFacebookPages $facebookPages,
+        protected StoreInstagramAccounts $instagramAccounts,
     ) {
     }
 
@@ -40,6 +42,18 @@ class StoreConnection
         bool $longLived = true,
     ): Collection {
         $connector = $this->registry->has($provider) ? $this->registry->for($provider) : null;
+
+        // Instagram fans out to one account per linked Instagram Business account
+        // (plus the companion Facebook Pages). Authenticated via the Facebook
+        // driver, so $user carries the Facebook user token and id.
+        if ($connector instanceof InstagramConnector) {
+            return $this->instagramAccounts->handle(
+                userToken: $user->token,
+                owner: $owner,
+                connectedBy: $connectedBy,
+                userId: $user->getId(),
+            );
+        }
 
         // Facebook fans out to one account per managed page.
         if ($connector instanceof FacebookConnector) {

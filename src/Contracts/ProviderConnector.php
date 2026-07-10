@@ -13,9 +13,6 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 interface ProviderConnector
 {
-    /** Scopes required to publish content on this provider. */
-    public function publishingScopes(): array;
-
     /** How this provider's tokens are kept alive. */
     public function renewalStrategy(): RenewalStrategy;
 

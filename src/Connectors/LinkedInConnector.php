@@ -35,30 +35,6 @@ class LinkedInConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
-    public function publishingScopes(): array
-    {
-        return $this->config['scopes'] ?? [
-            'r_basicprofile',
-            'rw_organization_admin',
-            'w_member_social',
-
-            'r_member_postAnalytics',
-            'r_member_profileAnalytics',
-
-            'w_organization_social',
-            'r_organization_social',
-
-            'r_organization_followers',
-
-            'r_organization_social_feed',
-            'w_organization_social_feed',
-
-            'w_member_social_feed',
-
-            'r_1st_connections_size'
-        ];
-    }
-
     public function renewalStrategy(): RenewalStrategy
     {
         return ($this->config['refresh_enabled'] ?? false)

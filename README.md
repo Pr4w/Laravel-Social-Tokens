@@ -65,17 +65,26 @@ drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 
 Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
-handles TikTok, Google, Instagram, Threads, LinkedIn and Facebook. Request the
-publishing scopes, not just identity scopes.
+handles TikTok, Google, Instagram, Threads, LinkedIn and Facebook.
+
+Which scopes to request is your app's decision (they drive the consent screen
+and your provider app review), so you supply them at redirect — the package does
+not. Request the publishing scopes, not just identity scopes.
 
 ```php
 use Laravel\Socialite\Facades\Socialite;
 use Pr4w\SocialTokens\Actions\StoreConnection;
-use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
-Route::get('/oauth/{provider}/redirect', function (string $provider, ConnectorRegistry $registry) {
+// Keep your scope lists wherever suits your app — config, a constant, etc.
+$scopes = [
+    'tiktok' => ['user.info.basic', 'video.publish'],
+    'google' => ['openid', 'https://www.googleapis.com/auth/youtube.upload'],
+    // ...one entry per provider you support
+];
+
+Route::get('/oauth/{provider}/redirect', function (string $provider) use ($scopes) {
     return Socialite::driver($provider)
-        ->scopes($registry->for($provider)->publishingScopes())
+        ->scopes($scopes[$provider] ?? [])
         ->redirect();
 });
 
@@ -98,22 +107,24 @@ more than one account. Most providers give exactly one, so use
 
 ### What `StoreConnection` handles for you
 
-- **Long-lived tokens.** Providers that hand back a short-lived token (Instagram,
-  Threads) are upgraded to their long-lived form before storing, so every row is
-  renewable from the start. Providers already durable (LinkedIn, TikTok, Google)
-  are stored as-is. Pass `longLived: false` to skip the upgrade.
-- **Facebook pages.** You publish as a **Page**, but the only renewable
-  credential is the long-lived **User** token. So a Facebook connect fans out to
-  one row per managed page — each stores the page token in `access_token` and the
-  shared user token in `refresh_token`, with `expires_at` tracking the user token
-  so the scheduler re-extends it and re-derives fresh page tokens before it
-  lapses. Each row also records the Facebook user id in `provider_holder_id`, so
-  a later reconnect can flag pages the user no longer manages — scoped to that
-  user, so a co-owner's pages are never touched.
+- **Long-lived tokens.** Threads hands back a short-lived token, which is upgraded
+  to its long-lived (~60 day) form before storing so the row is renewable.
+  LinkedIn, TikTok and Google are already durable and stored as-is. Pass
+  `longLived: false` to skip the upgrade.
+- **Instagram & Facebook fan-out.** These publish per Instagram account / per
+  Page, but the only renewable credential is the long-lived Facebook **User**
+  token. So a connect fans out to one row per target: Instagram gives one row per
+  linked Instagram Business account (plus its companion Page), Facebook gives one
+  per managed Page. Each stores the postable token in `access_token` and, for
+  pages, the shared user token in `refresh_token`; `expires_at` tracks the user
+  token so the scheduler re-extends it before it lapses. Every row records the
+  Facebook user id in `provider_holder_id`, so a reconnect flags targets the user
+  no longer manages — scoped to that user, so a co-owner's are never touched.
+  (Instagram and Facebook authenticate via the Facebook driver.)
 
-Need finer control? `StoreConnection` just delegates to two lower-level actions
-you can call directly: `StoreAccountFromSocialite` (single account) and
-`StoreFacebookPages` (page fan-out).
+Need finer control? `StoreConnection` delegates to lower-level actions you can
+call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages`
+(page fan-out), and `StoreInstagramAccounts` (Instagram-account fan-out).
 
 ## Renewing
 
@@ -166,10 +177,9 @@ Listen for `AccountConnected`, `TokenRenewed`, `AccountNeedsReconnect`,
 ## Adding a provider
 
 Create one class extending `AbstractConnector`, implement `renew()` for that
-provider's exact mechanism, declare its `publishingScopes()`, `renewalStrategy()`
-and `leadTime()`, and register it under its key in the config. See
-`TikTokConnector` for a complete reference. Nothing else in the package needs to
-change.
+provider's exact mechanism, declare its `renewalStrategy()` and `leadTime()`, and
+register it under its key in the config. See `TikTokConnector` for a complete
+reference. Nothing else in the package needs to change.
 
 Two hooks are optional (no-op by default in `AbstractConnector`): override
 `exchangeForLongLived()` if the provider needs a short-to-long token swap at
