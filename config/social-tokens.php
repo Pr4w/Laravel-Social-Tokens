@@ -59,54 +59,57 @@ return [
     | Connectors
     |--------------------------------------------------------------------------
     |
-    | One entry per provider. "driver" is the ProviderConnector class. The
-    | remaining keys are passed to the connector as its config array. Leave
-    | "driver" as null for providers you have not implemented yet.
+    | One entry per provider. "driver" is the ProviderConnector class. Leave it
+    | null for providers you have not implemented yet.
+    |
+    | Client credentials are NOT set here: connectors read client_id/client_secret
+    | from Laravel Socialite's config/services.php, so each app declares them once.
+    | The services entry defaults to the provider key below; point it elsewhere
+    | with a "credentials" key (Instagram and Facebook share one Meta app). You can
+    | still hard-set "client_id"/"client_secret" on an entry to override.
+    |
+    |   // config/services.php
+    |   'facebook' => ['client_id' => env('META_APP_ID'), 'client_secret' => env('META_APP_SECRET')],
+    |   'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'), 'client_secret' => env('TIKTOK_CLIENT_SECRET')],
+    |   'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'), 'client_secret' => env('GOOGLE_CLIENT_SECRET')],
+    |   'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET')],
     |
     */
     'connectors' => [
 
         'tiktok' => [
             'driver' => TikTokConnector::class,
-            'client_id' => env('TIKTOK_CLIENT_KEY'),
-            'client_secret' => env('TIKTOK_CLIENT_SECRET'),
         ],
 
         'instagram' => [
             'driver' => InstagramConnector::class,
-            'client_id' => env('INSTAGRAM_CLIENT_ID'),       // Meta App ID
-            'client_secret' => env('INSTAGRAM_CLIENT_SECRET'), // Meta App secret
+            'credentials' => 'facebook',   // shares the Meta app with Facebook
             'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
         ],
 
         'facebook' => [
             'driver' => FacebookConnector::class,
-            'client_id' => env('INSTAGRAM_CLIENT_ID'),       // same Meta app as Instagram
-            'client_secret' => env('INSTAGRAM_CLIENT_SECRET'),
+            'credentials' => 'facebook',
             'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
         ],
 
         'threads' => [
             'driver' => ThreadsConnector::class,
-            'client_id' => env('THREADS_CLIENT_ID'),
-            'client_secret' => env('THREADS_CLIENT_SECRET'),
+            // Connect-time long-lived exchange needs services.threads credentials;
+            // the background refresh then uses only the stored access token.
         ],
 
         'linkedin' => [
             'driver' => LinkedInConnector::class,
-            'client_id' => env('LINKEDIN_CLIENT_ID'),
-            'client_secret' => env('LINKEDIN_CLIENT_SECRET'),
             // Set true only if your app has Marketing Developer Platform access
             // and therefore receives refresh tokens. Otherwise the connector
             // flags accounts for re-authorisation before the 60 day expiry.
             'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', false),
         ],
 
-        // Placeholder. YouTube Shorts (StableRefreshToken strategy).
+        // YouTube Shorts via Google OAuth2 (StableRefreshToken strategy).
         'google' => [
             'driver' => GoogleConnector::class,
-            'client_id' => env('GOOGLE_CLIENT_ID'),
-            'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         ],
 
     ],

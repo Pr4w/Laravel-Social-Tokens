@@ -3,12 +3,10 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\RenewalResult;
-use Throwable;
 
 /**
  * LinkedIn publishing via the Posts API (part of the Community Management API).
@@ -36,11 +34,6 @@ use Throwable;
 class LinkedInConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
-
-    public function key(): string
-    {
-        return 'linkedin';
-    }
 
     public function publishingScopes(): array
     {
@@ -84,21 +77,15 @@ class LinkedInConnector extends AbstractConnector
             return RenewalResult::terminalFailure('No refresh token (re-authorisation required).');
         }
 
-        try {
-            $response = Http::asForm()->acceptJson()->post(self::TOKEN_URL, [
-                'grant_type' => 'refresh_token',
-                'refresh_token' => $account->refresh_token,
-                'client_id' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-            ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $response = $this->attempt(fn () => Http::asForm()->acceptJson()->post(self::TOKEN_URL, [
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $account->refresh_token,
+            'client_id' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+        ]));
 
-        if ($response->serverError() || $response->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$response->status());
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
         $body = $response->json() ?? [];

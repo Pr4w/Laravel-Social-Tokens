@@ -38,7 +38,7 @@ return new class extends Migration
             $table->json('scopes')->nullable();   // granted scopes
             $table->json('profile')->nullable();  // provider specific extras (open_id, bio, etc.)
 
-            $table->string('status')->default('active'); // active | expiring | needs_reconnect | revoked
+            $table->string('status')->default('active'); // active | needs_reconnect | revoked
             $table->timestamp('last_renewed_at')->nullable();
             $table->text('last_error')->nullable();
 

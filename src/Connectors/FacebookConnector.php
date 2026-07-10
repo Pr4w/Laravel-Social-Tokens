@@ -3,12 +3,10 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\RenewalResult;
-use Throwable;
 
 /**
  * Facebook Page publishing via the Pages API.
@@ -27,11 +25,6 @@ use Throwable;
  */
 class FacebookConnector extends AbstractConnector
 {
-    public function key(): string
-    {
-        return 'facebook';
-    }
-
     public function publishingScopes(): array
     {
         return [
@@ -61,63 +54,23 @@ class FacebookConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing user token to re-derive the page token.');
         }
 
-        $version = $this->config['graph_version'] ?? 'v23.0';
-
         // 1. Extend the long lived user token.
-        try {
-            $extend = Http::acceptJson()->get("https://graph.facebook.com/{$version}/oauth/access_token", [
-                'grant_type' => 'fb_exchange_token',
-                'client_id' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-                'fb_exchange_token' => $userToken,
-            ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
+        $extended = $this->extendUserToken($userToken);
+
+        if ($extended instanceof RenewalResult) {
+            return $extended;
         }
-
-        if ($extend->serverError() || $extend->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$extend->status());
-        }
-
-        $extendBody = $extend->json() ?? [];
-
-        if (! empty($extendBody['error'])) {
-            return MetaErrorMapper::map($extendBody['error']);
-        }
-
-        $newUserToken = $extendBody['access_token'] ?? null;
-
-        if ($newUserToken === null) {
-            return RenewalResult::unknownFailure('Malformed token extension response.', [
-                'status' => $extend->status(),
-                'body' => $extendBody,
-            ]);
-        }
-
-        $expiresAt = isset($extendBody['expires_in']) ? now()->addSeconds((int) $extendBody['expires_in']) : null;
 
         // 2. Re-derive this page's token with the fresh user token.
-        try {
-            $pagesResponse = Http::withToken($newUserToken)
-                ->acceptJson()
-                ->get("https://graph.facebook.com/{$version}/me/accounts", [
-                    'fields' => 'id,access_token',
-                ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $pages = $this->fetchPages($extended['token']);
 
-        if ($pagesResponse->serverError() || $pagesResponse->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$pagesResponse->status());
+        if ($pages instanceof RenewalResult) {
+            return $pages;
         }
 
         $pageToken = null;
 
-        foreach ($pagesResponse->json('data', []) as $page) {
+        foreach ($pages as $page) {
             if (($page['id'] ?? null) === (string) $account->provider_user_id) {
                 $pageToken = $page['access_token'] ?? null;
                 break;
@@ -130,9 +83,117 @@ class FacebookConnector extends AbstractConnector
         }
 
         return RenewalResult::success(
-            accessToken: $pageToken,        // fresh page token, ready to post with
-            expiresAt: $expiresAt,          // tied to the user token expiry
-            refreshToken: $newUserToken,    // rotate the stored user token
+            accessToken: $pageToken,             // fresh page token, ready to post with
+            expiresAt: $extended['expiresAt'],   // tied to the user token expiry
+            refreshToken: $extended['token'],    // rotate the stored user token
         );
+    }
+
+    /**
+     * Exchange a user token for a fresh long-lived one via the fb_exchange_token
+     * grant. Idempotent: safe to call on a token that is already long lived.
+     * Shared by renew() and the initial page-seeding action.
+     *
+     * @return array{token: string, expiresAt: ?\Illuminate\Support\Carbon}|RenewalResult
+     */
+    public function extendUserToken(string $userToken): array|RenewalResult
+    {
+        $version = $this->config['graph_version'] ?? 'v23.0';
+
+        $response = $this->attempt(fn () => Http::acceptJson()->get("https://graph.facebook.com/{$version}/oauth/access_token", [
+            'grant_type' => 'fb_exchange_token',
+            'client_id' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+            'fb_exchange_token' => $userToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json() ?? [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        $token = $body['access_token'] ?? null;
+
+        if ($token === null) {
+            return RenewalResult::unknownFailure('Malformed token extension response.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
+        }
+
+        return [
+            'token' => $token,
+            'expiresAt' => isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
+        ];
+    }
+
+    /**
+     * The Facebook user id behind a token (the credential holder). Used to key a
+     * user's page rows so a reconnect can reconcile the ones they no longer manage.
+     *
+     * @return string|RenewalResult
+     */
+    public function fetchUserId(string $userToken): string|RenewalResult
+    {
+        $version = $this->config['graph_version'] ?? 'v23.0';
+
+        $response = $this->attempt(fn () => Http::withToken($userToken)
+            ->acceptJson()
+            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id']));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json() ?? [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        $id = $body['id'] ?? null;
+
+        if ($id === null) {
+            return RenewalResult::unknownFailure('Malformed /me response, no id.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
+        }
+
+        return (string) $id;
+    }
+
+    /**
+     * List the Pages a user token can manage, each carrying its own page access
+     * token. Shared by renew() (find one page) and the seeding action (all pages).
+     *
+     * @return array<int, array<string, mixed>>|RenewalResult
+     */
+    public function fetchPages(string $userToken): array|RenewalResult
+    {
+        $version = $this->config['graph_version'] ?? 'v23.0';
+
+        $response = $this->attempt(fn () => Http::withToken($userToken)
+            ->acceptJson()
+            ->get("https://graph.facebook.com/{$version}/me/accounts", [
+                'fields' => 'id,name,access_token,picture{url}',
+            ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json() ?? [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        return $body['data'] ?? [];
     }
 }

@@ -9,14 +9,16 @@ reconnect.
 
 ## Why
 
-Four platforms, four token models, and any naive "access token + refresh token +
-cron" design breaks on at least one of them:
+Six providers across four renewal strategies, and any naive "access token +
+refresh token + cron" design breaks on at least one of them:
 
 | Provider | Access token | Renewal model | Strategy |
 |---|---|---|---|
 | Google / YouTube | ~1h | refresh_token grant, refresh token reused | `StableRefreshToken` |
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
+| Facebook | Page token, no expiry | extend the 60-day user token, re-derive the page token | `RotatingRefreshToken` |
 | Instagram | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
+| Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
 
 The package models "how do I keep this token alive" as a per-provider strategy,
@@ -25,6 +27,8 @@ treated as an expected, scheduled event, not an error.
 
 ## Install
 
+Requires PHP 8.2+, Laravel 11 / 12 / 13, and Laravel Socialite 5.5+.
+
 ```bash
 composer require pr4w/laravel-social-tokens
 php artisan vendor:publish --tag=social-tokens-config
@@ -32,17 +36,41 @@ php artisan vendor:publish --tag=social-tokens-migrations
 php artisan migrate
 ```
 
-Set provider credentials in your `.env` and enable a connector in
-`config/social-tokens.php` by setting its `driver`.
+### Credentials
+
+Provider credentials live in Laravel Socialite's `config/services.php`, so you
+declare each one once and both Socialite and this package read them. Instagram
+and Facebook share a single Meta app:
+
+```php
+// config/services.php
+'facebook' => ['client_id' => env('META_APP_ID'),        'client_secret' => env('META_APP_SECRET'),        'redirect' => env('META_REDIRECT')],
+'threads'  => ['client_id' => env('THREADS_CLIENT_ID'),  'client_secret' => env('THREADS_CLIENT_SECRET'),  'redirect' => env('THREADS_REDIRECT')],
+'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'),  'client_secret' => env('TIKTOK_CLIENT_SECRET'),   'redirect' => env('TIKTOK_REDIRECT')],
+'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'),   'client_secret' => env('GOOGLE_CLIENT_SECRET'),   'redirect' => env('GOOGLE_REDIRECT')],
+'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET'), 'redirect' => env('LINKEDIN_REDIRECT')],
+```
+
+`config/social-tokens.php` then only enables connectors (their `driver`) and
+carries non-secret options — Instagram points at the `facebook` services entry
+via its `credentials` key. Set a connector's `driver` to `null` to disable it.
+
+TikTok and Threads aren't built into `laravel/socialite` itself. Install their
+drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
+`composer require socialiteproviders/tiktok`) and register the listener, so
+`Socialite::driver('tiktok')` resolves. Their credentials still go in the same
+`services.php` entries above.
 
 ## Connecting an account
 
 Socialite fires no event when the user returns, so you call the action yourself
-from your callback. Request the publishing scopes, not just identity scopes.
+from your callback. Use **`StoreConnection`** for every provider — one callback
+handles TikTok, Google, Instagram, Threads, LinkedIn and Facebook. Request the
+publishing scopes, not just identity scopes.
 
 ```php
 use Laravel\Socialite\Facades\Socialite;
-use Pr4w\SocialTokens\Actions\StoreAccountFromSocialite;
+use Pr4w\SocialTokens\Actions\StoreConnection;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 Route::get('/oauth/{provider}/redirect', function (string $provider, ConnectorRegistry $registry) {
@@ -51,10 +79,10 @@ Route::get('/oauth/{provider}/redirect', function (string $provider, ConnectorRe
         ->redirect();
 });
 
-Route::get('/oauth/{provider}/callback', function (string $provider, StoreAccountFromSocialite $store) {
+Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnection $store) {
     $user = Socialite::driver($provider)->user();
 
-    $account = $store->handle(
+    $accounts = $store->handle(
         provider: $provider,
         user: $user,
         owner: auth()->user(), // or a Team, Workspace, or null
@@ -63,6 +91,29 @@ Route::get('/oauth/{provider}/callback', function (string $provider, StoreAccoun
     return redirect('/dashboard');
 });
 ```
+
+`handle()` always returns a `Collection<SocialAccount>` — a connection can yield
+more than one account. Most providers give exactly one, so use
+`$accounts->sole()` if you want the single row; Facebook gives one per page.
+
+### What `StoreConnection` handles for you
+
+- **Long-lived tokens.** Providers that hand back a short-lived token (Instagram,
+  Threads) are upgraded to their long-lived form before storing, so every row is
+  renewable from the start. Providers already durable (LinkedIn, TikTok, Google)
+  are stored as-is. Pass `longLived: false` to skip the upgrade.
+- **Facebook pages.** You publish as a **Page**, but the only renewable
+  credential is the long-lived **User** token. So a Facebook connect fans out to
+  one row per managed page — each stores the page token in `access_token` and the
+  shared user token in `refresh_token`, with `expires_at` tracking the user token
+  so the scheduler re-extends it and re-derives fresh page tokens before it
+  lapses. Each row also records the Facebook user id in `provider_holder_id`, so
+  a later reconnect can flag pages the user no longer manages — scoped to that
+  user, so a co-owner's pages are never touched.
+
+Need finer control? `StoreConnection` just delegates to two lower-level actions
+you can call directly: `StoreAccountFromSocialite` (single account) and
+`StoreFacebookPages` (page fan-out).
 
 ## Renewing
 
@@ -103,9 +154,10 @@ try {
 ## Account status
 
 ```
-active -> expiring -> (renew) -> active
-                   -> needs_reconnect -> (user reconnects) -> active
-revoked
+active ──(renew succeeds)──────────────────────> active
+       └─(cannot renew, or terminal failure)──> needs_reconnect ──(user reconnects)──> active
+
+revoked: terminal, set explicitly when you revoke an account; never retried.
 ```
 
 Listen for `AccountConnected`, `TokenRenewed`, `AccountNeedsReconnect`,
@@ -114,9 +166,14 @@ Listen for `AccountConnected`, `TokenRenewed`, `AccountNeedsReconnect`,
 ## Adding a provider
 
 Create one class extending `AbstractConnector`, implement `renew()` for that
-provider's exact mechanism, declare its `renewalStrategy()` and `leadTime()`, and
-register it under its key in the config. See `TikTokConnector` for a complete
-reference. Nothing else in the package needs to change.
+provider's exact mechanism, declare its `publishingScopes()`, `renewalStrategy()`
+and `leadTime()`, and register it under its key in the config. See
+`TikTokConnector` for a complete reference. Nothing else in the package needs to
+change.
+
+Two hooks are optional (no-op by default in `AbstractConnector`): override
+`exchangeForLongLived()` if the provider needs a short-to-long token swap at
+connect, and `revoke()` if it exposes a token-revocation endpoint.
 
 ## License
 

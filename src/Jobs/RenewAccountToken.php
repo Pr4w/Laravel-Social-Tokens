@@ -89,21 +89,16 @@ class RenewAccountToken implements ShouldQueue, ShouldBeUnique
         // applied to the account inside renew().
         $result = $tokens->renew($account);
 
+        // Transient: throw so the queue retries with backoff while there is still
+        // a usable window. Once the token has actually expired and retries are
+        // exhausted, the failed() hook escalates to needs_reconnect.
         match ($result->outcome) {
             RenewalOutcome::Success => null,
             RenewalOutcome::Terminal => $account->markNeedsReconnect($result->reason),
-            RenewalOutcome::Transient => $this->handleTransient($account, $result->reason),
+            RenewalOutcome::Transient => throw new RuntimeException(
+                'Transient renewal failure: '.($result->reason ?? 'unknown')
+            ),
         };
-    }
-
-    /**
-     * Transient failure: retry while there is still a usable window. Once the
-     * access token has actually expired and we are out of retries, the failed()
-     * hook escalates to needs_reconnect.
-     */
-    protected function handleTransient(SocialAccount $account, ?string $reason): void
-    {
-        throw new RuntimeException('Transient renewal failure: ' . ($reason ?? 'unknown'));
     }
 
     /**

@@ -15,6 +15,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 /**
  * @property string $provider
  * @property ?string $provider_user_id
+ * @property ?string $provider_holder_id
  * @property ?string $access_token
  * @property ?string $refresh_token
  * @property ?\Illuminate\Support\Carbon $expires_at
@@ -55,7 +56,9 @@ class SocialAccount extends Model
 
     public function connectedBy(): MorphTo
     {
-        return $this->morphTo();
+        // Explicit name: the columns are connected_by_*, which the default
+        // guess (derived from the method name) would not match.
+        return $this->morphTo('connected_by');
     }
 
     // Scopes ----------------------------------------------------------------
@@ -66,7 +69,7 @@ class SocialAccount extends Model
     public function scopeDueForRenewal(Builder $query): Builder
     {
         return $query
-            ->whereIn('status', [AccountStatus::Active->value, AccountStatus::Expiring->value])
+            ->where('status', AccountStatus::Active->value)
             ->whereNotNull('renew_at')
             ->where('renew_at', '<=', now());
     }
@@ -100,6 +103,10 @@ class SocialAccount extends Model
         if ($result->expiresAt !== null) {
             $this->expires_at = $result->expiresAt;
             $this->renew_at = $result->expiresAt->copy()->sub($connector->leadTime());
+        } else {
+            // No expiry reported (e.g. a non-expiring Meta token): clear renew_at
+            // so the dispatcher stops re-queuing against a stale past timestamp.
+            $this->renew_at = null;
         }
 
         if ($result->refreshExpiresAt !== null) {

@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -25,11 +24,6 @@ class GoogleConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://oauth2.googleapis.com/token';
     protected const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
-
-    public function key(): string
-    {
-        return 'google';
-    }
 
     public function publishingScopes(): array
     {
@@ -59,23 +53,17 @@ class GoogleConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing refresh token (was access_type=offline used?).');
         }
 
-        try {
-            $response = Http::asForm()
-                ->acceptJson()
-                ->post(self::TOKEN_URL, [
-                    'grant_type' => 'refresh_token',
-                    'refresh_token' => $account->refresh_token,
-                    'client_id' => $this->clientId(),
-                    'client_secret' => $this->clientSecret(),
-                ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $response = $this->attempt(fn () => Http::asForm()
+            ->acceptJson()
+            ->post(self::TOKEN_URL, [
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $account->refresh_token,
+                'client_id' => $this->clientId(),
+                'client_secret' => $this->clientSecret(),
+            ]));
 
-        if ($response->serverError() || $response->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$response->status());
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
         $body = $response->json() ?? [];

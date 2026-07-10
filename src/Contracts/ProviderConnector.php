@@ -13,9 +13,6 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 interface ProviderConnector
 {
-    /** Provider key, e.g. "tiktok". */
-    public function key(): string;
-
     /** Scopes required to publish content on this provider. */
     public function publishingScopes(): array;
 
@@ -33,6 +30,14 @@ interface ProviderConnector
      * Returns a RenewalResult that the caller applies.
      */
     public function renew(SocialAccount $account): RenewalResult;
+
+    /**
+     * Exchange a freshly connected access token for its long-lived form, for
+     * providers that require a distinct step at connect (Instagram, Threads).
+     * Returns null when the connect token is already durable (most providers).
+     * Must not write to the database.
+     */
+    public function exchangeForLongLived(string $accessToken): ?RenewalResult;
 
     /** Revoke the token on the provider side, if supported. */
     public function revoke(SocialAccount $account): void;

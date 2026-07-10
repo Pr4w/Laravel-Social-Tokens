@@ -39,7 +39,7 @@ class ConnectorRegistry
             throw new InvalidArgumentException("No connector driver implemented for provider [{$provider}].");
         }
 
-        return $this->resolved[$provider] = new $driver($entry);
+        return $this->resolved[$provider] = new $driver($entry, $provider);
     }
 
     public function has(string $provider): bool

@@ -3,12 +3,10 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\RenewalResult;
-use Throwable;
 
 /**
  * Threads publishing via the Threads API.
@@ -24,11 +22,7 @@ use Throwable;
 class ThreadsConnector extends AbstractConnector
 {
     protected const REFRESH_URL = 'https://graph.threads.net/refresh_access_token';
-
-    public function key(): string
-    {
-        return 'threads';
-    }
+    protected const EXCHANGE_URL = 'https://graph.threads.net/access_token';
 
     public function publishingScopes(): array
     {
@@ -54,19 +48,13 @@ class ThreadsConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing access token.');
         }
 
-        try {
-            $response = Http::acceptJson()->get(self::REFRESH_URL, [
-                'grant_type' => 'th_refresh_token',
-                'access_token' => $account->access_token,
-            ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $response = $this->attempt(fn () => Http::acceptJson()->get(self::REFRESH_URL, [
+            'grant_type' => 'th_refresh_token',
+            'access_token' => $account->access_token,
+        ]));
 
-        if ($response->serverError() || $response->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$response->status());
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
         $body = $response->json() ?? [];
@@ -88,6 +76,45 @@ class ThreadsConnector extends AbstractConnector
             accessToken: $accessToken,
             expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
             refreshToken: null,
+        );
+    }
+
+    /**
+     * Connect-time exchange: swap the short lived token Socialite returns for the
+     * ~60 day long lived one. Uses the th_exchange_token grant (client credentials
+     * required), distinct from the th_refresh_token grant used by renew().
+     */
+    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    {
+        $response = $this->attempt(fn () => Http::acceptJson()->get(self::EXCHANGE_URL, [
+            'grant_type' => 'th_exchange_token',
+            'client_id' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+            'access_token' => $accessToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json() ?? [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        $token = $body['access_token'] ?? null;
+
+        if ($token === null) {
+            return RenewalResult::unknownFailure('Malformed th_exchange_token response.', [
+                'status' => $response->status(),
+                'body' => $body,
+            ]);
+        }
+
+        return RenewalResult::success(
+            accessToken: $token,
+            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
         );
     }
 }

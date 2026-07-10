@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -27,11 +26,6 @@ class TikTokConnector extends AbstractConnector
     protected const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
     protected const REVOKE_URL = 'https://open.tiktokapis.com/v2/oauth/revoke/';
 
-    public function key(): string
-    {
-        return 'tiktok';
-    }
-
     public function publishingScopes(): array
     {
         return ['user.info.basic', 'video.upload', 'video.publish'];
@@ -54,24 +48,17 @@ class TikTokConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing refresh token.');
         }
 
-        try {
-            $response = Http::asForm()
-                ->acceptJson()
-                ->post(self::TOKEN_URL, [
-                    'client_key' => $this->clientId(),
-                    'client_secret' => $this->clientSecret(),
-                    'grant_type' => 'refresh_token',
-                    'refresh_token' => $account->refresh_token,
-                ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $response = $this->attempt(fn () => Http::asForm()
+            ->acceptJson()
+            ->post(self::TOKEN_URL, [
+                'client_key' => $this->clientId(),
+                'client_secret' => $this->clientSecret(),
+                'grant_type' => 'refresh_token',
+                'refresh_token' => $account->refresh_token,
+            ]));
 
-        // Provider 5xx or rate limit: recoverable, retry later.
-        if ($response->serverError() || $response->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$response->status());
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
         $body = $response->json() ?? [];

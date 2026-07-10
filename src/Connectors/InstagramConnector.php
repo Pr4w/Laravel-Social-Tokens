@@ -3,12 +3,10 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\RenewalResult;
-use Throwable;
 
 /**
  * Instagram publishing via the Instagram Graph API (Facebook Login path).
@@ -26,11 +24,6 @@ use Throwable;
  */
 class InstagramConnector extends AbstractConnector
 {
-    public function key(): string
-    {
-        return 'instagram';
-    }
-
     public function publishingScopes(): array
     {
         return [
@@ -63,24 +56,30 @@ class InstagramConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing access token.');
         }
 
+        // Renewal and the connect-time long-lived exchange are the same
+        // fb_exchange_token call on this path, so both go through extend().
+        return $this->extend($account->access_token);
+    }
+
+    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    {
+        return $this->extend($accessToken);
+    }
+
+    private function extend(string $accessToken): RenewalResult
+    {
         $version = $this->config['graph_version'] ?? 'v23.0';
         $url = "https://graph.facebook.com/{$version}/oauth/access_token";
 
-        try {
-            $response = Http::acceptJson()->get($url, [
-                'grant_type' => 'fb_exchange_token',
-                'client_id' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-                'fb_exchange_token' => $account->access_token,
-            ]);
-        } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
-        } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
-        }
+        $response = $this->attempt(fn () => Http::acceptJson()->get($url, [
+            'grant_type' => 'fb_exchange_token',
+            'client_id' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+            'fb_exchange_token' => $accessToken,
+        ]));
 
-        if ($response->serverError() || $response->status() === 429) {
-            return RenewalResult::transientFailure('Provider returned HTTP '.$response->status());
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
         $body = $response->json() ?? [];
@@ -89,9 +88,9 @@ class InstagramConnector extends AbstractConnector
             return MetaErrorMapper::map($body['error']);
         }
 
-        $accessToken = $body['access_token'] ?? null;
+        $token = $body['access_token'] ?? null;
 
-        if ($accessToken === null) {
+        if ($token === null) {
             return RenewalResult::unknownFailure('Malformed response, no access_token.', [
                 'status' => $response->status(),
                 'body' => $body,
@@ -99,7 +98,7 @@ class InstagramConnector extends AbstractConnector
         }
 
         return RenewalResult::success(
-            accessToken: $accessToken,
+            accessToken: $token,
             expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
             // No refresh token on this path: the access token is the long lived credential.
             refreshToken: null,
