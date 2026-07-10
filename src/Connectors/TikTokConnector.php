@@ -28,7 +28,7 @@ class TikTokConnector extends AbstractConnector
 
     public function publishingScopes(): array
     {
-        return ['user.info.basic', 'video.upload', 'video.publish'];
+        return ['user.info.basic', 'video.upload', 'video.publish', 'videos.list'];
     }
 
     public function renewalStrategy(): RenewalStrategy
