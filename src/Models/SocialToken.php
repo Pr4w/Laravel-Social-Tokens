@@ -5,25 +5,18 @@ namespace Pr4w\SocialTokens\Models;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
-use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
-use Pr4w\SocialTokens\Events\AccountRevoked;
-use Pr4w\SocialTokens\Events\TokenRenewed;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
- * @property ?int $social_token_id
- * @property ?SocialToken $credential
+ * The renewable credential. One credential backs many accounts (a Meta user
+ * token backs every Facebook page and Instagram account; a LinkedIn member token
+ * backs every organization). Renewal happens here, once, not per account.
+ *
  * @property string $provider
- * @property ?string $provider_user_id
  * @property ?string $provider_holder_id
- * @property ?string $name
- * @property ?string $nickname
- * @property ?string $email
- * @property ?string $avatar
  * @property ?string $access_token
  * @property ?string $refresh_token
  * @property ?CarbonInterface $expires_at
@@ -31,14 +24,16 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * @property ?CarbonInterface $renew_at
  * @property ?CarbonInterface $last_renewed_at
  * @property array<int, string>|null $scopes
- * @property array<string, mixed>|null $profile
  * @property ?string $last_error
  * @property AccountStatus $status
  */
-class SocialAccount extends Model
+class SocialToken extends Model
 {
     protected $guarded = [];
 
+    /**
+     * @return array<string, string>
+     */
     protected function casts(): array
     {
         return [
@@ -49,53 +44,32 @@ class SocialAccount extends Model
             'renew_at' => 'datetime',
             'last_renewed_at' => 'datetime',
             'scopes' => 'array',
-            'profile' => 'array',
             'status' => AccountStatus::class,
         ];
     }
 
     public function getTable()
     {
-        return config('social-tokens.table', 'social_accounts');
+        return config('social-tokens.tokens_table', 'social_tokens');
     }
 
     // Relationships ---------------------------------------------------------
 
     /**
-     * The credential that backs this account's renewal.
-     *
-     * @return BelongsTo<SocialToken, $this>
+     * @return HasMany<SocialAccount, $this>
      */
-    public function credential(): BelongsTo
+    public function accounts(): HasMany
     {
-        return $this->belongsTo(SocialToken::class, 'social_token_id');
-    }
-
-    /**
-     * @return MorphTo<Model, $this>
-     */
-    public function ownable(): MorphTo
-    {
-        return $this->morphTo();
-    }
-
-    /**
-     * @return MorphTo<Model, $this>
-     */
-    public function connectedBy(): MorphTo
-    {
-        // Explicit name: the columns are connected_by_*, which the default
-        // guess (derived from the method name) would not match.
-        return $this->morphTo('connected_by');
+        return $this->hasMany(SocialAccount::class);
     }
 
     // Scopes ----------------------------------------------------------------
 
     /**
-     * Accounts whose token is due for renewal.
+     * Credentials whose renewal window has opened.
      *
-     * @param  Builder<SocialAccount>  $query
-     * @return Builder<SocialAccount>
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
      */
     public function scopeDueForRenewal(Builder $query): Builder
     {
@@ -118,43 +92,14 @@ class SocialAccount extends Model
         return $this->refresh_expires_at !== null && $this->refresh_expires_at->isPast();
     }
 
-    // Scopes ----------------------------------------------------------------
-
-    /** @return array<int, string> */
-    public function grantedScopes(): array
-    {
-        return $this->scopes ?? [];
-    }
-
-    public function hasScope(string $scope): bool
-    {
-        return in_array($scope, $this->grantedScopes(), true);
-    }
-
-    /** @param array<int, string> $scopes  True when every scope is granted. */
-    public function hasScopes(array $scopes): bool
-    {
-        return $this->missingScopes($scopes) === [];
-    }
-
     /**
-     * @param  array<int, string>  $scopes
-     * @return array<int, string> The requested scopes not granted to this account.
-     */
-    public function missingScopes(array $scopes): array
-    {
-        return array_values(array_diff($scopes, $this->grantedScopes()));
-    }
-
-    /**
-     * Apply a successful renewal result and recompute the renewal window.
+     * Apply a successful credential refresh and recompute the renewal window.
      */
     public function applyRenewal(RenewalResult $result, ProviderConnector $connector): self
     {
         $this->access_token = $result->accessToken;
 
-        // Only overwrite the refresh token when the provider issued a new one
-        // (rotating strategy). For stable strategies it stays untouched.
+        // Only overwrite the refresh token when the provider issued a new one.
         if ($result->refreshToken !== null) {
             $this->refresh_token = $result->refreshToken;
         }
@@ -163,8 +108,6 @@ class SocialAccount extends Model
             $this->expires_at = $result->expiresAt;
             $this->renew_at = $result->expiresAt->copy()->sub($connector->leadTime());
         } else {
-            // No expiry reported (e.g. a non-expiring Meta token): clear renew_at
-            // so the dispatcher stops re-queuing against a stale past timestamp.
             $this->renew_at = null;
         }
 
@@ -172,16 +115,10 @@ class SocialAccount extends Model
             $this->refresh_expires_at = $result->refreshExpiresAt;
         }
 
-        if ($result->profile !== []) {
-            $this->profile = array_merge($this->profile ?? [], $result->profile);
-        }
-
         $this->status = AccountStatus::Active;
         $this->last_renewed_at = now();
         $this->last_error = null;
         $this->save();
-
-        event(new TokenRenewed($this));
 
         return $this;
     }
@@ -191,18 +128,6 @@ class SocialAccount extends Model
         $this->status = AccountStatus::NeedsReconnect;
         $this->last_error = $reason;
         $this->save();
-
-        event(new AccountNeedsReconnect($this, $reason));
-
-        return $this;
-    }
-
-    public function markRevoked(): self
-    {
-        $this->status = AccountStatus::Revoked;
-        $this->save();
-
-        event(new AccountRevoked($this));
 
         return $this;
     }

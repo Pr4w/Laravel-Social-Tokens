@@ -11,10 +11,15 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Table name
+    | Table names
     |--------------------------------------------------------------------------
+    |
+    | "table" holds the postable accounts; "tokens_table" holds the renewable
+    | credentials that back them (one credential can back many accounts).
+    |
     */
     'table' => 'social_accounts',
+    'tokens_table' => 'social_tokens',
 
     /*
     |--------------------------------------------------------------------------

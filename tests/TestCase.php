@@ -12,10 +12,12 @@ abstract class TestCase extends Orchestra
     {
         parent::setUp();
 
-        // Run the package migrations (and the test fixtures) against the
-        // in-memory sqlite database by invoking each migration directly.
-        (include __DIR__.'/../database/migrations/2025_01_01_000000_create_social_accounts_table.php')->up();
-        (include __DIR__.'/../database/migrations/2025_01_01_000001_add_provider_holder_id_to_social_accounts.php')->up();
+        // Run every package migration (sorted by filename) plus the test
+        // fixtures against the in-memory sqlite database.
+        foreach (glob(__DIR__.'/../database/migrations/*.php') as $migration) {
+            (include $migration)->up();
+        }
+
         (include __DIR__.'/Fixtures/database/migrations/0000_00_00_000000_create_owners_table.php')->up();
     }
 
