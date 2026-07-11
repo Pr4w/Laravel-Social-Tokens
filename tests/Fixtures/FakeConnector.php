@@ -5,7 +5,6 @@ namespace Pr4w\SocialTokens\Tests\Fixtures;
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -46,20 +45,12 @@ class FakeConnector extends AbstractConnector
             ?? RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
     }
 
-    public function renew(SocialAccount $account): RenewalResult
-    {
-        static::$renewCalls++;
-
-        return static::$nextResult
-            ?? RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
-    }
-
     public function exchangeForLongLived(string $accessToken): ?RenewalResult
     {
         return static::$exchangeResult;
     }
 
-    public function revoke(SocialAccount $account): void
+    public function revoke(SocialToken $token): void
     {
         static::$revokeCalls++;
     }

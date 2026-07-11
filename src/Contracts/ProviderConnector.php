@@ -4,7 +4,6 @@ namespace Pr4w\SocialTokens\Contracts;
 
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -38,15 +37,6 @@ interface ProviderConnector
     public function refreshCredential(SocialToken $token): RenewalResult;
 
     /**
-     * Attempt to renew the account's token. Must not write to the database.
-     * Returns a RenewalResult that the caller applies.
-     *
-     * @deprecated Renewal is moving to refreshCredential(SocialToken); removed once
-     *             the credential model lands.
-     */
-    public function renew(SocialAccount $account): RenewalResult;
-
-    /**
      * Exchange a freshly connected access token for its long-lived form, for
      * providers that require a distinct step at connect (Instagram, Threads).
      * Returns null when the connect token is already durable (most providers).
@@ -54,6 +44,6 @@ interface ProviderConnector
      */
     public function exchangeForLongLived(string $accessToken): ?RenewalResult;
 
-    /** Revoke the token on the provider side, if supported. */
-    public function revoke(SocialAccount $account): void;
+    /** Revoke the credential on the provider side, if supported. */
+    public function revoke(SocialToken $token): void;
 }

@@ -6,7 +6,7 @@ use Pr4w\SocialTokens\Connectors\TikTokConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 function tiktok(): TikTokConnector
@@ -14,11 +14,11 @@ function tiktok(): TikTokConnector
     return app(ConnectorRegistry::class)->for('tiktok');
 }
 
-function tiktokAccount(array $attrs = []): SocialAccount
+function tiktokCredential(array $attrs = []): SocialToken
 {
-    return SocialAccount::create(array_merge([
+    return SocialToken::create(array_merge([
         'provider' => 'tiktok',
-        'provider_user_id' => 'tt-1',
+        'provider_holder_id' => 'tt-'.uniqid(),
         'refresh_token' => 'refresh-1',
         'status' => AccountStatus::Active,
     ], $attrs));
@@ -39,7 +39,7 @@ it('rotates the refresh token on a successful renewal', function () {
         'scope' => 'video.publish',
     ])]);
 
-    $result = tiktok()->renew(tiktokAccount());
+    $result = tiktok()->refreshCredential(tiktokCredential());
 
     expect($result->succeeded())->toBeTrue()
         ->and($result->accessToken)->toBe('new-access')
@@ -57,7 +57,7 @@ it('rotates the refresh token on a successful renewal', function () {
 it('returns terminal without calling the provider when the refresh token is missing', function () {
     Http::fake();
 
-    $result = tiktok()->renew(tiktokAccount(['refresh_token' => null]));
+    $result = tiktok()->refreshCredential(tiktokCredential(['refresh_token' => null]));
 
     expect($result->outcome)->toBe(RenewalOutcome::Terminal);
     Http::assertNothingSent();
@@ -69,7 +69,7 @@ it('maps a known error to terminal', function () {
         'error_description' => 'Refresh token invalid',
     ])]);
 
-    expect(tiktok()->renew(tiktokAccount())->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(tiktok()->refreshCredential(tiktokCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('maps an unrecognised error to unknown/transient', function () {
@@ -78,7 +78,7 @@ it('maps an unrecognised error to unknown/transient', function () {
         'error_description' => 'try later',
     ])]);
 
-    $result = tiktok()->renew(tiktokAccount());
+    $result = tiktok()->refreshCredential(tiktokCredential());
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient)
         ->and($result->unknown)->toBeTrue();
@@ -87,25 +87,25 @@ it('maps an unrecognised error to unknown/transient', function () {
 it('treats a 5xx as transient', function () {
     Http::fake(['open.tiktokapis.com/*' => Http::response('boom', 503)]);
 
-    expect(tiktok()->renew(tiktokAccount())->outcome)->toBe(RenewalOutcome::Transient);
+    expect(tiktok()->refreshCredential(tiktokCredential())->outcome)->toBe(RenewalOutcome::Transient);
 });
 
 it('treats a 429 as transient', function () {
     Http::fake(['open.tiktokapis.com/*' => Http::response('slow down', 429)]);
 
-    expect(tiktok()->renew(tiktokAccount())->outcome)->toBe(RenewalOutcome::Transient);
+    expect(tiktok()->refreshCredential(tiktokCredential())->outcome)->toBe(RenewalOutcome::Transient);
 });
 
 it('treats a connection error as transient', function () {
     Http::fake(fn () => throw new ConnectionException('network down'));
 
-    expect(tiktok()->renew(tiktokAccount())->outcome)->toBe(RenewalOutcome::Transient);
+    expect(tiktok()->refreshCredential(tiktokCredential())->outcome)->toBe(RenewalOutcome::Transient);
 });
 
 it('flags a malformed success body as unknown', function () {
     Http::fake(['open.tiktokapis.com/*' => Http::response(['unexpected' => true])]);
 
-    $result = tiktok()->renew(tiktokAccount());
+    $result = tiktok()->refreshCredential(tiktokCredential());
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient)
         ->and($result->unknown)->toBeTrue()
@@ -115,7 +115,7 @@ it('flags a malformed success body as unknown', function () {
 it('revokes the token best-effort', function () {
     Http::fake(['open.tiktokapis.com/*' => Http::response(['ok' => true])]);
 
-    tiktok()->revoke(tiktokAccount(['access_token' => 'live-token']));
+    tiktok()->revoke(tiktokCredential(['access_token' => 'live-token']));
 
     Http::assertSent(fn ($request) => str_contains($request->url(), '/revoke/')
         && $request['token'] === 'live-token');
@@ -124,7 +124,7 @@ it('revokes the token best-effort', function () {
 it('does not attempt a revoke without an access token', function () {
     Http::fake();
 
-    tiktok()->revoke(tiktokAccount(['access_token' => null]));
+    tiktok()->revoke(tiktokCredential(['access_token' => null]));
 
     Http::assertNothingSent();
 });

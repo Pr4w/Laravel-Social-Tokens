@@ -5,7 +5,6 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -53,11 +52,6 @@ class LinkedInConnector extends AbstractConnector
     public function refreshCredential(SocialToken $token): RenewalResult
     {
         return $this->refreshWithToken($token->refresh_token);
-    }
-
-    public function renew(SocialAccount $account): RenewalResult
-    {
-        return $this->refreshWithToken($account->refresh_token);
     }
 
     private function refreshWithToken(?string $refreshToken): RenewalResult

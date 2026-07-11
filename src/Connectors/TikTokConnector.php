@@ -5,7 +5,6 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
@@ -42,11 +41,6 @@ class TikTokConnector extends AbstractConnector
     public function refreshCredential(SocialToken $token): RenewalResult
     {
         return $this->refreshWithToken($token->refresh_token);
-    }
-
-    public function renew(SocialAccount $account): RenewalResult
-    {
-        return $this->refreshWithToken($account->refresh_token);
     }
 
     private function refreshWithToken(?string $refreshToken): RenewalResult
@@ -98,9 +92,9 @@ class TikTokConnector extends AbstractConnector
         );
     }
 
-    public function revoke(SocialAccount $account): void
+    public function revoke(SocialToken $token): void
     {
-        if (empty($account->access_token)) {
+        if (empty($token->access_token)) {
             return;
         }
 
@@ -108,7 +102,7 @@ class TikTokConnector extends AbstractConnector
             Http::asForm()->post(self::REVOKE_URL, [
                 'client_key' => $this->clientId(),
                 'client_secret' => $this->clientSecret(),
-                'token' => $account->access_token,
+                'token' => $token->access_token,
             ]);
         } catch (Throwable) {
             // Best effort. The local status is what matters for our flow.

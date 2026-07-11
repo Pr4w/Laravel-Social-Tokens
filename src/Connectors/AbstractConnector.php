@@ -6,7 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
@@ -57,7 +57,7 @@ abstract class AbstractConnector implements ProviderConnector
         return CarbonInterval::minutes(15);
     }
 
-    public function revoke(SocialAccount $account): void
+    public function revoke(SocialToken $token): void
     {
         // No-op by default. Override where the provider exposes a revoke endpoint.
     }
