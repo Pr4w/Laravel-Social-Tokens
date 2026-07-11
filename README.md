@@ -126,6 +126,31 @@ Need finer control? `StoreConnection` delegates to lower-level actions you can
 call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages`
 (page fan-out), and `StoreInstagramAccounts` (Instagram-account fan-out).
 
+### LinkedIn: company pages
+
+LinkedIn's token exchange is app-side (Socialite's driver can't fetch the profile
+with the non-OIDC posting scopes), so `StoreConnection` doesn't route it. You
+obtain the member token yourself, then fan out to the organizations they
+administer with `StoreLinkedInOrganizations`:
+
+```php
+use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
+
+// after your manual code -> token exchange and /me profile fetch:
+$accounts = app(StoreLinkedInOrganizations::class)->handle(
+    accessToken: $token['access_token'],
+    memberId: $profile['id'],
+    owner: auth()->user(),
+    refreshToken: $token['refresh_token'] ?? null,
+    expiresAt: isset($token['expires_in']) ? now()->addSeconds($token['expires_in']) : null,
+);
+```
+
+Every organization posts with the same member token, so each row mirrors it (the
+organization URN is stored in `profile` for posting). If you also post as the
+member, store that as its own row with `StoreAccountFromSocialite` — it carries no
+`provider_holder_id`, so reconciliation only ever touches the organization rows.
+
 ## Renewing
 
 A scheduled command scans for accounts whose `renew_at` has passed and dispatches

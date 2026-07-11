@@ -19,21 +19,6 @@ Record the scopes actually granted to each account and let callers check them.
 Use case: decide whether an account has everything it needs to publish before
 saving it, and warn on the ones that fall short.
 
-## Soon
-
-### LinkedIn organization fan-out
-
-One member token can administer several LinkedIn organizations (company pages),
-listed via `organizationAcls?q=roleAssignee`. Unlike Facebook Pages, LinkedIn
-orgs post with the **same member token** (`w_organization_social`), so this is the
-Instagram shape, not the Facebook one: N rows all mirroring one credential.
-
-A `StoreLinkedInOrganizations` action would fan out to one row per organization
-(optionally plus the personal profile), stamp `provider_holder_id` with the member
-id, and reconcile organizations the member no longer administers — the same
-pattern as `StoreInstagramAccounts`. The manual LinkedIn token exchange (Socialite
-driver limitation) stays app-side; the action takes the already-exchanged token.
-
 ## Longer term
 
 ### Shared credential table — v1.0 candidate

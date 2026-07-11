@@ -34,6 +34,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 class LinkedInConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
+    protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
 
     public function renewalStrategy(): RenewalStrategy
     {
@@ -101,5 +102,63 @@ class LinkedInConnector extends AbstractConnector
                 ? now()->addSeconds((int) $body['refresh_token_expires_in'])
                 : null,
         );
+    }
+
+    /**
+     * List the organizations (company Pages) a member administers, via
+     * organizationAcls. Each posts with this same member token
+     * (w_organization_social), so an organization row mirrors the member's
+     * credential rather than holding its own. Requires the member token to carry
+     * an organization admin scope (e.g. rw_organization_admin).
+     *
+     * @return array<int, array<string, mixed>>|RenewalResult
+     */
+    public function fetchOrganizations(string $accessToken): array|RenewalResult
+    {
+        $response = $this->attempt(fn () => Http::withToken($accessToken)
+            ->acceptJson()
+            ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
+            ->get(self::ORGANIZATION_ACLS_URL, [
+                'q' => 'roleAssignee',
+                'projection' => '(paging,elements*(role,state,organization~(id,localizedName,logoV2(original~:playableStreams))))',
+                'count' => 100,
+            ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        if ($response->failed()) {
+            return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().').', [
+                'status' => $response->status(),
+                'body' => $response->json(),
+            ]);
+        }
+
+        $organizations = [];
+
+        foreach ($response->json('elements', []) as $element) {
+            // Only approved admin grants are postable.
+            if (($element['state'] ?? null) !== 'APPROVED') {
+                continue;
+            }
+
+            $org = $element['organization~'] ?? [];
+            $id = $org['id'] ?? null;
+
+            if ($id === null) {
+                continue;
+            }
+
+            $organizations[] = [
+                'id' => (string) $id,
+                'urn' => "urn:li:organization:{$id}",
+                'name' => $org['localizedName'] ?? null,
+                'logo' => data_get($org, 'logoV2.original~.elements.0.identifiers.0.identifier'),
+                'role' => $element['role'] ?? null,
+            ];
+        }
+
+        return $organizations;
     }
 }
