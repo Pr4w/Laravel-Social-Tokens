@@ -8,6 +8,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
+use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -120,6 +122,8 @@ class SocialToken extends Model
         $this->last_error = null;
         $this->save();
 
+        event(new CredentialRenewed($this));
+
         return $this;
     }
 
@@ -128,6 +132,8 @@ class SocialToken extends Model
         $this->status = AccountStatus::NeedsReconnect;
         $this->last_error = $reason;
         $this->save();
+
+        event(new CredentialNeedsReconnect($this, $reason));
 
         return $this;
     }

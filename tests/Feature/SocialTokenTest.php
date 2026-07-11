@@ -1,6 +1,9 @@
 <?php
 
+use Illuminate\Support\Facades\Event;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
+use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -44,7 +47,8 @@ it('scopes credentials due for renewal', function () {
     expect(SocialToken::query()->dueForRenewal()->pluck('provider_holder_id')->all())->toBe(['due']);
 });
 
-it('applies a renewal and recomputes the renewal window', function () {
+it('applies a renewal, recomputes the window, and fires CredentialRenewed', function () {
+    Event::fake([CredentialRenewed::class]);
     FakeConnector::reset();
     $token = socialToken();
 
@@ -57,13 +61,18 @@ it('applies a renewal and recomputes the renewal window', function () {
         ->and($token->refresh_token)->toBe('new-refresh')
         ->and($token->status)->toBe(AccountStatus::Active)
         ->and($token->renew_at->timestamp)->toEqualWithDelta(now()->addHour()->subMinutes(15)->timestamp, 2);
+
+    Event::assertDispatched(CredentialRenewed::class, fn ($e) => $e->token->is($token));
 });
 
-it('marks a credential for reconnection', function () {
+it('marks a credential for reconnection and fires CredentialNeedsReconnect', function () {
+    Event::fake([CredentialNeedsReconnect::class]);
     $token = socialToken();
 
     $token->markNeedsReconnect('revoked upstream');
 
     expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
         ->and($token->fresh()->last_error)->toBe('revoked upstream');
+
+    Event::assertDispatched(CredentialNeedsReconnect::class, fn ($e) => $e->reason === 'revoked upstream');
 });
