@@ -11,6 +11,10 @@ use Pr4w\SocialTokens\Enums\RenewalOutcome;
  */
 final class RenewalResult
 {
+    /**
+     * @param  array<string, mixed>  $profile
+     * @param  array<string, mixed>  $context
+     */
     private function __construct(
         public readonly RenewalOutcome $outcome,
         public readonly ?string $accessToken = null,
@@ -21,9 +25,11 @@ final class RenewalResult
         public readonly ?string $reason = null,
         public readonly bool $unknown = false,
         public readonly array $context = [],
-    ) {
-    }
+    ) {}
 
+    /**
+     * @param  array<string, mixed>  $profile
+     */
     public static function success(
         string $accessToken,
         ?CarbonInterface $expiresAt = null,
@@ -56,6 +62,8 @@ final class RenewalResult
      * flow (safe default: retry), but is flagged and carries context so it gets
      * logged centrally and can be catalogued into an explicit terminal/transient
      * case later.
+     *
+     * @param  array<string, mixed>  $context
      */
     public static function unknownFailure(string $reason, array $context = []): self
     {

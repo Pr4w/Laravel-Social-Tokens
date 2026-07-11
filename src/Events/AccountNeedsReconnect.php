@@ -12,6 +12,5 @@ class AccountNeedsReconnect
     public function __construct(
         public readonly SocialAccount $account,
         public readonly ?string $reason = null,
-    ) {
-    }
+    ) {}
 }

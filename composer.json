@@ -15,7 +15,9 @@
     },
     "require-dev": {
         "orchestra/testbench": "^9.0|^10.0",
-        "pestphp/pest": "^3.0"
+        "pestphp/pest": "^3.0",
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.0"
     },
     "autoload": {
         "psr-4": {
@@ -43,6 +45,14 @@
     },
     "scripts": {
         "test": "pest",
-        "test:coverage": "pest --coverage"
+        "test:coverage": "pest --coverage",
+        "lint": "pint",
+        "lint:test": "pint --test",
+        "stan": "phpstan analyse --memory-limit=1G",
+        "check": [
+            "@lint:test",
+            "@stan",
+            "@test"
+        ]
     }
 }

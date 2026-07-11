@@ -16,10 +16,15 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 class FakeConnector extends AbstractConnector
 {
     public static ?RenewalResult $nextResult = null;
+
     public static int $renewCalls = 0;
+
     public static RenewalStrategy $strategy = RenewalStrategy::RotatingRefreshToken;
+
     public static ?CarbonInterval $lead = null;
+
     public static ?RenewalResult $exchangeResult = null;
+
     public static int $revokeCalls = 0;
 
     public function renewalStrategy(): RenewalStrategy

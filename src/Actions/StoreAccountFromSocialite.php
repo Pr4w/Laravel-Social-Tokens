@@ -3,7 +3,7 @@
 namespace Pr4w\SocialTokens\Actions;
 
 use Illuminate\Database\Eloquent\Model;
-use Laravel\Socialite\Contracts\User as SocialiteUser;
+use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -17,9 +17,7 @@ use RuntimeException;
  */
 class StoreAccountFromSocialite
 {
-    public function __construct(protected ConnectorRegistry $registry)
-    {
-    }
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     public function handle(
         string $provider,
@@ -78,7 +76,7 @@ class StoreAccountFromSocialite
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
                 'renew_at' => $renewAt,
-                'scopes' => $user->approvedScopes ?? [],
+                'scopes' => $user->approvedScopes,
                 'status' => AccountStatus::Active,
                 'last_error' => null,
             ],

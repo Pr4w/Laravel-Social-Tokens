@@ -1,13 +1,14 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
-function threads(): \Pr4w\SocialTokens\Connectors\ThreadsConnector
+function threads(): ThreadsConnector
 {
     return app(ConnectorRegistry::class)->for('threads');
 }

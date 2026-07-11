@@ -1,13 +1,14 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
-function instagram(): \Pr4w\SocialTokens\Connectors\InstagramConnector
+function instagram(): InstagramConnector
 {
     return app(ConnectorRegistry::class)->for('instagram');
 }

@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Models;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
@@ -16,11 +17,19 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * @property string $provider
  * @property ?string $provider_user_id
  * @property ?string $provider_holder_id
+ * @property ?string $name
+ * @property ?string $nickname
+ * @property ?string $email
+ * @property ?string $avatar
  * @property ?string $access_token
  * @property ?string $refresh_token
- * @property ?\Illuminate\Support\Carbon $expires_at
- * @property ?\Illuminate\Support\Carbon $refresh_expires_at
- * @property ?\Illuminate\Support\Carbon $renew_at
+ * @property ?CarbonInterface $expires_at
+ * @property ?CarbonInterface $refresh_expires_at
+ * @property ?CarbonInterface $renew_at
+ * @property ?CarbonInterface $last_renewed_at
+ * @property array<int, string>|null $scopes
+ * @property array<string, mixed>|null $profile
+ * @property ?string $last_error
  * @property AccountStatus $status
  */
 class SocialAccount extends Model
@@ -49,11 +58,17 @@ class SocialAccount extends Model
 
     // Relationships ---------------------------------------------------------
 
+    /**
+     * @return MorphTo<Model, $this>
+     */
     public function ownable(): MorphTo
     {
         return $this->morphTo();
     }
 
+    /**
+     * @return MorphTo<Model, $this>
+     */
     public function connectedBy(): MorphTo
     {
         // Explicit name: the columns are connected_by_*, which the default
@@ -65,6 +80,9 @@ class SocialAccount extends Model
 
     /**
      * Accounts whose token is due for renewal.
+     *
+     * @param  Builder<SocialAccount>  $query
+     * @return Builder<SocialAccount>
      */
     public function scopeDueForRenewal(Builder $query): Builder
     {
@@ -108,7 +126,7 @@ class SocialAccount extends Model
 
     /**
      * @param  array<int, string>  $scopes
-     * @return array<int, string>  The requested scopes not granted to this account.
+     * @return array<int, string> The requested scopes not granted to this account.
      */
     public function missingScopes(array $scopes): array
     {

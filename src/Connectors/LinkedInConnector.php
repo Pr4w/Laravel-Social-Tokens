@@ -34,6 +34,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 class LinkedInConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
+
     protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
 
     public function renewalStrategy(): RenewalStrategy

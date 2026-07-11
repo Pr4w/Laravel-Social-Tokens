@@ -28,9 +28,7 @@ use RuntimeException;
  */
 class StoreLinkedInOrganizations
 {
-    public function __construct(protected ConnectorRegistry $registry)
-    {
-    }
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
      * @param  string  $accessToken  The member access token (already exchanged).
@@ -40,7 +38,7 @@ class StoreLinkedInOrganizations
      * @param  string|null  $refreshToken  Member refresh token, if your app has MDP.
      * @param  CarbonInterface|null  $expiresAt  Access token expiry.
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
-     * @return Collection<int, SocialAccount>  One row per administered organization.
+     * @return Collection<int, SocialAccount> One row per administered organization.
      *
      * @throws RuntimeException when the organizations cannot be listed.
      */

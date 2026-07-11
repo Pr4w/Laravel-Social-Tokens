@@ -28,9 +28,7 @@ use RuntimeException;
  */
 class StoreFacebookPages
 {
-    public function __construct(protected ConnectorRegistry $registry)
-    {
-    }
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
      * @param  string  $userToken  The user access token from the OAuth callback.
@@ -41,7 +39,7 @@ class StoreFacebookPages
      *                               resolved automatically when null.
      * @param  bool  $extend  Exchange the token for a long lived one first. Leave
      *                        true unless you already hold a long lived user token.
-     * @return Collection<int, SocialAccount>  One row per managed page (may be empty).
+     * @return Collection<int, SocialAccount> One row per managed page (may be empty).
      *
      * @throws RuntimeException when the token cannot be extended, the user id
      *                          cannot be resolved, or the pages cannot be listed.

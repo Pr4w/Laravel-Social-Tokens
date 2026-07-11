@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
@@ -8,7 +9,7 @@ use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
-function facebook(): \Pr4w\SocialTokens\Connectors\FacebookConnector
+function facebook(): FacebookConnector
 {
     return app(ConnectorRegistry::class)->for('facebook');
 }

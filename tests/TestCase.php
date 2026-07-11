@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Tests;
 
 use Orchestra\Testbench\TestCase as Orchestra;
 use Pr4w\SocialTokens\SocialTokensServiceProvider;
+use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
 
 abstract class TestCase extends Orchestra
 {
@@ -46,7 +47,7 @@ abstract class TestCase extends Orchestra
 
         // A test-only connector whose behaviour is controlled per test.
         $app['config']->set('social-tokens.connectors.fake', [
-            'driver' => \Pr4w\SocialTokens\Tests\Fixtures\FakeConnector::class,
+            'driver' => FakeConnector::class,
         ]);
     }
 }

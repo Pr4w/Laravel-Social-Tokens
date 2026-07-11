@@ -23,6 +23,7 @@ use Throwable;
 class GoogleConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
     protected const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 
     public function renewalStrategy(): RenewalStrategy
@@ -97,6 +98,9 @@ class GoogleConnector extends AbstractConnector
         }
     }
 
+    /**
+     * @param  array<string, mixed>  $body
+     */
     protected function mapError(array $body): RenewalResult
     {
         $error = (string) ($body['error'] ?? 'unknown');

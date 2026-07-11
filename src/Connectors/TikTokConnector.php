@@ -24,6 +24,7 @@ use Throwable;
 class TikTokConnector extends AbstractConnector
 {
     protected const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
+
     protected const REVOKE_URL = 'https://open.tiktokapis.com/v2/oauth/revoke/';
 
     public function renewalStrategy(): RenewalStrategy
@@ -105,6 +106,8 @@ class TikTokConnector extends AbstractConnector
 
     /**
      * Map a TikTok OAuth error body to a transient or terminal failure.
+     *
+     * @param  array<string, mixed>  $body
      */
     protected function mapError(array $body): RenewalResult
     {

@@ -17,9 +17,7 @@ class ConnectorRegistry
     /**
      * @param  array<string, array<string, mixed>>  $config
      */
-    public function __construct(protected array $config)
-    {
-    }
+    public function __construct(protected array $config) {}
 
     public function for(string $provider): ProviderConnector
     {
@@ -39,7 +37,15 @@ class ConnectorRegistry
             throw new InvalidArgumentException("No connector driver implemented for provider [{$provider}].");
         }
 
-        return $this->resolved[$provider] = new $driver($entry, $provider);
+        $connector = new $driver($entry, $provider);
+
+        if (! $connector instanceof ProviderConnector) {
+            throw new InvalidArgumentException(
+                "Connector driver [{$driver}] for provider [{$provider}] must implement ProviderConnector."
+            );
+        }
+
+        return $this->resolved[$provider] = $connector;
     }
 
     public function has(string $provider): bool

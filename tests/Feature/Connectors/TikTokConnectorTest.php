@@ -2,13 +2,14 @@
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Connectors\TikTokConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
-function tiktok(): \Pr4w\SocialTokens\Connectors\TikTokConnector
+function tiktok(): TikTokConnector
 {
     return app(ConnectorRegistry::class)->for('tiktok');
 }

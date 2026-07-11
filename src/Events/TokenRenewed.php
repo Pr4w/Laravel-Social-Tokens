@@ -9,7 +9,5 @@ class TokenRenewed
 {
     use Dispatchable;
 
-    public function __construct(public readonly SocialAccount $account)
-    {
-    }
+    public function __construct(public readonly SocialAccount $account) {}
 }

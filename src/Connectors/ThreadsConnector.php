@@ -22,6 +22,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 class ThreadsConnector extends AbstractConnector
 {
     protected const REFRESH_URL = 'https://graph.threads.net/refresh_access_token';
+
     protected const EXCHANGE_URL = 'https://graph.threads.net/access_token';
 
     public function renewalStrategy(): RenewalStrategy

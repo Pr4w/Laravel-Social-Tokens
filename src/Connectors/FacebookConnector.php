@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -84,7 +85,7 @@ class FacebookConnector extends AbstractConnector
      * grant. Idempotent: safe to call on a token that is already long lived.
      * Shared by renew() and the initial page-seeding action.
      *
-     * @return array{token: string, expiresAt: ?\Illuminate\Support\Carbon}|RenewalResult
+     * @return array{token: string, expiresAt: ?Carbon}|RenewalResult
      */
     public function extendUserToken(string $userToken): array|RenewalResult
     {
@@ -130,7 +131,7 @@ class FacebookConnector extends AbstractConnector
      * every token scope minus the granular scopes granted only for other accounts.
      *
      * @param  array<int, string>  $accountIds
-     * @return array<string, array<int, string>>|RenewalResult  [account_id => scopes]
+     * @return array<string, array<int, string>>|RenewalResult [account_id => scopes]
      */
     public function grantedScopesByAccount(string $userToken, array $accountIds): array|RenewalResult
     {
@@ -186,8 +187,6 @@ class FacebookConnector extends AbstractConnector
      * App access token for calling debug_token. Meta accepts the literal string
      * "{app-id}|{app-secret}" as the app token, so there is no endpoint to call
      * and nothing to cache.
-     *
-     * @return string|RenewalResult
      */
     protected function appAccessToken(): string|RenewalResult
     {
@@ -204,8 +203,6 @@ class FacebookConnector extends AbstractConnector
     /**
      * The Facebook user id behind a token (the credential holder). Used to key a
      * user's page rows so a reconnect can reconcile the ones they no longer manage.
-     *
-     * @return string|RenewalResult
      */
     public function fetchUserId(string $userToken): string|RenewalResult
     {

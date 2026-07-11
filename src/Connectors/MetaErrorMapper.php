@@ -11,6 +11,9 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 final class MetaErrorMapper
 {
+    /**
+     * @param  array<string, mixed>  $error
+     */
     public static function map(array $error): RenewalResult
     {
         $code = (int) ($error['code'] ?? 0);

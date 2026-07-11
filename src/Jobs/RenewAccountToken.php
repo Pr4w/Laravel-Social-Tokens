@@ -23,7 +23,7 @@ use Throwable;
  * while one is pending, and the actual renewal runs under a per-account lock
  * (see SocialTokens::renew) so it can never collide with a synchronous renewal.
  */
-class RenewAccountToken implements ShouldQueue, ShouldBeUnique
+class RenewAccountToken implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
@@ -38,7 +38,7 @@ class RenewAccountToken implements ShouldQueue, ShouldBeUnique
 
     public function uniqueId(): string
     {
-        return 'social-tokens-renew-' . $this->account->getKey();
+        return 'social-tokens-renew-'.$this->account->getKey();
     }
 
     public function uniqueFor(): int
@@ -116,7 +116,7 @@ class RenewAccountToken implements ShouldQueue, ShouldBeUnique
         // and needs human attention. Otherwise leave it active: a later run of
         // the dispatcher will try again while the window is still open.
         if ($account->isAccessTokenExpired(0)) {
-            $account->markNeedsReconnect('Renewal failed after retries: ' . $exception->getMessage());
+            $account->markNeedsReconnect('Renewal failed after retries: '.$exception->getMessage());
         }
     }
 }

@@ -30,9 +30,7 @@ class StoreInstagramAccounts
 {
     private const PAGE_FIELDS = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
 
-    public function __construct(protected ConnectorRegistry $registry)
-    {
-    }
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
      * @param  string  $userToken  The user access token from the OAuth callback.
@@ -42,8 +40,8 @@ class StoreInstagramAccounts
      *                               $user->getId() to skip an extra /me call.
      * @param  bool  $extend  Exchange the token for a long lived one first.
      * @param  bool  $withLinkedPages  Also store each linked Facebook Page row.
-     * @return Collection<int, SocialAccount>  One row per Instagram account (plus
-     *                                         linked pages when withLinkedPages).
+     * @return Collection<int, SocialAccount> One row per Instagram account (plus
+     *                                        linked pages when withLinkedPages).
      *
      * @throws RuntimeException when the token cannot be extended, the user id
      *                          cannot be resolved, or the pages cannot be listed.
@@ -189,6 +187,10 @@ class StoreInstagramAccounts
         return $accounts;
     }
 
+    /**
+     * @param  array<string, mixed>  $keys
+     * @param  array<string, mixed>  $attributes
+     */
     private function persist(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
     {
         $account = SocialAccount::query()->updateOrCreate($keys, $attributes);

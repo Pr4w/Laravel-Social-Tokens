@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Console\Kernel;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
@@ -20,7 +21,7 @@ it('binds the connector registry as a singleton', function () {
 });
 
 it('registers the dispatch command', function () {
-    expect(array_keys($this->app[\Illuminate\Contracts\Console\Kernel::class]->all()))
+    expect(array_keys($this->app[Kernel::class]->all()))
         ->toContain('social-tokens:dispatch-renewals');
 });
 

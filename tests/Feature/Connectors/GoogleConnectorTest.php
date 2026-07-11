@@ -1,13 +1,14 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
-function google(): \Pr4w\SocialTokens\Connectors\GoogleConnector
+function google(): GoogleConnector
 {
     return app(ConnectorRegistry::class)->for('google');
 }

@@ -19,9 +19,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class SocialTokens
 {
-    public function __construct(protected ConnectorRegistry $registry)
-    {
-    }
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     public function connector(string $provider): ProviderConnector
     {
@@ -48,7 +46,7 @@ class SocialTokens
                 $account->refresh();
 
                 // Another process may have renewed while we waited for the lock.
-                if (! $account->isAccessTokenExpired()) {
+                if (! $account->isAccessTokenExpired() && $account->access_token !== null) {
                     return RenewalResult::success(
                         accessToken: $account->access_token,
                         expiresAt: $account->expires_at,
@@ -92,7 +90,7 @@ class SocialTokens
             throw NeedsReconnectException::for($account);
         }
 
-        if (! $account->isAccessTokenExpired()) {
+        if (! $account->isAccessTokenExpired() && $account->access_token !== null) {
             return $account->access_token;
         }
 
@@ -107,7 +105,11 @@ class SocialTokens
         $result = $this->renew($account);
 
         if ($result->succeeded()) {
-            return $account->fresh()->access_token;
+            $account->refresh();
+
+            if ($account->access_token !== null) {
+                return $account->access_token;
+            }
         }
 
         // Terminal failure: the connection is broken, flag it for the user.

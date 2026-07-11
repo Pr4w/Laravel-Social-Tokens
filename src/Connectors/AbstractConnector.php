@@ -13,12 +13,10 @@ use Throwable;
 abstract class AbstractConnector implements ProviderConnector
 {
     /**
-     * @param  array<string, mixed>  $config    The connector's config block.
-     * @param  string|null           $provider  The provider key this connector was resolved under.
+     * @param  array<string, mixed>  $config  The connector's config block.
+     * @param  string|null  $provider  The provider key this connector was resolved under.
      */
-    public function __construct(protected array $config = [], protected ?string $provider = null)
-    {
-    }
+    public function __construct(protected array $config = [], protected ?string $provider = null) {}
 
     /**
      * Client credentials default to Laravel Socialite's config/services.php, so

@@ -4,7 +4,7 @@ namespace Pr4w\SocialTokens\Actions;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
-use Laravel\Socialite\Contracts\User as SocialiteUser;
+use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -28,8 +28,7 @@ class StoreConnection
         protected StoreAccountFromSocialite $single,
         protected StoreFacebookPages $facebookPages,
         protected StoreInstagramAccounts $instagramAccounts,
-    ) {
-    }
+    ) {}
 
     /**
      * @return Collection<int, SocialAccount>
