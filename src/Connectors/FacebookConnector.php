@@ -14,21 +14,19 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *
  * Token model (Facebook Login path, shared with Instagram):
  *  - the only credential that expires is the long lived USER token (~60 days)
- *  - a Page access token is derived from it via /me/accounts and stays valid
- *    as long as the user token does
+ *  - a Page access token is derived from it via /me/accounts and, once minted
+ *    from a long lived user token, does not expire
  *
- * So a facebook row stores:
- *  - access_token  = the Page access token (ready to post with)
- *  - refresh_token = the long lived USER token (encrypted), used to re-derive
- *
- * Renewal extends the user token, then re-pulls this page's token from
- * /me/accounts. Both are rotated, hence RotatingRefreshToken.
+ * So the renewable credential is the USER token. refreshCredential extends it in
+ * place (fb_exchange_token) — a single token, no refresh-token rotation, hence
+ * ExtendLongLived. Page tokens are stored as static credentials and not
+ * re-derived here (see StoreFacebookPages / StoreInstagramAccounts).
  */
 class FacebookConnector extends AbstractConnector
 {
     public function renewalStrategy(): RenewalStrategy
     {
-        return RenewalStrategy::RotatingRefreshToken;
+        return RenewalStrategy::ExtendLongLived;
     }
 
     public function leadTime(): CarbonInterval

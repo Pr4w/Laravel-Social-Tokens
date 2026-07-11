@@ -10,6 +10,7 @@ use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
+use Pr4w\SocialTokens\Events\CredentialRevoked;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -134,6 +135,16 @@ class SocialToken extends Model
         $this->save();
 
         event(new CredentialNeedsReconnect($this, $reason));
+
+        return $this;
+    }
+
+    public function markRevoked(): self
+    {
+        $this->status = AccountStatus::Revoked;
+        $this->save();
+
+        event(new CredentialRevoked($this));
 
         return $this;
     }

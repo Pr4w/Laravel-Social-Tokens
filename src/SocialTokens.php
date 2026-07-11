@@ -134,6 +134,20 @@ class SocialTokens
         throw NeedsReconnectException::for($account, $result->reason);
     }
 
+    /**
+     * Revoke a credential: tell the provider to invalidate it (best effort), mark
+     * the credential Revoked, and cascade to every account it backs. A revoked
+     * credential is not usable and is never renewed again.
+     */
+    public function revoke(SocialToken $token): void
+    {
+        $this->registry->for($token->provider)->revoke($token);
+
+        $token->markRevoked();
+
+        $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
+    }
+
     protected function lockKey(SocialToken $token): string
     {
         return "social-tokens:renew:{$token->getKey()}";

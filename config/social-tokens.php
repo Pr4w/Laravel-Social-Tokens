@@ -26,10 +26,10 @@ return [
     | Renewal scheduling
     |--------------------------------------------------------------------------
     |
-    | How often the dispatcher command scans for accounts whose token is due
-    | for renewal. Each account carries its own renew_at, computed from the
-    | connector lead time, so this only needs to run often enough to catch the
-    | shortest lead time you support (TikTok renews a couple of hours early).
+    | How often the dispatcher command scans for credentials whose renew_at has
+    | passed. Each credential carries its own renew_at, computed from the connector
+    | lead time, so this only needs to run often enough to catch the shortest lead
+    | time you support (TikTok renews a couple of hours early).
     |
     */
     'dispatch_schedule' => 'everyFifteenMinutes',
@@ -40,7 +40,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | When true, renewal errors a connector does not recognise are logged via
-    | Log::error with full context (provider, account, reason, raw payload), so
+    | Log::error with full context (provider, credential, reason, raw payload), so
     | you can catalogue them into explicit terminal/transient cases over time.
     | Known errors (classified transient or terminal) are never logged.
     |

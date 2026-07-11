@@ -16,8 +16,8 @@ function facebook(): FacebookConnector
     return app(ConnectorRegistry::class)->for('facebook');
 }
 
-it('uses the rotating strategy and a 7 day lead time', function () {
-    expect(facebook()->renewalStrategy())->toBe(RenewalStrategy::RotatingRefreshToken)
+it('uses the extend-long-lived strategy and a 7 day lead time', function () {
+    expect(facebook()->renewalStrategy())->toBe(RenewalStrategy::ExtendLongLived)
         ->and(facebook()->leadTime()->totalDays)->toBe(7.0);
 });
 

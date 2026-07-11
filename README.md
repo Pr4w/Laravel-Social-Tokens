@@ -16,7 +16,7 @@ refresh token + cron" design breaks on at least one of them:
 |---|---|---|---|
 | Google / YouTube | ~1h | refresh_token grant, refresh token reused | `StableRefreshToken` |
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
-| Facebook | Page token, no expiry | page token stored static; the shared user token renews | `RotatingRefreshToken` |
+| Facebook | Page token, no expiry | page token stored static; the shared user token is extended | `ExtendLongLived` |
 | Instagram | 60 days | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
@@ -211,10 +211,17 @@ revoked: terminal, set explicitly when you revoke an account; never retried.
 ```
 
 Listen for `AccountConnected`, `CredentialRenewed`, `CredentialNeedsReconnect`,
-`AccountNeedsReconnect` and `AccountRevoked` to drive notifications and a reconnect
-button in your panel. `CredentialNeedsReconnect` covers every account a credential
-backs (its token died); `AccountNeedsReconnect` is per account (e.g. a page the
-user no longer manages).
+`CredentialRevoked`, `AccountNeedsReconnect` and `AccountRevoked` to drive
+notifications and a reconnect button in your panel. The credential events cover
+every account a credential backs (its shared token died / was revoked); the
+account events are per account (e.g. a page the user no longer manages).
+
+To disconnect an account, revoke its credential — this tells the provider to
+invalidate it and marks the credential and its accounts revoked:
+
+```php
+app(SocialTokens::class)->revoke($account->credential);
+```
 
 ## Scopes
 
