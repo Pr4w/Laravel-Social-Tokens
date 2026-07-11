@@ -6,6 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -35,15 +36,25 @@ class ThreadsConnector extends AbstractConnector
         return CarbonInterval::days(7);
     }
 
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        return $this->refreshWithToken($token->access_token);
+    }
+
     public function renew(SocialAccount $account): RenewalResult
     {
-        if (empty($account->access_token)) {
+        return $this->refreshWithToken($account->access_token);
+    }
+
+    private function refreshWithToken(?string $accessToken): RenewalResult
+    {
+        if (empty($accessToken)) {
             return RenewalResult::terminalFailure('Missing access token.');
         }
 
         $response = $this->attempt(fn () => Http::acceptJson()->get(self::REFRESH_URL, [
             'grant_type' => 'th_refresh_token',
-            'access_token' => $account->access_token,
+            'access_token' => $accessToken,
         ]));
 
         if ($response instanceof RenewalResult) {

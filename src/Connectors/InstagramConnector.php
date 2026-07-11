@@ -6,6 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -24,9 +25,27 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class InstagramConnector extends AbstractConnector
 {
+    /**
+     * Instagram shares the Meta user credential, refreshed via the Facebook
+     * connector (fb_exchange_token). So its credentials live under "facebook".
+     */
+    public function credentialProvider(): string
+    {
+        return 'facebook';
+    }
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::ExtendLongLived;
+    }
+
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing user token.');
+        }
+
+        return $this->extend($token->access_token);
     }
 
     public function leadTime(): CarbonInterval

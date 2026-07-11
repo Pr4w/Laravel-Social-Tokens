@@ -7,6 +7,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -77,6 +78,28 @@ class FacebookConnector extends AbstractConnector
             accessToken: $pageToken,             // fresh page token, ready to post with
             expiresAt: $extended['expiresAt'],   // tied to the user token expiry
             refreshToken: $extended['token'],    // rotate the stored user token
+        );
+    }
+
+    /**
+     * Refresh the Meta user credential: extend the stored user token in place.
+     * Single-phase — Facebook page tokens are static and are not re-derived here.
+     */
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing user token.');
+        }
+
+        $extended = $this->extendUserToken($token->access_token);
+
+        if ($extended instanceof RenewalResult) {
+            return $extended;
+        }
+
+        return RenewalResult::success(
+            accessToken: $extended['token'],
+            expiresAt: $extended['expiresAt'],
         );
     }
 

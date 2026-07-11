@@ -19,6 +19,15 @@ abstract class AbstractConnector implements ProviderConnector
     public function __construct(protected array $config = [], protected ?string $provider = null) {}
 
     /**
+     * The connector that refreshes this provider's credential. Defaults to the
+     * provider's own key; override where a credential is shared (Instagram).
+     */
+    public function credentialProvider(): string
+    {
+        return $this->provider ?? '';
+    }
+
+    /**
      * Client credentials default to Laravel Socialite's config/services.php, so
      * the app declares each id/secret once. An explicit client_id/client_secret
      * in the connector's own config block still wins. The services entry read

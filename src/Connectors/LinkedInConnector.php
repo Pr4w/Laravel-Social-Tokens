@@ -6,6 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -49,15 +50,25 @@ class LinkedInConnector extends AbstractConnector
         return CarbonInterval::days(5);
     }
 
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        return $this->refreshWithToken($token->refresh_token);
+    }
+
     public function renew(SocialAccount $account): RenewalResult
     {
-        if (empty($account->refresh_token)) {
+        return $this->refreshWithToken($account->refresh_token);
+    }
+
+    private function refreshWithToken(?string $refreshToken): RenewalResult
+    {
+        if (empty($refreshToken)) {
             return RenewalResult::terminalFailure('No refresh token (re-authorisation required).');
         }
 
         $response = $this->attempt(fn () => Http::asForm()->acceptJson()->post(self::TOKEN_URL, [
             'grant_type' => 'refresh_token',
-            'refresh_token' => $account->refresh_token,
+            'refresh_token' => $refreshToken,
             'client_id' => $this->clientId(),
             'client_secret' => $this->clientSecret(),
         ]));

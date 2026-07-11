@@ -6,6 +6,7 @@ use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -35,6 +36,14 @@ class FakeConnector extends AbstractConnector
     public function leadTime(): CarbonInterval
     {
         return static::$lead ?? CarbonInterval::minutes(15);
+    }
+
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        static::$renewCalls++;
+
+        return static::$nextResult
+            ?? RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
     }
 
     public function renew(SocialAccount $account): RenewalResult
