@@ -4,7 +4,7 @@ namespace Pr4w\SocialTokens\Contracts;
 
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -13,6 +13,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 interface ProviderConnector
 {
+    /**
+     * The provider key of the connector that REFRESHES this provider's credential.
+     * Usually the provider's own key; Instagram returns "facebook" because it
+     * shares the Meta user token refreshed via fb_exchange_token.
+     */
+    public function credentialProvider(): string;
+
     /** How this provider's tokens are kept alive. */
     public function renewalStrategy(): RenewalStrategy;
 
@@ -23,10 +30,11 @@ interface ProviderConnector
     public function leadTime(): CarbonInterval;
 
     /**
-     * Attempt to renew the account's token. Must not write to the database.
-     * Returns a RenewalResult that the caller applies.
+     * Refresh a renewable credential (the shared user/member token, or a 1:1
+     * provider's token). Must not write to the database. Returns a RenewalResult
+     * the caller applies to the SocialToken.
      */
-    public function renew(SocialAccount $account): RenewalResult;
+    public function refreshCredential(SocialToken $token): RenewalResult;
 
     /**
      * Exchange a freshly connected access token for its long-lived form, for
@@ -36,6 +44,6 @@ interface ProviderConnector
      */
     public function exchangeForLongLived(string $accessToken): ?RenewalResult;
 
-    /** Revoke the token on the provider side, if supported. */
-    public function revoke(SocialAccount $account): void;
+    /** Revoke the credential on the provider side, if supported. */
+    public function revoke(SocialToken $token): void;
 }

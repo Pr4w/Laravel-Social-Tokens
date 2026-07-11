@@ -5,7 +5,7 @@ use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -14,11 +14,11 @@ function linkedin(): LinkedInConnector
     return app(ConnectorRegistry::class)->for('linkedin');
 }
 
-function linkedinAccount(array $attrs = []): SocialAccount
+function linkedinCredential(array $attrs = []): SocialToken
 {
-    return SocialAccount::create(array_merge([
+    return SocialToken::create(array_merge([
         'provider' => 'linkedin',
-        'provider_user_id' => 'member-1',
+        'provider_holder_id' => 'member-'.uniqid(),
         'refresh_token' => 'refresh-1',
         'status' => AccountStatus::Active,
     ], $attrs));
@@ -41,7 +41,7 @@ it('renews via the refresh token grant', function () {
         'refresh_token_expires_in' => 31536000,
     ])]);
 
-    $result = linkedin()->renew(linkedinAccount());
+    $result = linkedin()->refreshCredential(linkedinCredential());
 
     expect($result->succeeded())->toBeTrue()
         ->and($result->accessToken)->toBe('new-access')
@@ -56,20 +56,20 @@ it('renews via the refresh token grant', function () {
 it('is terminal without a refresh token', function () {
     Http::fake();
 
-    expect(linkedin()->renew(linkedinAccount(['refresh_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(linkedin()->refreshCredential(linkedinCredential(['refresh_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
     Http::assertNothingSent();
 });
 
 it('maps invalid_grant to terminal', function () {
     Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response(['error' => 'invalid_grant'], 400)]);
 
-    expect(linkedin()->renew(linkedinAccount())->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(linkedin()->refreshCredential(linkedinCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('maps an unknown oauth error to transient', function () {
     Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response(['error' => 'server_error'], 400)]);
 
-    $result = linkedin()->renew(linkedinAccount());
+    $result = linkedin()->refreshCredential(linkedinCredential());
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient)->and($result->unknown)->toBeTrue();
 });

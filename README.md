@@ -16,8 +16,8 @@ refresh token + cron" design breaks on at least one of them:
 |---|---|---|---|
 | Google / YouTube | ~1h | refresh_token grant, refresh token reused | `StableRefreshToken` |
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
-| Facebook | Page token, no expiry | extend the 60-day user token, re-derive the page token | `RotatingRefreshToken` |
-| Instagram | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
+| Facebook | Page token, no expiry | page token stored static; the shared user token renews | `RotatingRefreshToken` |
+| Instagram | 60 days | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
 
@@ -25,9 +25,24 @@ The package models "how do I keep this token alive" as a per-provider strategy,
 where one valid answer is "I cannot, the user must reconnect." That last case is
 treated as an expected, scheduled event, not an error.
 
+## How it's stored
+
+Two tables. **`social_tokens`** holds the renewable **credential** — the thing
+that actually gets refreshed. **`social_accounts`** holds the postable identities,
+each pointing at the credential it posts with. One credential can back many
+accounts:
+
+- a Meta user token backs every Facebook Page and Instagram account for that user
+- a LinkedIn member token backs every organization they administer
+- a TikTok / Google account is 1:1 with its own credential
+
+Renewal happens on the credential, **once** — every account sharing it sees the
+fresh token. A Facebook page token is stored as a *static* credential (no expiry,
+never auto-refreshed); everything else is renewable on its lead time.
+
 ## Install
 
-Requires PHP 8.2+, Laravel 11 / 12 / 13, and Laravel Socialite 5.5+.
+Requires PHP 8.2+, Laravel 12 / 13, and Laravel Socialite 5.5+.
 
 ```bash
 composer require pr4w/laravel-social-tokens
@@ -112,15 +127,13 @@ more than one account. Most providers give exactly one, so use
   LinkedIn, TikTok and Google are already durable and stored as-is. Pass
   `longLived: false` to skip the upgrade.
 - **Instagram & Facebook fan-out.** These publish per Instagram account / per
-  Page, but the only renewable credential is the long-lived Facebook **User**
-  token. So a connect fans out to one row per target: Instagram gives one row per
-  linked Instagram Business account (plus its companion Page), Facebook gives one
-  per managed Page. Each stores the postable token in `access_token` and, for
-  pages, the shared user token in `refresh_token`; `expires_at` tracks the user
-  token so the scheduler re-extends it before it lapses. Every row records the
-  Facebook user id in `provider_holder_id`, so a reconnect flags targets the user
-  no longer manages — scoped to that user, so a co-owner's are never touched.
-  (Instagram and Facebook authenticate via the Facebook driver.)
+  Page. A connect fans out to one account row per target, each pointing at a
+  credential: Instagram accounts **share one renewable** Meta user credential
+  (refresh it once, they all stay alive); each Facebook Page gets its own
+  **static** page-token credential. Every account records the Facebook user id, so
+  a reconnect flags targets the user no longer manages — scoped to that user, so a
+  co-owner's are never touched. (Instagram and Facebook authenticate via the
+  Facebook driver.)
 
 Need finer control? `StoreConnection` delegates to lower-level actions you can
 call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages`
@@ -153,22 +166,23 @@ member, store that as its own row with `StoreAccountFromSocialite` — it carrie
 
 ## Renewing
 
-A scheduled command scans for accounts whose `renew_at` has passed and dispatches
-one `RenewAccountToken` job per account. Each provider declares its own lead time,
-so a single command handles token lifetimes from one hour to sixty days. The
-schedule is registered automatically; just run the Laravel scheduler.
+A scheduled command scans `social_tokens` for credentials whose `renew_at` has
+passed and dispatches one `RenewCredential` job per credential — so one renewal
+keeps every account sharing that credential alive. Each provider declares its own
+lead time, so a single command handles token lifetimes from one hour to sixty
+days. The schedule is registered automatically; just run the Laravel scheduler.
 
 Renewal failures are classified:
 
 - transient (network, provider 5xx, rate limit): retried with backoff while the
   expiry window is still open
-- terminal (invalid_grant, revoked, refresh token expired): the account moves to
-  `needs_reconnect` and an event fires, no further attempts
+- terminal (invalid_grant, revoked, refresh token expired): the credential moves
+  to `needs_reconnect` and an event fires, no further attempts
 
-Renewals run under a per-account lock so a scheduled job and a synchronous
-`validAccessTokenFor()` can never refresh the same account at once (which would
-break rotating-refresh-token providers like TikTok). This needs a cache store
-that supports atomic locks: redis, memcached, database, dynamodb, or file.
+Renewals run under a per-credential lock so a scheduled job and a synchronous
+`validAccessTokenFor()` can never refresh the same credential at once (which would
+break rotating-refresh-token providers like TikTok). This needs a cache store that
+supports atomic locks: redis, memcached, database, dynamodb, or file.
 
 ## Posting
 
@@ -196,8 +210,11 @@ active ──(renew succeeds)─────────────────
 revoked: terminal, set explicitly when you revoke an account; never retried.
 ```
 
-Listen for `AccountConnected`, `TokenRenewed`, `AccountNeedsReconnect`,
-`AccountRevoked` to drive notifications and a reconnect button in your panel.
+Listen for `AccountConnected`, `CredentialRenewed`, `CredentialNeedsReconnect`,
+`AccountNeedsReconnect` and `AccountRevoked` to drive notifications and a reconnect
+button in your panel. `CredentialNeedsReconnect` covers every account a credential
+backs (its token died); `AccountNeedsReconnect` is per account (e.g. a page the
+user no longer manages).
 
 ## Scopes
 
@@ -219,14 +236,29 @@ has everything it needs — and skip or warn on the ones that fall short.
 
 ## Adding a provider
 
-Create one class extending `AbstractConnector`, implement `renew()` for that
-provider's exact mechanism, declare its `renewalStrategy()` and `leadTime()`, and
-register it under its key in the config. See `TikTokConnector` for a complete
-reference. Nothing else in the package needs to change.
+Create one class extending `AbstractConnector`, implement `refreshCredential()`
+for that provider's exact refresh mechanism, declare its `renewalStrategy()` and
+`leadTime()`, and register it under its key in the config. See `TikTokConnector`
+for a complete reference. Nothing else in the package needs to change.
 
-Two hooks are optional (no-op by default in `AbstractConnector`): override
-`exchangeForLongLived()` if the provider needs a short-to-long token swap at
-connect, and `revoke()` if it exposes a token-revocation endpoint.
+Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when the
+credential is refreshed under another provider's key (Instagram returns
+`facebook`), `exchangeForLongLived()` for a short-to-long token swap at connect,
+and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
+
+## Upgrading to 1.0
+
+1.0 introduces the `social_tokens` credential table and moves all tokens onto it.
+`php artisan migrate` runs two data migrations: a backfill that groups your
+existing `social_accounts` into credentials and repoints them, then one that drops
+the now-unused token columns from `social_accounts`. **Back up your database
+first** — the column drop is not reversible without it.
+
+API changes: `ProviderConnector::refreshCredential(SocialToken)` replaces
+`renew(SocialAccount)` and `revoke()` takes a `SocialToken`; the `RenewAccountToken`
+job became `RenewCredential`; the `TokenRenewed` event became `CredentialRenewed`
+(plus a new `CredentialNeedsReconnect`). Accounts no longer hold tokens — read the
+posting token via `$account->credential` or `validAccessTokenFor($account)`.
 
 ## License
 

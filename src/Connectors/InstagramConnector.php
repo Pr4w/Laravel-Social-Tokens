@@ -5,7 +5,7 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -24,26 +24,33 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class InstagramConnector extends AbstractConnector
 {
+    /**
+     * Instagram shares the Meta user credential, refreshed via the Facebook
+     * connector (fb_exchange_token). So its credentials live under "facebook".
+     */
+    public function credentialProvider(): string
+    {
+        return 'facebook';
+    }
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::ExtendLongLived;
+    }
+
+    public function refreshCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing user token.');
+        }
+
+        return $this->extend($token->access_token);
     }
 
     public function leadTime(): CarbonInterval
     {
         // 60 day token, extend roughly a week early. Well past the 24h minimum age.
         return CarbonInterval::days(7);
-    }
-
-    public function renew(SocialAccount $account): RenewalResult
-    {
-        if (empty($account->access_token)) {
-            return RenewalResult::terminalFailure('Missing access token.');
-        }
-
-        // Renewal and the connect-time long-lived exchange are the same
-        // fb_exchange_token call on this path, so both go through extend().
-        return $this->extend($account->access_token);
     }
 
     public function exchangeForLongLived(string $accessToken): ?RenewalResult

@@ -9,6 +9,7 @@ use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
@@ -65,21 +66,31 @@ class StoreLinkedInOrganizations
 
         $renewAt = $expiresAt?->copy()->sub($connector->leadTime());
 
+        // The shared renewable member credential every organization posts with.
+        $credential = SocialToken::query()->updateOrCreate(
+            ['provider' => 'linkedin', 'provider_holder_id' => $memberId],
+            [
+                'access_token' => $accessToken,
+                'refresh_token' => $refreshToken,
+                'expires_at' => $expiresAt,
+                'refresh_expires_at' => $refreshExpiresAt,
+                'renew_at' => $renewAt,
+                'status' => AccountStatus::Active,
+                'last_error' => null,
+            ],
+        );
+
         // One row per organization, keyed on the organization id.
         $accounts = collect($organizations)->map(function (array $org) use (
-            $memberId, $accessToken, $refreshToken, $expiresAt, $refreshExpiresAt, $renewAt, $owner, $connectedBy
+            $memberId, $credential, $owner, $connectedBy
         ) {
             $account = SocialAccount::query()->updateOrCreate(
                 ['provider' => 'linkedin', 'provider_user_id' => $org['id']],
                 [
-                    'provider_holder_id' => $memberId,   // the member whose token backs this org
+                    'social_token_id' => $credential->getKey(), // shared member token
+                    'provider_holder_id' => $memberId,          // the member whose token backs this org
                     'name' => $org['name'] ?? null,
                     'avatar' => $org['logo'] ?? null,
-                    'access_token' => $accessToken,      // shared member token; posts as the org
-                    'refresh_token' => $refreshToken,
-                    'expires_at' => $expiresAt,
-                    'refresh_expires_at' => $refreshExpiresAt,
-                    'renew_at' => $renewAt,
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                     'profile' => ['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null],

@@ -6,6 +6,7 @@ use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
@@ -15,11 +16,11 @@ beforeEach(function () {
     $this->tokens = app(SocialTokens::class);
 });
 
-function fakeAccount(array $attrs = []): SocialAccount
+function fakeCredential(array $attrs = []): SocialToken
 {
-    return SocialAccount::create(array_merge([
+    return SocialToken::create(array_merge([
         'provider' => 'fake',
-        'provider_user_id' => 'f-'.uniqid(),
+        'provider_holder_id' => 'h-'.uniqid(),
         'access_token' => 'current-token',
         'refresh_token' => 'refresh',
         'status' => AccountStatus::Active,
@@ -27,44 +28,55 @@ function fakeAccount(array $attrs = []): SocialAccount
     ], $attrs));
 }
 
-it('renews an expired account and applies the result', function () {
-    $account = fakeAccount();
+function accountFor(SocialToken $token, array $attrs = []): SocialAccount
+{
+    return SocialAccount::create(array_merge([
+        'provider' => 'fake',
+        'provider_user_id' => 'a-'.uniqid(),
+        'social_token_id' => $token->getKey(),
+        'status' => AccountStatus::Active,
+    ], $attrs));
+}
+
+// renewCredential ----------------------------------------------------------
+
+it('renews an expired credential and applies the result', function () {
+    $token = fakeCredential();
     FakeConnector::$nextResult = RenewalResult::success(accessToken: 'brand-new', expiresAt: now()->addHour());
 
-    $result = $this->tokens->renew($account);
+    $result = $this->tokens->renewCredential($token);
 
     expect($result->succeeded())->toBeTrue()
         ->and(FakeConnector::$renewCalls)->toBe(1)
-        ->and($account->fresh()->access_token)->toBe('brand-new')
-        ->and($account->fresh()->status)->toBe(AccountStatus::Active);
+        ->and($token->fresh()->access_token)->toBe('brand-new')
+        ->and($token->fresh()->status)->toBe(AccountStatus::Active);
 });
 
-it('short-circuits under the lock when the token was already renewed', function () {
-    $account = fakeAccount(['expires_at' => now()->addHour()]); // not expired
+it('short-circuits under the lock when the credential was already renewed', function () {
+    $token = fakeCredential(['expires_at' => now()->addHour()]); // not expired
 
-    $result = $this->tokens->renew($account);
+    $result = $this->tokens->renewCredential($token);
 
     expect($result->succeeded())->toBeTrue()
         ->and(FakeConnector::$renewCalls)->toBe(0); // provider never called
 });
 
-it('returns a transient failure without touching the account', function () {
-    $account = fakeAccount();
+it('returns a transient failure without touching the credential', function () {
+    $token = fakeCredential();
     FakeConnector::$nextResult = RenewalResult::transientFailure('provider 500');
 
-    $result = $this->tokens->renew($account);
+    $result = $this->tokens->renewCredential($token);
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient)
-        ->and($account->fresh()->access_token)->toBe('current-token')
-        ->and($account->fresh()->status)->toBe(AccountStatus::Active);
+        ->and($token->fresh()->access_token)->toBe('current-token')
+        ->and($token->fresh()->status)->toBe(AccountStatus::Active);
 });
 
 it('logs an uncatalogued renewal error', function () {
     Log::spy();
-    $account = fakeAccount();
     FakeConnector::$nextResult = RenewalResult::unknownFailure('weird', ['error' => 'weird']);
 
-    $this->tokens->renew($account);
+    $this->tokens->renewCredential(fakeCredential());
 
     Log::shouldHaveReceived('error')->withArgs(
         fn ($message) => str_contains($message, 'Uncatalogued renewal error')
@@ -76,76 +88,97 @@ it('does not log unknown errors when disabled', function () {
     Log::spy();
     FakeConnector::$nextResult = RenewalResult::unknownFailure('weird');
 
-    $this->tokens->renew(fakeAccount());
+    $this->tokens->renewCredential(fakeCredential());
 
     Log::shouldNotHaveReceived('error');
 });
 
-it('returns a valid token without renewing when not expired', function () {
-    $account = fakeAccount(['expires_at' => now()->addHour(), 'access_token' => 'still-good']);
+// validAccessTokenFor ------------------------------------------------------
 
-    expect($this->tokens->validAccessTokenFor($account))->toBe('still-good')
+it('returns the credential token without renewing when not expired', function () {
+    $token = fakeCredential(['expires_at' => now()->addHour(), 'access_token' => 'still-good']);
+
+    expect($this->tokens->validAccessTokenFor(accountFor($token)))->toBe('still-good')
         ->and(FakeConnector::$renewCalls)->toBe(0);
 });
 
-it('renews synchronously when the token is expired', function () {
-    $account = fakeAccount();
+it('returns a static credential token as-is (renew_at null, never expires)', function () {
+    $token = fakeCredential(['expires_at' => null, 'renew_at' => null, 'access_token' => 'page-token']);
+
+    expect($this->tokens->validAccessTokenFor(accountFor($token)))->toBe('page-token')
+        ->and(FakeConnector::$renewCalls)->toBe(0);
+});
+
+it('renews the credential synchronously when the token is expired', function () {
+    $token = fakeCredential();
     FakeConnector::$nextResult = RenewalResult::success(accessToken: 'synced', expiresAt: now()->addHour());
 
-    expect($this->tokens->validAccessTokenFor($account))->toBe('synced');
+    expect($this->tokens->validAccessTokenFor(accountFor($token)))->toBe('synced');
 });
 
 it('throws when the account is not usable', function () {
-    $account = fakeAccount(['status' => AccountStatus::NeedsReconnect]);
+    $token = fakeCredential();
+
+    $this->tokens->validAccessTokenFor(accountFor($token, ['status' => AccountStatus::NeedsReconnect]));
+})->throws(NeedsReconnectException::class);
+
+it('throws when the credential is not usable', function () {
+    $token = fakeCredential(['status' => AccountStatus::NeedsReconnect]);
+
+    $this->tokens->validAccessTokenFor(accountFor($token));
+})->throws(NeedsReconnectException::class);
+
+it('throws when the account has no credential', function () {
+    $account = SocialAccount::create(['provider' => 'fake', 'provider_user_id' => 'orphan', 'status' => AccountStatus::Active]);
 
     $this->tokens->validAccessTokenFor($account);
 })->throws(NeedsReconnectException::class);
 
-it('flags for reconnect when the provider cannot renew unattended', function () {
+it('flags the credential when the provider cannot renew unattended', function () {
     FakeConnector::$strategy = RenewalStrategy::ReauthOnly;
-    $account = fakeAccount();
+    $token = fakeCredential();
 
     try {
-        $this->tokens->validAccessTokenFor($account);
+        $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
     } catch (NeedsReconnectException) {
-        expect($account->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
+        expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
             ->and(FakeConnector::$renewCalls)->toBe(0);
     }
 });
 
-it('flags for reconnect when the refresh token has expired', function () {
-    $account = fakeAccount(['refresh_expires_at' => now()->subDay()]);
+it('flags the credential when the refresh token has expired', function () {
+    $token = fakeCredential(['refresh_expires_at' => now()->subDay()]);
 
     try {
-        $this->tokens->validAccessTokenFor($account);
+        $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
     } catch (NeedsReconnectException) {
-        expect($account->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+        expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
     }
 });
 
-it('flags for reconnect on a terminal renewal failure', function () {
-    $account = fakeAccount();
+it('flags the credential on a terminal renewal failure', function () {
+    $token = fakeCredential();
     FakeConnector::$nextResult = RenewalResult::terminalFailure('revoked');
 
     try {
-        $this->tokens->validAccessTokenFor($account);
+        $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
     } catch (NeedsReconnectException) {
-        expect($account->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+        expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
     }
 });
 
-it('leaves the account usable on a transient failure but still throws', function () {
-    $account = fakeAccount();
+it('leaves the credential usable on a transient failure but still throws', function () {
+    $token = fakeCredential();
     FakeConnector::$nextResult = RenewalResult::transientFailure('temporary');
 
     try {
-        $this->tokens->validAccessTokenFor($account);
+        $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
     } catch (NeedsReconnectException) {
-        expect($account->fresh()->status)->toBe(AccountStatus::Active); // still retryable
+        expect($token->fresh()->status)->toBe(AccountStatus::Active); // still retryable
     }
 });
 

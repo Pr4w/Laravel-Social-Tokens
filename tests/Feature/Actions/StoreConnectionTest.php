@@ -31,7 +31,8 @@ it('always returns a collection', function () {
     $result = $this->store->handle('google', socialiteUser(['id' => 'g-1']));
 
     expect($result)->toBeInstanceOf(Collection::class)->toHaveCount(1)
-        ->and($result->first()->provider)->toBe('google');
+        ->and($result->first()->provider)->toBe('google')
+        ->and($result->first()->credential)->not->toBeNull();
 });
 
 it('routes Facebook to the page fan-out', function () {
@@ -39,25 +40,30 @@ it('routes Facebook to the page fan-out', function () {
 
     $result = $this->store->handle('facebook', socialiteUser(['token' => 'short']));
 
+    $account = SocialAccount::where('provider', 'facebook')->where('provider_user_id', 'page-1')->first();
     expect($result)->toHaveCount(1)
-        ->and($result->first()->provider)->toBe('facebook')
-        ->and(SocialAccount::where('provider', 'facebook')->where('provider_user_id', 'page-1')->exists())->toBeTrue();
+        ->and($account)->not->toBeNull()
+        ->and($account->credential->access_token)->toBe('pt-1')     // static page token
+        ->and($account->credential->renew_at)->toBeNull();
 });
 
 it('routes Instagram to the account fan-out', function () {
     fakeMetaGraphForConnection();
 
-    $result = $this->store->handle('instagram', socialiteUser(['token' => 'short']));
+    $this->store->handle('instagram', socialiteUser(['token' => 'short']));
 
-    // one IG account plus its companion Facebook page
-    expect(SocialAccount::where('provider', 'instagram')->where('provider_user_id', 'ig-1')->exists())->toBeTrue()
+    $ig = SocialAccount::where('provider', 'instagram')->where('provider_user_id', 'ig-1')->first();
+    expect($ig)->not->toBeNull()
+        ->and($ig->credential->access_token)->toBe('long-user-token') // shared renewable credential
+        ->and($ig->credential->renew_at)->not->toBeNull()
         ->and(SocialAccount::where('provider', 'facebook')->where('provider_user_id', 'page-1')->exists())->toBeTrue();
 });
 
-it('routes other providers to a single stored account', function () {
+it('routes other providers to a single stored account with its credential', function () {
     $result = $this->store->handle('tiktok', socialiteUser(['id' => 'tt-1', 'refreshToken' => 'r']));
 
     expect($result)->toHaveCount(1)
         ->and($result->first()->provider)->toBe('tiktok')
-        ->and($result->first()->provider_user_id)->toBe('tt-1');
+        ->and($result->first()->provider_user_id)->toBe('tt-1')
+        ->and($result->first()->credential->provider)->toBe('tiktok');
 });

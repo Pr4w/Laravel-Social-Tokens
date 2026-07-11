@@ -5,7 +5,7 @@ use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 function instagram(): InstagramConnector
@@ -13,27 +13,28 @@ function instagram(): InstagramConnector
     return app(ConnectorRegistry::class)->for('instagram');
 }
 
-function instagramAccount(array $attrs = []): SocialAccount
+function instagramCredential(array $attrs = []): SocialToken
 {
-    return SocialAccount::create(array_merge([
-        'provider' => 'instagram',
-        'provider_user_id' => 'ig-1',
+    return SocialToken::create(array_merge([
+        'provider' => 'facebook', // Instagram shares the Meta credential
+        'provider_holder_id' => 'ig-user-'.uniqid(),
         'access_token' => 'ig-long-lived',
         'status' => AccountStatus::Active,
     ], $attrs));
 }
 
-it('uses the extend-long-lived strategy', function () {
+it('uses the extend-long-lived strategy and shares the Meta credential', function () {
     expect(instagram()->renewalStrategy())->toBe(RenewalStrategy::ExtendLongLived)
-        ->and(instagram()->leadTime()->totalDays)->toBe(7.0);
+        ->and(instagram()->leadTime()->totalDays)->toBe(7.0)
+        ->and(instagram()->credentialProvider())->toBe('facebook');
 });
 
-it('renews by extending the long lived token via fb_exchange_token', function () {
+it('refreshes by extending the long lived token via fb_exchange_token', function () {
     Http::fake(['graph.facebook.com/*/oauth/access_token*' => Http::response([
         'access_token' => 'extended', 'expires_in' => 5183944,
     ])]);
 
-    $result = instagram()->renew(instagramAccount());
+    $result = instagram()->refreshCredential(instagramCredential());
 
     expect($result->succeeded())->toBeTrue()
         ->and($result->accessToken)->toBe('extended')
@@ -47,7 +48,7 @@ it('renews by extending the long lived token via fb_exchange_token', function ()
 it('is terminal without an access token', function () {
     Http::fake();
 
-    expect(instagram()->renew(instagramAccount(['access_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(instagram()->refreshCredential(instagramCredential(['access_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('maps a meta error to terminal', function () {
@@ -55,7 +56,7 @@ it('maps a meta error to terminal', function () {
         'error' => ['type' => 'OAuthException', 'code' => 190, 'message' => 'bad token'],
     ])]);
 
-    expect(instagram()->renew(instagramAccount())->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(instagram()->refreshCredential(instagramCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('exchanges a short lived token via the same call', function () {

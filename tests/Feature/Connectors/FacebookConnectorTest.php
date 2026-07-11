@@ -2,88 +2,23 @@
 
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
-use Pr4w\SocialTokens\Enums\AccountStatus;
-use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
+/**
+ * Facebook's refreshCredential (single-phase extend) is covered by
+ * RefreshCredentialTest. This file covers the Graph helper methods the
+ * Instagram/Facebook actions rely on.
+ */
 function facebook(): FacebookConnector
 {
     return app(ConnectorRegistry::class)->for('facebook');
 }
 
-function facebookAccount(array $attrs = []): SocialAccount
-{
-    return SocialAccount::create(array_merge([
-        'provider' => 'facebook',
-        'provider_user_id' => 'page-1',
-        'refresh_token' => 'user-token',   // the root user token
-        'status' => AccountStatus::Active,
-    ], $attrs));
-}
-
-/** Fake the two Graph calls renew() makes, keyed by path. */
-function fakeGraph(array $extend, array $pages): void
-{
-    Http::fake(function ($request) use ($extend, $pages) {
-        if (str_contains($request->url(), '/oauth/access_token')) {
-            return Http::response($extend);
-        }
-
-        if (str_contains($request->url(), '/me/accounts')) {
-            return Http::response($pages);
-        }
-
-        return Http::response([], 404);
-    });
-}
-
-it('uses the rotating strategy', function () {
+it('uses the rotating strategy and a 7 day lead time', function () {
     expect(facebook()->renewalStrategy())->toBe(RenewalStrategy::RotatingRefreshToken)
         ->and(facebook()->leadTime()->totalDays)->toBe(7.0);
-});
-
-it('extends the user token then re-derives this page token', function () {
-    fakeGraph(
-        extend: ['access_token' => 'fresh-user-token', 'expires_in' => 5183944],
-        pages: ['data' => [
-            ['id' => 'page-2', 'access_token' => 'page-2-token'],
-            ['id' => 'page-1', 'access_token' => 'page-1-token'],
-        ]],
-    );
-
-    $result = facebook()->renew(facebookAccount());
-
-    expect($result->succeeded())->toBeTrue()
-        ->and($result->accessToken)->toBe('page-1-token')     // this page's token
-        ->and($result->refreshToken)->toBe('fresh-user-token') // rotated user token
-        ->and($result->expiresAt)->not->toBeNull();
-});
-
-it('is terminal when the page is no longer managed', function () {
-    fakeGraph(
-        extend: ['access_token' => 'fresh-user-token', 'expires_in' => 5183944],
-        pages: ['data' => [['id' => 'some-other-page', 'access_token' => 'x']]],
-    );
-
-    expect(facebook()->renew(facebookAccount())->outcome)->toBe(RenewalOutcome::Terminal);
-});
-
-it('is terminal without a user token', function () {
-    Http::fake();
-
-    expect(facebook()->renew(facebookAccount(['refresh_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
-    Http::assertNothingSent();
-});
-
-it('propagates a terminal error from the token extension', function () {
-    Http::fake(['graph.facebook.com/*/oauth/access_token*' => Http::response([
-        'error' => ['type' => 'OAuthException', 'code' => 190, 'message' => 'expired'],
-    ])]);
-
-    expect(facebook()->renew(facebookAccount())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('extends a user token and returns its expiry', function () {

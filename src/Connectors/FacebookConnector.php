@@ -6,7 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -36,47 +36,25 @@ class FacebookConnector extends AbstractConnector
         return CarbonInterval::days(7);
     }
 
-    public function renew(SocialAccount $account): RenewalResult
+    /**
+     * Refresh the Meta user credential: extend the stored user token in place.
+     * Single-phase — Facebook page tokens are static and are not re-derived here.
+     */
+    public function refreshCredential(SocialToken $token): RenewalResult
     {
-        // The user token (root credential) lives in refresh_token for facebook rows.
-        $userToken = $account->refresh_token;
-
-        if (empty($userToken)) {
-            return RenewalResult::terminalFailure('Missing user token to re-derive the page token.');
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing user token.');
         }
 
-        // 1. Extend the long lived user token.
-        $extended = $this->extendUserToken($userToken);
+        $extended = $this->extendUserToken($token->access_token);
 
         if ($extended instanceof RenewalResult) {
             return $extended;
         }
 
-        // 2. Re-derive this page's token with the fresh user token.
-        $pages = $this->fetchPages($extended['token']);
-
-        if ($pages instanceof RenewalResult) {
-            return $pages;
-        }
-
-        $pageToken = null;
-
-        foreach ($pages as $page) {
-            if (($page['id'] ?? null) === (string) $account->provider_user_id) {
-                $pageToken = $page['access_token'] ?? null;
-                break;
-            }
-        }
-
-        if ($pageToken === null) {
-            // The user is no longer an admin of this page, or it is gone.
-            return RenewalResult::terminalFailure('Page not found among managed pages (admin access lost?).');
-        }
-
         return RenewalResult::success(
-            accessToken: $pageToken,             // fresh page token, ready to post with
-            expiresAt: $extended['expiresAt'],   // tied to the user token expiry
-            refreshToken: $extended['token'],    // rotate the stored user token
+            accessToken: $extended['token'],
+            expiresAt: $extended['expiresAt'],
         );
     }
 

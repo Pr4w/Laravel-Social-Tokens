@@ -5,7 +5,7 @@ namespace Pr4w\SocialTokens\Tests\Fixtures;
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -37,7 +37,7 @@ class FakeConnector extends AbstractConnector
         return static::$lead ?? CarbonInterval::minutes(15);
     }
 
-    public function renew(SocialAccount $account): RenewalResult
+    public function refreshCredential(SocialToken $token): RenewalResult
     {
         static::$renewCalls++;
 
@@ -50,7 +50,7 @@ class FakeConnector extends AbstractConnector
         return static::$exchangeResult;
     }
 
-    public function revoke(SocialAccount $account): void
+    public function revoke(SocialToken $token): void
     {
         static::$revokeCalls++;
     }

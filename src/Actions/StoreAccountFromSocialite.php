@@ -7,6 +7,7 @@ use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use RuntimeException;
 
@@ -14,6 +15,10 @@ use RuntimeException;
  * Call this from your OAuth callback controller after Socialite returns a user.
  * It is the integration point Socialite itself does not provide (Socialite
  * fires no event on return).
+ *
+ * For a 1:1 provider (TikTok, Google, standalone) the credential and the account
+ * are one-to-one: this creates a renewable SocialToken and a SocialAccount that
+ * posts with it.
  */
 class StoreAccountFromSocialite
 {
@@ -38,8 +43,8 @@ class StoreAccountFromSocialite
         $refreshExpiresAt = $refreshExpiresIn ? now()->addSeconds((int) $refreshExpiresIn) : null;
 
         // Upgrade to a long-lived token where the provider needs a distinct
-        // connect-time exchange (Instagram, Threads). Providers whose connect
-        // token is already durable return null and are stored as-is.
+        // connect-time exchange (Threads). Providers whose connect token is
+        // already durable return null and are stored as-is.
         if ($longLived && $connector) {
             $exchanged = $connector->exchangeForLongLived($accessToken);
 
@@ -61,21 +66,36 @@ class StoreAccountFromSocialite
             ? $expiresAt->copy()->sub($connector->leadTime())
             : null;
 
+        // The credential (holder = the account's own id for a 1:1 provider).
+        $token = SocialToken::query()->updateOrCreate(
+            [
+                'provider' => $connector?->credentialProvider() ?? $provider,
+                'provider_holder_id' => $user->getId(),
+            ],
+            [
+                'access_token' => $accessToken,
+                'refresh_token' => $refreshToken,
+                'expires_at' => $expiresAt,
+                'refresh_expires_at' => $refreshExpiresAt,
+                'renew_at' => $renewAt,
+                'scopes' => $user->approvedScopes,
+                'status' => AccountStatus::Active,
+                'last_error' => null,
+            ],
+        );
+
         $account = SocialAccount::query()->updateOrCreate(
             [
                 'provider' => $provider,
                 'provider_user_id' => $user->getId(),
             ],
             [
+                'social_token_id' => $token->getKey(),
+                'provider_holder_id' => $user->getId(),
                 'name' => $user->getName(),
                 'nickname' => $user->getNickname(),
                 'email' => $user->getEmail(),
                 'avatar' => $user->getAvatar(),
-                'access_token' => $accessToken,
-                'refresh_token' => $refreshToken,
-                'expires_at' => $expiresAt,
-                'refresh_expires_at' => $refreshExpiresAt,
-                'renew_at' => $renewAt,
                 'scopes' => $user->approvedScopes,
                 'status' => AccountStatus::Active,
                 'last_error' => null,

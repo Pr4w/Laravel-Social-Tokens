@@ -5,7 +5,7 @@ use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 function threads(): ThreadsConnector
@@ -13,11 +13,11 @@ function threads(): ThreadsConnector
     return app(ConnectorRegistry::class)->for('threads');
 }
 
-function threadsAccount(array $attrs = []): SocialAccount
+function threadsCredential(array $attrs = []): SocialToken
 {
-    return SocialAccount::create(array_merge([
+    return SocialToken::create(array_merge([
         'provider' => 'threads',
-        'provider_user_id' => 'th-1',
+        'provider_holder_id' => 'th-'.uniqid(),
         'access_token' => 'long-lived',
         'status' => AccountStatus::Active,
     ], $attrs));
@@ -28,12 +28,12 @@ it('uses the extend-long-lived strategy', function () {
         ->and(threads()->leadTime()->totalDays)->toBe(7.0);
 });
 
-it('renews by refreshing the long lived token with no credentials', function () {
+it('refreshes the long lived token with no credentials', function () {
     Http::fake(['graph.threads.net/refresh_access_token*' => Http::response([
         'access_token' => 'refreshed', 'expires_in' => 5183944,
     ])]);
 
-    $result = threads()->renew(threadsAccount());
+    $result = threads()->refreshCredential(threadsCredential());
 
     expect($result->succeeded())->toBeTrue()
         ->and($result->accessToken)->toBe('refreshed')
@@ -47,7 +47,7 @@ it('renews by refreshing the long lived token with no credentials', function () 
 it('is terminal without an access token', function () {
     Http::fake();
 
-    expect(threads()->renew(threadsAccount(['access_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(threads()->refreshCredential(threadsCredential(['access_token' => null]))->outcome)->toBe(RenewalOutcome::Terminal);
     Http::assertNothingSent();
 });
 
@@ -56,7 +56,7 @@ it('maps a meta error to terminal on renewal', function () {
         'error' => ['type' => 'OAuthException', 'code' => 190, 'message' => 'expired'],
     ])]);
 
-    expect(threads()->renew(threadsAccount())->outcome)->toBe(RenewalOutcome::Terminal);
+    expect(threads()->refreshCredential(threadsCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('exchanges a short lived token for a long lived one with credentials', function () {

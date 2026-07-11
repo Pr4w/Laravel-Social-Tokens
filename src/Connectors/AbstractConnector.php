@@ -6,7 +6,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
-use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
@@ -17,6 +17,15 @@ abstract class AbstractConnector implements ProviderConnector
      * @param  string|null  $provider  The provider key this connector was resolved under.
      */
     public function __construct(protected array $config = [], protected ?string $provider = null) {}
+
+    /**
+     * The connector that refreshes this provider's credential. Defaults to the
+     * provider's own key; override where a credential is shared (Instagram).
+     */
+    public function credentialProvider(): string
+    {
+        return $this->provider ?? '';
+    }
 
     /**
      * Client credentials default to Laravel Socialite's config/services.php, so
@@ -48,7 +57,7 @@ abstract class AbstractConnector implements ProviderConnector
         return CarbonInterval::minutes(15);
     }
 
-    public function revoke(SocialAccount $account): void
+    public function revoke(SocialToken $token): void
     {
         // No-op by default. Override where the provider exposes a revoke endpoint.
     }

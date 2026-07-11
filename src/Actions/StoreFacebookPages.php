@@ -8,37 +8,26 @@ use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
 
 /**
- * Facebook publishing is per PAGE, but the only renewable credential is the
- * long lived USER token. This action bridges the two: given a user token (as
- * returned by Socialite), it extends it to a long lived one, lists every Page
- * the user manages, and writes one SocialAccount row per page.
+ * Facebook publishing is per PAGE. The user token is used transiently to mint a
+ * page token per page; each page token is stored as a STATIC credential (a
+ * SocialToken with renew_at null — page tokens minted from a long-lived user
+ * token do not expire and are not auto-refreshed). Each account posts with its
+ * page token's credential.
  *
- * Each row stores the PAGE token in access_token (ready to post with) and the
- * shared USER token in refresh_token, with expires_at tracking the USER token
- * so the scheduler renews it before it lapses. See FacebookConnector::renew().
- *
- * Call this from your OAuth callback controller for the "facebook" provider
- * instead of StoreAccountFromSocialite, which stores a single row and cannot
- * split the user token from the page tokens.
+ * Call this from your OAuth callback for the "facebook" provider instead of
+ * StoreAccountFromSocialite.
  */
 class StoreFacebookPages
 {
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
-     * @param  string  $userToken  The user access token from the OAuth callback.
-     * @param  Model|null  $owner  App-side entity that owns these connections.
-     * @param  Model|null  $connectedBy  Who performed the connection (optional).
-     * @param  string|null  $userId  The Facebook user id. Pass Socialite's
-     *                               $user->getId() to skip an extra /me call;
-     *                               resolved automatically when null.
-     * @param  bool  $extend  Exchange the token for a long lived one first. Leave
-     *                        true unless you already hold a long lived user token.
      * @return Collection<int, SocialAccount> One row per managed page (may be empty).
      *
      * @throws RuntimeException when the token cannot be extended, the user id
@@ -57,9 +46,7 @@ class StoreFacebookPages
             throw new RuntimeException('The "facebook" connector must be a FacebookConnector to seed pages.');
         }
 
-        $expiresAt = null;
-
-        // 1. Make sure we hold a long lived user token (the renewable root).
+        // 1. A long lived user token to mint page tokens from (used transiently).
         if ($extend) {
             $extended = $connector->extendUserToken($userToken);
 
@@ -68,10 +55,9 @@ class StoreFacebookPages
             }
 
             $userToken = $extended['token'];
-            $expiresAt = $extended['expiresAt'];
         }
 
-        // 2. Resolve the user id (credential holder) if the caller did not pass it.
+        // 2. Resolve the user id (recorded on each account for reconciliation).
         if ($userId === null) {
             $resolved = $connector->fetchUserId($userToken);
 
@@ -89,10 +75,7 @@ class StoreFacebookPages
             throw new RuntimeException('Could not list Facebook pages: '.$pages->reason);
         }
 
-        $renewAt = $expiresAt?->copy()->sub($connector->leadTime());
-
-        // Per-account granted scopes (Meta grants granularly, per page). Best
-        // effort: scope metadata must never block the connection.
+        // Per-account granted scopes (Meta grants granularly). Best effort.
         $pageIds = collect($pages)->pluck('id')->filter()->map(fn ($id) => (string) $id)->all();
         $scopesByAccount = $connector->grantedScopesByAccount($userToken, $pageIds);
 
@@ -100,48 +83,42 @@ class StoreFacebookPages
             $scopesByAccount = [];
         }
 
-        // 4. One row per page, keyed on the page id.
-        $accounts = collect($pages)->map(function (array $page) use ($userId, $userToken, $expiresAt, $renewAt, $scopesByAccount, $owner, $connectedBy) {
-            $account = SocialAccount::query()->updateOrCreate(
+        // 4. One static page-token credential + one account per page.
+        $accounts = collect($pages)->map(function (array $page) use ($userId, $scopesByAccount, $owner, $connectedBy) {
+            $scopes = $scopesByAccount[(string) ($page['id'] ?? '')] ?? [];
+
+            $token = SocialToken::query()->updateOrCreate(
+                ['provider' => 'facebook', 'provider_holder_id' => $page['id'] ?? null],
                 [
-                    'provider' => 'facebook',
-                    'provider_user_id' => $page['id'] ?? null,
-                ],
-                [
-                    'provider_holder_id' => $userId,                 // the Facebook user behind this page
-                    'name' => $page['name'] ?? null,
-                    'avatar' => data_get($page, 'picture.data.url'),
                     'access_token' => $page['access_token'] ?? null, // page token, ready to post with
-                    'refresh_token' => $userToken,                   // shared long lived user token
-                    'expires_at' => $expiresAt,                      // user token expiry drives renew_at
-                    'refresh_expires_at' => null,
-                    'renew_at' => $renewAt,
-                    'scopes' => $scopesByAccount[(string) ($page['id'] ?? '')] ?? [],
+                    'refresh_token' => null,
+                    'expires_at' => null,   // page tokens from a long lived user token do not expire
+                    'renew_at' => null,     // static: never auto-refreshed
+                    'scopes' => $scopes,
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                 ],
             );
 
-            if ($owner) {
-                $account->ownable()->associate($owner);
-            }
-
-            if ($connectedBy) {
-                $account->connectedBy()->associate($connectedBy);
-            }
-
-            if ($account->isDirty()) {
-                $account->save();
-            }
-
-            event(new AccountConnected($account));
-
-            return $account;
+            return $this->persistAccount(
+                ['provider' => 'facebook', 'provider_user_id' => $page['id'] ?? null],
+                [
+                    'social_token_id' => $token->getKey(),
+                    'provider_holder_id' => $userId,     // the Facebook user behind this page
+                    'name' => $page['name'] ?? null,
+                    'avatar' => data_get($page, 'picture.data.url'),
+                    'scopes' => $scopes,
+                    'status' => AccountStatus::Active,
+                    'last_error' => null,
+                ],
+                $owner,
+                $connectedBy,
+            );
         });
 
-        // 5. Reconcile: any still-active page we hold for THIS user that they no
-        // longer manage (absent from the response) is flagged for reconnection.
-        // Scoped to provider_holder_id so a co-owner's pages are never touched.
+        // 5. Reconcile: any still-active page account for THIS user that they no
+        // longer manage is flagged. Scoped to the user id, so a co-owner's pages
+        // are never touched.
         $managedIds = collect($pages)->pluck('id')->filter()->values()->all();
 
         SocialAccount::query()
@@ -155,5 +132,30 @@ class StoreFacebookPages
             ));
 
         return $accounts;
+    }
+
+    /**
+     * @param  array<string, mixed>  $keys
+     * @param  array<string, mixed>  $attributes
+     */
+    private function persistAccount(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
+    {
+        $account = SocialAccount::query()->updateOrCreate($keys, $attributes);
+
+        if ($owner) {
+            $account->ownable()->associate($owner);
+        }
+
+        if ($connectedBy) {
+            $account->connectedBy()->associate($connectedBy);
+        }
+
+        if ($account->isDirty()) {
+            $account->save();
+        }
+
+        event(new AccountConnected($account));
+
+        return $account;
     }
 }

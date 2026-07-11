@@ -22,7 +22,7 @@ function orgElement(string $id, string $name): array
 
 beforeEach(fn () => $this->store = app(StoreLinkedInOrganizations::class));
 
-it('creates one row per administered organization, mirroring the member token', function () {
+it('creates one account per organization on a shared member credential', function () {
     fakeOrganizations([orgElement('111', 'Acme'), orgElement('222', 'Globex')]);
     $owner = Owner::create();
 
@@ -38,26 +38,28 @@ it('creates one row per administered organization, mirroring the member token', 
     $org = SocialAccount::where('provider_user_id', '111')->first();
     expect($org->provider)->toBe('linkedin')
         ->and($org->provider_holder_id)->toBe('member-1')
-        ->and($org->access_token)->toBe('member-token') // shared member token
         ->and($org->name)->toBe('Acme')
         ->and($org->profile['organization_urn'])->toBe('urn:li:organization:111')
-        ->and($org->renew_at)->not->toBeNull()
         ->and($org->ownable->is($owner))->toBeTrue();
+
+    // Both organizations post with one shared, renewable member credential.
+    $credential = $org->credential;
+    expect($credential->provider)->toBe('linkedin')
+        ->and($credential->provider_holder_id)->toBe('member-1')
+        ->and($credential->access_token)->toBe('member-token')
+        ->and($credential->renew_at)->not->toBeNull()
+        ->and(SocialAccount::where('provider', 'linkedin')->pluck('social_token_id')->unique())->toHaveCount(1);
 });
 
 it('reconciles organizations the member no longer administers', function () {
     SocialAccount::create([
-        'provider' => 'linkedin',
-        'provider_user_id' => 'dropped-org',
-        'provider_holder_id' => 'member-1',
-        'status' => AccountStatus::Active,
+        'provider' => 'linkedin', 'provider_user_id' => 'dropped-org',
+        'provider_holder_id' => 'member-1', 'status' => AccountStatus::Active,
     ]);
     // The member's personal row (holder id null) must never be touched.
     $personal = SocialAccount::create([
-        'provider' => 'linkedin',
-        'provider_user_id' => 'member-1',
-        'provider_holder_id' => null,
-        'status' => AccountStatus::Active,
+        'provider' => 'linkedin', 'provider_user_id' => 'member-1',
+        'provider_holder_id' => null, 'status' => AccountStatus::Active,
     ]);
 
     fakeOrganizations([orgElement('111', 'Acme')]);
