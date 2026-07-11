@@ -87,6 +87,34 @@ class SocialAccount extends Model
         return $this->refresh_expires_at !== null && $this->refresh_expires_at->isPast();
     }
 
+    // Scopes ----------------------------------------------------------------
+
+    /** @return array<int, string> */
+    public function grantedScopes(): array
+    {
+        return $this->scopes ?? [];
+    }
+
+    public function hasScope(string $scope): bool
+    {
+        return in_array($scope, $this->grantedScopes(), true);
+    }
+
+    /** @param array<int, string> $scopes  True when every scope is granted. */
+    public function hasScopes(array $scopes): bool
+    {
+        return $this->missingScopes($scopes) === [];
+    }
+
+    /**
+     * @param  array<int, string>  $scopes
+     * @return array<int, string>  The requested scopes not granted to this account.
+     */
+    public function missingScopes(array $scopes): array
+    {
+        return array_values(array_diff($scopes, $this->grantedScopes()));
+    }
+
     /**
      * Apply a successful renewal result and recompute the renewal window.
      */

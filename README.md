@@ -174,6 +174,24 @@ revoked: terminal, set explicitly when you revoke an account; never retried.
 Listen for `AccountConnected`, `TokenRenewed`, `AccountNeedsReconnect`,
 `AccountRevoked` to drive notifications and a reconnect button in your panel.
 
+## Scopes
+
+The scopes granted to each account are recorded on the row, so you can check —
+per account — whether it can do what you need before relying on it:
+
+```php
+$account->grantedScopes();                       // string[]
+$account->hasScope('pages_manage_posts');        // bool
+$account->hasScopes(['pages_manage_posts', 'pages_read_engagement']); // all present?
+$account->missingScopes(['pages_manage_posts']); // what's absent
+```
+
+For Meta these scopes are recorded **per account**, not per token: a user can
+grant a scope for some Pages or Instagram accounts and not others (granular
+permissions), so `StoreFacebookPages` and `StoreInstagramAccounts` resolve each
+row's real scopes via `debug_token`. That lets you decide whether a given account
+has everything it needs — and skip or warn on the ones that fall short.
+
 ## Adding a provider
 
 Create one class extending `AbstractConnector`, implement `renew()` for that

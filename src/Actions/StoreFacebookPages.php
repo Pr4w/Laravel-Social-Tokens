@@ -93,8 +93,17 @@ class StoreFacebookPages
 
         $renewAt = $expiresAt?->copy()->sub($connector->leadTime());
 
+        // Per-account granted scopes (Meta grants granularly, per page). Best
+        // effort: scope metadata must never block the connection.
+        $pageIds = collect($pages)->pluck('id')->filter()->map(fn ($id) => (string) $id)->all();
+        $scopesByAccount = $connector->grantedScopesByAccount($userToken, $pageIds);
+
+        if ($scopesByAccount instanceof RenewalResult) {
+            $scopesByAccount = [];
+        }
+
         // 4. One row per page, keyed on the page id.
-        $accounts = collect($pages)->map(function (array $page) use ($userId, $userToken, $expiresAt, $renewAt, $owner, $connectedBy) {
+        $accounts = collect($pages)->map(function (array $page) use ($userId, $userToken, $expiresAt, $renewAt, $scopesByAccount, $owner, $connectedBy) {
             $account = SocialAccount::query()->updateOrCreate(
                 [
                     'provider' => 'facebook',
@@ -109,6 +118,7 @@ class StoreFacebookPages
                     'expires_at' => $expiresAt,                      // user token expiry drives renew_at
                     'refresh_expires_at' => null,
                     'renew_at' => $renewAt,
+                    'scopes' => $scopesByAccount[(string) ($page['id'] ?? '')] ?? [],
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                 ],

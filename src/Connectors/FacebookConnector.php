@@ -123,6 +123,85 @@ class FacebookConnector extends AbstractConnector
     }
 
     /**
+     * Per-account effective scopes, resolved via debug_token. Meta grants scopes
+     * granularly: a user may approve a scope for some Pages / IG accounts and not
+     * others, so the token-level scope list is not accurate per account. For each
+     * requested account id this returns the scopes actually in effect for it —
+     * every token scope minus the granular scopes granted only for other accounts.
+     *
+     * @param  array<int, string>  $accountIds
+     * @return array<string, array<int, string>>|RenewalResult  [account_id => scopes]
+     */
+    public function grantedScopesByAccount(string $userToken, array $accountIds): array|RenewalResult
+    {
+        $appToken = $this->appAccessToken();
+
+        if ($appToken instanceof RenewalResult) {
+            return $appToken;
+        }
+
+        $version = $this->config['graph_version'] ?? 'v23.0';
+
+        $response = $this->attempt(fn () => Http::acceptJson()->get("https://graph.facebook.com/{$version}/debug_token", [
+            'input_token' => $userToken,
+            'access_token' => $appToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $data = $response->json('data', []);
+
+        if (! empty($data['error'])) {
+            return MetaErrorMapper::map($data['error']);
+        }
+
+        $allScopes = $data['scopes'] ?? [];
+        $granular = $data['granular_scopes'] ?? [];
+
+        $result = [];
+
+        foreach ($accountIds as $accountId) {
+            $accountId = (string) $accountId;
+            $scopes = $allScopes;
+
+            foreach ($granular as $entry) {
+                $targets = $entry['target_ids'] ?? null;
+
+                // A granular scope with target_ids is in effect only for those
+                // accounts; drop it for the others. Untargeted scopes apply to all.
+                if (is_array($targets) && ! in_array($accountId, array_map('strval', $targets), true)) {
+                    $scopes = array_diff($scopes, [$entry['scope'] ?? null]);
+                }
+            }
+
+            $result[$accountId] = array_values($scopes);
+        }
+
+        return $result;
+    }
+
+    /**
+     * App access token for calling debug_token. Meta accepts the literal string
+     * "{app-id}|{app-secret}" as the app token, so there is no endpoint to call
+     * and nothing to cache.
+     *
+     * @return string|RenewalResult
+     */
+    protected function appAccessToken(): string|RenewalResult
+    {
+        $clientId = $this->clientId();
+        $clientSecret = $this->clientSecret();
+
+        if ($clientId === null || $clientSecret === null) {
+            return RenewalResult::terminalFailure('Missing Facebook client credentials for the app access token.');
+        }
+
+        return "{$clientId}|{$clientSecret}";
+    }
+
+    /**
      * The Facebook user id behind a token (the credential holder). Used to key a
      * user's page rows so a reconnect can reconcile the ones they no longer manage.
      *

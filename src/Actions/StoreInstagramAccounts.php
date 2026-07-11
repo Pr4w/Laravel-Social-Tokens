@@ -98,6 +98,26 @@ class StoreInstagramAccounts
         $igRenewAt = $expiresAt?->copy()->sub($instagram->leadTime());
         $fbRenewAt = $expiresAt?->copy()->sub($facebook->leadTime());
 
+        // Per-account granted scopes (Meta grants granularly). Best effort: scope
+        // metadata must never block the connection.
+        $accountIds = [];
+
+        foreach ($pages as $page) {
+            if (! empty($page['id'])) {
+                $accountIds[] = (string) $page['id'];
+            }
+
+            if ($igId = data_get($page, 'instagram_business_account.id')) {
+                $accountIds[] = (string) $igId;
+            }
+        }
+
+        $scopesByAccount = $facebook->grantedScopesByAccount($userToken, $accountIds);
+
+        if ($scopesByAccount instanceof RenewalResult) {
+            $scopesByAccount = [];
+        }
+
         $accounts = collect();
 
         foreach ($pages as $page) {
@@ -119,6 +139,7 @@ class StoreInstagramAccounts
                     'expires_at' => $expiresAt,
                     'refresh_expires_at' => null,
                     'renew_at' => $igRenewAt,
+                    'scopes' => $scopesByAccount[(string) $ig['id']] ?? [],
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                     'profile' => ['fb_page_id' => $page['id'] ?? null],
@@ -139,6 +160,7 @@ class StoreInstagramAccounts
                         'expires_at' => $expiresAt,
                         'refresh_expires_at' => null,
                         'renew_at' => $fbRenewAt,
+                        'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
                         'status' => AccountStatus::Active,
                         'last_error' => null,
                         'profile' => ['fb_page_id' => $page['id'], 'ig_account_id' => $ig['id']],
