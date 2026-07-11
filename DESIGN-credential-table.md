@@ -21,13 +21,25 @@ social_tokens (the credential — the renewal unit)
   status, last_renewed_at, last_error, scopes
   unique(provider, provider_holder_id)
 
-social_accounts (the postable identity)
-  social_token_id  -> social_tokens.id  (nullOnDelete)
+social_accounts (the postable identity — holds NO tokens anymore)
+  social_token_id  -> social_tokens.id  (the token it posts with; nullOnDelete)
   provider, provider_user_id, provider_holder_id
-  access_token      (ONLY a per-account derived token — Facebook page token;
-                     null for Instagram/LinkedIn, which post with the credential)
-  ... profile fields, scopes (per-account), status ...
+  profile fields, scopes (per-account), status, ownable/connectedBy
 ```
+
+Every token string lives in `social_tokens`. A row is either **renewable**
+(`renew_at` set — scanned and refreshed) or **static** (`renew_at` null — stored
+and left alone). The Facebook **page** token is a *static* row: minted once at
+connect from a long-lived user token, never auto-refreshed (its concern is kept
+separate from credential renewal). If a static page token ever fails, the account
+goes `needs_reconnect` reactively.
+
+| Token | provider | holder | renew_at |
+|---|---|---|---|
+| Meta user credential (backs IG) | facebook | fb user id | set |
+| Facebook page token (static) | facebook | page id | null |
+| LinkedIn member credential | linkedin | member id | set |
+| TikTok / Google (1:1) | tiktok / google | account's own id | set |
 
 ### Decision: `social_tokens.provider` is the *refresher* key
 
@@ -57,35 +69,35 @@ It identifies the credential owner and gives `unique(provider, holder)`:
 
 So 1:1 providers get one credential per account (no shared token, but uniform).
 
-## Renewal (two-phase, on the credential)
+## Renewal (single-phase, on the credential)
 
-1. Dispatcher scans `social_tokens.renew_at`; one job per **credential**; lock per
-   credential.
-2. **Phase A — refresh the credential:** `registry->for($token->provider)
-   ->refreshCredential($token)` (fb_exchange_token / refresh_token grant / …).
-   Applies the new token to the `social_tokens` row once.
-3. **Phase B — derive per-account tokens:** for each linked account,
-   `registry->for($account->provider)->deriveAccountToken($account, $token)`.
-   Facebook re-derives the page token; everyone else is a no-op (the account
-   posts with the credential's token).
+1. Dispatcher scans `social_tokens.dueForRenewal()` (renewable rows only — static
+   page tokens have `renew_at` null and are never picked up).
+2. One job per **credential**; lock per credential.
+3. Refresh it: `registry->for($token->provider)->refreshCredential($token)`
+   (fb_exchange_token / refresh_token grant / th_refresh_token / …). Applies the
+   new token to the `social_tokens` row once. Every account sharing it is now live.
+
+No per-account derivation step: Facebook page tokens are static, so refreshing the
+Meta user credential (for Instagram) doesn't touch them. That keeps renewal purely
+about credentials.
 
 ### Connector interface change
 
 ```
-refreshCredential(SocialToken): RenewalResult      // was renew(SocialAccount)
-deriveAccountToken(SocialAccount, SocialToken): ?string   // default null
-credentialProvider(): string                        // default = own key
+credentialProvider(): string                    // default = own key; Instagram -> 'facebook'
+refreshCredential(SocialToken): RenewalResult    // was renew(SocialAccount)
 ```
 
-`RenewalResult` is reused unchanged (it already models new token + expiry +
-rotated refresh token).
+`deriveAccountToken` is not needed (the Facebook decision removed it).
+`RenewalResult` is reused unchanged.
 
 ## Posting API (unchanged signature)
 
 `SocialTokens::validAccessTokenFor(SocialAccount): string` still takes an account.
-Internally it now:
-- reads the account's credential; renews the **credential** if due;
-- returns the account's page token (Facebook) or the credential token (others).
+Internally it now reads the account's `social_token` and returns its
+`access_token`, renewing the token first if it is renewable and due. A static
+Facebook page token (`renew_at` null) is simply returned as-is.
 
 `renew()` becomes `renewCredential(SocialToken)`.
 
@@ -104,11 +116,10 @@ Group existing `social_accounts` into credentials:
 
 ## Phases
 
-1. **Foundation (this checkpoint):** `social_tokens` migration, FK migration,
-   `SocialToken` model, `SocialAccount` relationship. Additive — suite stays green.
-2. Connector interface: `credentialProvider` / `refreshCredential` /
-   `deriveAccountToken` across all six.
-3. Renewal core: `SocialTokens`, the job, the dispatch command.
+1. **Foundation (done):** `social_tokens` migration, FK migration, `SocialToken`
+   model, `SocialAccount` relationship. Additive — suite stayed green.
+2. Connector interface: `credentialProvider` + `refreshCredential` across all six.
+3. Renewal core: `SocialTokens`, the per-credential job, the dispatch command.
 4. Actions: create/attach the credential, then the account rows.
-5. Backfill migration.
-6. Test suite rewrite + README.
+5. Backfill migration + drop the now-unused token columns from `social_accounts`.
+6. Test suite rewrite + README + v1.0.0.
