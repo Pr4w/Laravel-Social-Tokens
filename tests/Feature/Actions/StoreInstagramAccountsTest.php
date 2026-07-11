@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 
 function fakeInstagramGraph(array $o = []): void
 {
@@ -32,7 +33,7 @@ function fakeInstagramGraph(array $o = []): void
 
 beforeEach(fn () => $this->store = app(StoreInstagramAccounts::class));
 
-it('creates an instagram row and its companion facebook page', function () {
+it('creates an instagram account on a renewable credential and a static companion page', function () {
     fakeInstagramGraph();
 
     $accounts = $this->store->handle(userToken: 'short', userId: 'user-1');
@@ -43,16 +44,34 @@ it('creates an instagram row and its companion facebook page', function () {
     expect($ig->provider_user_id)->toBe('ig-1')
         ->and($ig->provider_holder_id)->toBe('user-1')
         ->and($ig->name)->toBe('insta_one')
-        ->and($ig->avatar)->toBe('ig1.png')
-        ->and($ig->access_token)->toBe('long-user-token') // the user token (ExtendLongLived)
-        ->and($ig->refresh_token)->toBeNull()
         ->and($ig->profile['fb_page_id'])->toBe('page-1');
 
+    // IG posts with the shared renewable Meta user credential.
+    $credential = $ig->credential;
+    expect($credential->provider)->toBe('facebook')
+        ->and($credential->provider_holder_id)->toBe('user-1')
+        ->and($credential->access_token)->toBe('long-user-token')
+        ->and($credential->renew_at)->not->toBeNull();     // renewable
+
+    // The companion Facebook page posts with a static page-token credential.
     $fb = SocialAccount::where('provider', 'facebook')->first();
     expect($fb->provider_user_id)->toBe('page-1')
-        ->and($fb->access_token)->toBe('pt-1')             // page token
-        ->and($fb->refresh_token)->toBe('long-user-token') // shared user token
-        ->and($fb->profile['ig_account_id'])->toBe('ig-1');
+        ->and($fb->credential->access_token)->toBe('pt-1')
+        ->and($fb->credential->renew_at)->toBeNull();       // static
+});
+
+it('shares one Meta credential across multiple instagram accounts', function () {
+    fakeInstagramGraph(['pages' => ['data' => [
+        ['id' => 'p1', 'access_token' => 't1', 'instagram_business_account' => ['id' => 'ig-1', 'username' => 'one']],
+        ['id' => 'p2', 'access_token' => 't2', 'instagram_business_account' => ['id' => 'ig-2', 'username' => 'two']],
+    ]]]);
+
+    $this->store->handle(userToken: 'short', userId: 'user-1');
+
+    $igCredentialIds = SocialAccount::where('provider', 'instagram')->pluck('social_token_id')->unique();
+
+    expect($igCredentialIds)->toHaveCount(1) // both IG accounts share one credential
+        ->and(SocialToken::where('provider', 'facebook')->where('provider_holder_id', 'user-1')->count())->toBe(1);
 });
 
 it('skips pages without a linked instagram account', function () {
@@ -74,10 +93,8 @@ it('omits companion pages when withLinkedPages is false', function () {
 
 it('reconciles instagram accounts the user no longer manages', function () {
     SocialAccount::create([
-        'provider' => 'instagram',
-        'provider_user_id' => 'dropped-ig',
-        'provider_holder_id' => 'user-1',
-        'status' => AccountStatus::Active,
+        'provider' => 'instagram', 'provider_user_id' => 'dropped-ig',
+        'provider_holder_id' => 'user-1', 'status' => AccountStatus::Active,
     ]);
 
     fakeInstagramGraph();

@@ -8,23 +8,19 @@ use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
 
 /**
  * Instagram publishing runs on the Facebook Login path, and one Facebook user
- * can manage several Instagram Business accounts — one per linked Page. This
- * action bridges that: given a user token (as returned by Socialite's facebook
- * driver), it extends it to a long lived one, enumerates the Pages and their
- * linked Instagram accounts, and writes one row per Instagram account.
+ * can manage several Instagram Business accounts. The long-lived user token is a
+ * single RENEWABLE credential (a SocialToken keyed on the Facebook user id) that
+ * every Instagram account posts with; refreshing it once keeps them all alive.
  *
- * Each Instagram row stores the long lived user token in access_token (the
- * ExtendLongLived credential the connector re-extends in place). With
- * withLinkedPages, the linked Facebook Page is stored too — page token in
- * access_token, user token in refresh_token — so you can post to both. Every
- * row records the Facebook user id in provider_holder_id, so a reconnect can
- * flag Instagram accounts the user no longer manages.
+ * With withLinkedPages, each linked Facebook Page is also stored — as a STATIC
+ * page-token credential (renew_at null), exactly like StoreFacebookPages.
  */
 class StoreInstagramAccounts
 {
@@ -33,15 +29,7 @@ class StoreInstagramAccounts
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
-     * @param  string  $userToken  The user access token from the OAuth callback.
-     * @param  Model|null  $owner  App-side entity that owns these connections.
-     * @param  Model|null  $connectedBy  Who performed the connection (optional).
-     * @param  string|null  $userId  The Facebook user id. Pass Socialite's
-     *                               $user->getId() to skip an extra /me call.
-     * @param  bool  $extend  Exchange the token for a long lived one first.
-     * @param  bool  $withLinkedPages  Also store each linked Facebook Page row.
-     * @return Collection<int, SocialAccount> One row per Instagram account (plus
-     *                                        linked pages when withLinkedPages).
+     * @return Collection<int, SocialAccount> Instagram accounts (plus linked pages).
      *
      * @throws RuntimeException when the token cannot be extended, the user id
      *                          cannot be resolved, or the pages cannot be listed.
@@ -55,7 +43,6 @@ class StoreInstagramAccounts
         bool $withLinkedPages = true,
     ): Collection {
         $facebook = $this->registry->for('facebook');
-        $instagram = $this->registry->for('instagram');
 
         if (! $facebook instanceof FacebookConnector) {
             throw new RuntimeException('The "facebook" connector must be a FacebookConnector to seed Instagram accounts.');
@@ -63,7 +50,7 @@ class StoreInstagramAccounts
 
         $expiresAt = null;
 
-        // 1. Long lived user token (the renewable root shared by every row).
+        // 1. Long lived user token — the shared renewable credential.
         if ($extend) {
             $extended = $facebook->extendUserToken($userToken);
 
@@ -75,7 +62,7 @@ class StoreInstagramAccounts
             $expiresAt = $extended['expiresAt'];
         }
 
-        // 2. Resolve the user id (credential holder) if not provided.
+        // 2. Resolve the user id (the credential holder).
         if ($userId === null) {
             $resolved = $facebook->fetchUserId($userToken);
 
@@ -93,11 +80,6 @@ class StoreInstagramAccounts
             throw new RuntimeException('Could not list Facebook pages: '.$pages->reason);
         }
 
-        $igRenewAt = $expiresAt?->copy()->sub($instagram->leadTime());
-        $fbRenewAt = $expiresAt?->copy()->sub($facebook->leadTime());
-
-        // Per-account granted scopes (Meta grants granularly). Best effort: scope
-        // metadata must never block the connection.
         $accountIds = [];
 
         foreach ($pages as $page) {
@@ -110,11 +92,25 @@ class StoreInstagramAccounts
             }
         }
 
+        // Per-account granted scopes (Meta grants granularly). Best effort.
         $scopesByAccount = $facebook->grantedScopesByAccount($userToken, $accountIds);
 
         if ($scopesByAccount instanceof RenewalResult) {
             $scopesByAccount = [];
         }
+
+        // 4. The shared renewable Meta user credential (backs every IG account).
+        $credential = SocialToken::query()->updateOrCreate(
+            ['provider' => 'facebook', 'provider_holder_id' => $userId],
+            [
+                'access_token' => $userToken,
+                'refresh_token' => null,
+                'expires_at' => $expiresAt,
+                'renew_at' => $expiresAt?->copy()->sub($facebook->leadTime()),
+                'status' => AccountStatus::Active,
+                'last_error' => null,
+            ],
+        );
 
         $accounts = collect();
 
@@ -125,18 +121,14 @@ class StoreInstagramAccounts
                 continue; // Page without a linked Instagram account.
             }
 
-            $accounts->push($this->persist(
+            $accounts->push($this->persistAccount(
                 ['provider' => 'instagram', 'provider_user_id' => $ig['id']],
                 [
+                    'social_token_id' => $credential->getKey(), // posts with the shared user token
                     'provider_holder_id' => $userId,
                     'name' => $ig['username'] ?? ($page['name'] ?? null),
                     'nickname' => $ig['username'] ?? null,
                     'avatar' => $ig['profile_picture_url'] ?? null,
-                    'access_token' => $userToken,   // long lived user token (ExtendLongLived)
-                    'refresh_token' => null,
-                    'expires_at' => $expiresAt,
-                    'refresh_expires_at' => null,
-                    'renew_at' => $igRenewAt,
                     'scopes' => $scopesByAccount[(string) $ig['id']] ?? [],
                     'status' => AccountStatus::Active,
                     'last_error' => null,
@@ -146,18 +138,27 @@ class StoreInstagramAccounts
                 $connectedBy,
             ));
 
-            // Companion Facebook Page row for the linked page.
+            // Companion Facebook Page: a static page-token credential + account.
             if ($withLinkedPages && ! empty($page['id']) && ! empty($page['access_token'])) {
-                $accounts->push($this->persist(
+                $pageToken = SocialToken::query()->updateOrCreate(
+                    ['provider' => 'facebook', 'provider_holder_id' => $page['id']],
+                    [
+                        'access_token' => $page['access_token'],
+                        'refresh_token' => null,
+                        'expires_at' => null,
+                        'renew_at' => null, // static
+                        'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
+                        'status' => AccountStatus::Active,
+                        'last_error' => null,
+                    ],
+                );
+
+                $accounts->push($this->persistAccount(
                     ['provider' => 'facebook', 'provider_user_id' => $page['id']],
                     [
+                        'social_token_id' => $pageToken->getKey(),
                         'provider_holder_id' => $userId,
                         'name' => $page['name'] ?? null,
-                        'access_token' => $page['access_token'], // page token, ready to post with
-                        'refresh_token' => $userToken,           // shared user token to re-derive it
-                        'expires_at' => $expiresAt,
-                        'refresh_expires_at' => null,
-                        'renew_at' => $fbRenewAt,
                         'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
                         'status' => AccountStatus::Active,
                         'last_error' => null,
@@ -169,9 +170,7 @@ class StoreInstagramAccounts
             }
         }
 
-        // 4. Reconcile: Instagram accounts we hold for THIS user that they no
-        // longer manage (absent from the response) are flagged for reconnection.
-        // Scoped to provider_holder_id so a co-owner's accounts are never touched.
+        // 5. Reconcile Instagram accounts this user no longer manages.
         $managedIgIds = collect($pages)->pluck('instagram_business_account.id')->filter()->values()->all();
 
         SocialAccount::query()
@@ -191,7 +190,7 @@ class StoreInstagramAccounts
      * @param  array<string, mixed>  $keys
      * @param  array<string, mixed>  $attributes
      */
-    private function persist(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
+    private function persistAccount(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
     {
         $account = SocialAccount::query()->updateOrCreate($keys, $attributes);
 
