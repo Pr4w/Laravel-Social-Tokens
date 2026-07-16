@@ -99,25 +99,31 @@ class StoreInstagramAccounts
             $scopesByAccount = [];
         }
 
+        $managedIgIds = collect($pages)->pluck('instagram_business_account.id')->filter()->values()->all();
+
         // 4. The shared renewable Meta user credential (backs every IG account).
-        $credential = SocialToken::query()->updateOrCreate(
-            ['provider' => 'facebook', 'provider_holder_id' => $userId],
-            [
-                'access_token' => $userToken,
-                'refresh_token' => null,
-                'expires_at' => $expiresAt,
-                'renew_at' => $expiresAt?->copy()->sub($facebook->leadTime()),
-                'status' => AccountStatus::Active,
-                'last_error' => null,
-            ],
-        );
+        // Only created when the user actually has a linked Instagram account, so a
+        // page-only connection leaves no orphaned credential behind.
+        $credential = $managedIgIds === []
+            ? null
+            : SocialToken::query()->updateOrCreate(
+                ['provider' => 'facebook', 'provider_holder_id' => $userId],
+                [
+                    'access_token' => $userToken,
+                    'refresh_token' => null,
+                    'expires_at' => $expiresAt,
+                    'renew_at' => $expiresAt?->copy()->sub($facebook->leadTime()),
+                    'status' => AccountStatus::Active,
+                    'last_error' => null,
+                ],
+            );
 
         $accounts = collect();
 
         foreach ($pages as $page) {
             $ig = $page['instagram_business_account'] ?? null;
 
-            if (! $ig || empty($ig['id'])) {
+            if (! $ig || empty($ig['id']) || $credential === null) {
                 continue; // Page without a linked Instagram account.
             }
 
@@ -171,8 +177,6 @@ class StoreInstagramAccounts
         }
 
         // 5. Reconcile Instagram accounts this user no longer manages.
-        $managedIgIds = collect($pages)->pluck('instagram_business_account.id')->filter()->values()->all();
-
         SocialAccount::query()
             ->where('provider', 'instagram')
             ->where('provider_holder_id', $userId)

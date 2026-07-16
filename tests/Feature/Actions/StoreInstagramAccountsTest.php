@@ -82,6 +82,18 @@ it('skips pages without a linked instagram account', function () {
     expect(SocialAccount::where('provider_user_id', 'page-2')->exists())->toBeFalse();
 });
 
+it('creates no credential when there is no linked instagram account', function () {
+    fakeInstagramGraph(['pages' => ['data' => [
+        ['id' => 'page-1', 'name' => 'Page One', 'access_token' => 'pt-1'], // no linked IG
+    ]]]);
+
+    $accounts = $this->store->handle(userToken: 'short', userId: 'user-1');
+
+    expect($accounts)->toHaveCount(0)
+        ->and(SocialToken::count())->toBe(0)          // no orphaned Meta credential
+        ->and(SocialAccount::count())->toBe(0);
+});
+
 it('omits companion pages when withLinkedPages is false', function () {
     fakeInstagramGraph();
 

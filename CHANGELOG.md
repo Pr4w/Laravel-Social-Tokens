@@ -3,6 +3,12 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [1.0.2]
+
+### Fixed
+- `StoreInstagramAccounts` no longer creates an orphaned Meta credential when the
+  Facebook user has no linked Instagram Business account (a page-only connection).
+
 ## [1.0.1]
 
 ### Added
