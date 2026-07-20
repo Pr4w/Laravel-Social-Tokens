@@ -233,10 +233,10 @@ The scopes granted to each account are recorded on the row, so you can check —
 per account — whether it can do what you need before relying on it:
 
 ```php
-$account->grantedScopes();                       // string[]
-$account->hasScope('pages_manage_posts');        // bool
-$account->hasScopes(['pages_manage_posts', 'pages_read_engagement']); // all present?
-$account->missingScopes(['pages_manage_posts']); // what's absent
+$account->grantedScopes();                       // string[] — the granted scopes
+$account->hasScope('pages_manage_posts');        // bool — is this one scope granted?
+$account->hasScopes(['pages_manage_posts', 'pages_read_engagement']); // bool — are ALL granted?
+$account->missingScopes(['pages_manage_posts']); // string[] — the requested scopes NOT granted
 ```
 
 For Meta these scopes are recorded **per account**, not per token: a user can
@@ -256,20 +256,6 @@ Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when t
 credential is refreshed under another provider's key (Instagram returns
 `facebook`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
-
-## Upgrading to 1.0
-
-1.0 introduces the `social_tokens` credential table and moves all tokens onto it.
-`php artisan migrate` runs two data migrations: a backfill that groups your
-existing `social_accounts` into credentials and repoints them, then one that drops
-the now-unused token columns from `social_accounts`. **Back up your database
-first** — the column drop is not reversible without it.
-
-API changes: `ProviderConnector::refreshCredential(SocialToken)` replaces
-`renew(SocialAccount)` and `revoke()` takes a `SocialToken`; the `RenewAccountToken`
-job became `RenewCredential`; the `TokenRenewed` event became `CredentialRenewed`
-(plus a new `CredentialNeedsReconnect`). Accounts no longer hold tokens — read the
-posting token via `$account->credential` or `validAccessTokenFor($account)`.
 
 ## License
 
