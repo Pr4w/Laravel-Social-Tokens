@@ -11,6 +11,15 @@ This package owns what comes after: storing the token, keeping it alive across
 very different provider refresh models, and surfacing the moment a human has to
 reconnect.
 
+## Part of a suite
+
+This is the **connect** layer of a set of packages for working with social
+accounts. Each works on its own; together they cover connect → publish → measure:
+
+- **Laravel Social Tokens** (this package) — connect accounts and keep their tokens alive.
+- [Laravel Social Poster](https://github.com/Pr4w/Laravel-Social-Poster) — publish content to the connected accounts.
+- [Laravel Social Metrics](https://github.com/Pr4w/Laravel-Social-Metrics) — pull analytics for them.
+
 ## Why
 
 Six providers across four renewal strategies, and any naive "access token +
