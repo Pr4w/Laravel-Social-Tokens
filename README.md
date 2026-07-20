@@ -1,5 +1,9 @@
 # Laravel Social Tokens
 
+[![Tests](https://github.com/Pr4w/Laravel-Social-Tokens/actions/workflows/tests.yml/badge.svg)](https://github.com/Pr4w/Laravel-Social-Tokens/actions/workflows/tests.yml)
+[![Latest Version](https://img.shields.io/packagist/v/pr4w/laravel-social-tokens)](https://packagist.org/packages/pr4w/laravel-social-tokens)
+[![License](https://img.shields.io/packagist/l/pr4w/laravel-social-tokens)](LICENSE)
+
 Persist, renew and manage OAuth social account tokens on top of Laravel Socialite.
 
 Socialite is built for authentication: it gets you a token and a user, then stops.
