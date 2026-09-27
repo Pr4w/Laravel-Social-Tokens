@@ -210,7 +210,12 @@ try {
     $token = app(SocialTokens::class)->validAccessTokenFor($account);
     // ... call the provider API with $token
 } catch (NeedsReconnectException $e) {
-    // prompt the user to reconnect $e->account in your UI
+    if ($e->transient) {
+        // the connection is fine, renewal just failed for now (network,
+        // provider 5xx, lock contention): retry later, don't alarm the user
+    } else {
+        // prompt the user to reconnect $e->account in your UI
+    }
 }
 ```
 

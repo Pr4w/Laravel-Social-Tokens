@@ -24,6 +24,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   A credential in `needs_reconnect` leaves its accounts' `status` column at
   `active`, so a UI reading that column showed dead accounts as healthy. Read
   the effective status instead (see "Account status" in the README).
+- `NeedsReconnectException::$transient` and `NeedsReconnectException::transient()`.
+  `validAccessTokenFor()` used to throw the same exception for a dead connection
+  and for a failure that clears on its own (network, provider 5xx, lock
+  contention), so callers could only tell them apart by parsing the message and
+  risked asking users to reconnect over a network blip. Transient failures now
+  throw with `$transient = true`. Non-breaking: the class and the `for()`
+  constructor are unchanged, and existing `catch` blocks still catch both cases.
 
 ### Changed
 - Corrected the claim that flagging a credential "fans out" to its accounts'

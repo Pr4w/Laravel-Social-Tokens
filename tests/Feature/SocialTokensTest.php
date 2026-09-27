@@ -203,8 +203,9 @@ it('flags the credential on a terminal renewal failure', function () {
     try {
         $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
-    } catch (NeedsReconnectException) {
-        expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+    } catch (NeedsReconnectException $e) {
+        expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
+            ->and($e->transient)->toBeFalse();
     }
 });
 
@@ -215,10 +216,36 @@ it('leaves the credential usable on a transient failure but still throws', funct
     try {
         $this->tokens->validAccessTokenFor(accountFor($token));
         $this->fail('expected NeedsReconnectException');
-    } catch (NeedsReconnectException) {
-        expect($token->fresh()->status)->toBe(AccountStatus::Active); // still retryable
+    } catch (NeedsReconnectException $e) {
+        expect($token->fresh()->status)->toBe(AccountStatus::Active) // still retryable
+            ->and($e->transient)->toBeTrue()
+            ->and($e->getMessage())->toBe('temporary');
     }
 });
+
+it('marks an uncatalogued renewal error as transient', function () {
+    config()->set('social-tokens.log_unknown_errors', false);
+    FakeConnector::$nextResult = RenewalResult::unknownFailure('weird');
+
+    try {
+        $this->tokens->validAccessTokenFor(accountFor(fakeCredential()));
+        $this->fail('expected NeedsReconnectException');
+    } catch (NeedsReconnectException $e) {
+        expect($e->transient)->toBeTrue();
+    }
+});
+
+it('is not transient when the account or credential is already flagged', function (string $flagged) {
+    $token = fakeCredential($flagged === 'credential' ? ['status' => AccountStatus::NeedsReconnect] : []);
+    $account = accountFor($token, $flagged === 'account' ? ['status' => AccountStatus::NeedsReconnect] : []);
+
+    try {
+        $this->tokens->validAccessTokenFor($account);
+        $this->fail('expected NeedsReconnectException');
+    } catch (NeedsReconnectException $e) {
+        expect($e->transient)->toBeFalse();
+    }
+})->with(['account', 'credential']);
 
 it('exposes the connector for a provider', function () {
     expect($this->tokens->connector('fake'))->toBeInstanceOf(FakeConnector::class);

@@ -129,13 +129,16 @@ class SocialTokens
 
         // Terminal failure: the connection is broken, flag the credential. Its
         // accounts' rows are not rewritten; every account it backs reports it
-        // through effectiveStatus(). Transient: leave it usable so background
-        // retries continue, but we still cannot post on this attempt.
+        // through effectiveStatus().
         if ($result->outcome === RenewalOutcome::Terminal) {
             $token->markNeedsReconnect($result->reason);
+
+            throw NeedsReconnectException::for($account, $result->reason);
         }
 
-        throw NeedsReconnectException::for($account, $result->reason);
+        // Transient: leave the credential usable so background retries continue,
+        // and tell the caller to retry rather than ask the user to reconnect.
+        throw NeedsReconnectException::transient($account, $result->reason);
     }
 
     /**
