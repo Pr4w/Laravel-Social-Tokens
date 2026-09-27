@@ -67,7 +67,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   risked asking users to reconnect over a network blip. Transient failures now
   throw with `$transient = true`. Non-breaking: the class and the `for()`
   constructor are unchanged, and existing `catch` blocks still catch both cases.
-
 - `CredentialExpiringSoon` event (`$token`, `$expiresAt`, `$reason`).
 - `social-tokens:check-static` command, scheduled daily (`check_static_schedule`,
   `null` disables): asks the provider whether each static credential still works
