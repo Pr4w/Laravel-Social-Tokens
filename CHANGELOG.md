@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.1.0]
 
 ### Fixed
 - Scheduled renewal never ran ahead of expiry. The double-check under the renewal
