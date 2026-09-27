@@ -34,3 +34,13 @@ it('schedules the dispatch command', function () {
 
     expect($scheduled)->toBeTrue();
 });
+
+it('registers and schedules the static credential check daily', function () {
+    expect(array_keys($this->app[Kernel::class]->all()))->toContain('social-tokens:check-static');
+
+    $event = collect(app(Schedule::class)->events())->first(
+        fn ($event) => str_contains($event->command ?? '', 'social-tokens:check-static')
+    );
+
+    expect($event)->not->toBeNull()->and($event->expression)->toBe('0 0 * * *');
+});

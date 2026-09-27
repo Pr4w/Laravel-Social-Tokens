@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens;
 
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\ServiceProvider;
+use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
@@ -37,6 +38,7 @@ class SocialTokensServiceProvider extends ServiceProvider
 
             $this->commands([
                 DispatchDueRenewals::class,
+                CheckStaticCredentials::class,
             ]);
         }
 
@@ -48,6 +50,12 @@ class SocialTokensServiceProvider extends ServiceProvider
             $schedule->command('social-tokens:dispatch-renewals')
                 ->{$frequency}()
                 ->withoutOverlapping();
+
+            if ($checkFrequency = config('social-tokens.check_static_schedule', 'daily')) {
+                $schedule->command('social-tokens:check-static')
+                    ->{$checkFrequency}()
+                    ->withoutOverlapping();
+            }
         });
     }
 }

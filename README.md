@@ -198,6 +198,12 @@ opens, `CredentialExpiringSoon` fires once with the expiry date, the credential
 keeps posting, and it moves to `needs_reconnect` only if it actually expires
 before the user reconnects.
 
+Static credentials (Facebook page tokens) are never renewed, but die when the
+user changes their password, removes the app or loses the Page's admin role. A
+daily `social-tokens:check-static` run asks Meta about each one and flags the
+dead ones `needs_reconnect` (set `check_static_schedule` to `null` to disable).
+A custom connector opts in by implementing `Contracts\ChecksCredential`.
+
 Renewals run under a per-credential lock so a scheduled job and a synchronous
 `validAccessTokenFor()` can never refresh the same credential at once (which would
 break rotating-refresh-token providers like TikTok). This needs a cache store that

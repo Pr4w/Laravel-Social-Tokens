@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
 use Illuminate\Support\Carbon;
+use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -21,7 +22,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * ExtendLongLived. Page tokens are stored as static credentials and not
  * re-derived here (see StoreFacebookPages / StoreInstagramAccounts).
  */
-class FacebookConnector extends AbstractConnector
+class FacebookConnector extends AbstractConnector implements ChecksCredential
 {
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
@@ -56,6 +57,21 @@ class FacebookConnector extends AbstractConnector
             accessToken: $extended['token'],
             expiresAt: $extended['expiresAt'],
         );
+    }
+
+    /**
+     * Page tokens never expire, but die when the user changes their password,
+     * removes the app or loses the Page's admin role. A cheap /me call tells.
+     */
+    public function checkCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing page token.');
+        }
+
+        $id = $this->fetchUserId($token->access_token);
+
+        return $id instanceof RenewalResult ? $id : RenewalResult::success(accessToken: $token->access_token);
     }
 
     /**

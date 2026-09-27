@@ -36,6 +36,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Static credential check
+    |--------------------------------------------------------------------------
+    |
+    | Static credentials (Facebook page tokens) never expire, but die when the
+    | user changes their password, removes the app or loses the Page's admin
+    | role. This schedule asks the provider about each one (one light call per
+    | credential) and flags the dead ones. Set to null to disable.
+    |
+    */
+    'check_static_schedule' => 'daily',
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |

@@ -69,6 +69,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   constructor are unchanged, and existing `catch` blocks still catch both cases.
 
 - `CredentialExpiringSoon` event (`$token`, `$expiresAt`, `$reason`).
+- `social-tokens:check-static` command, scheduled daily (`check_static_schedule`,
+  `null` disables): asks the provider whether each static credential still works
+  and flags the dead ones. Facebook page tokens never expire but die on a
+  password change, app removal or lost admin role, and nothing noticed until a
+  post failed. Connectors opt in through the new `Contracts\ChecksCredential`;
+  `FacebookConnector` implements it.
 
 ### Changed
 - **Behaviour change:** a credential that cannot be renewed unattended is no
