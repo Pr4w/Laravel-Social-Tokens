@@ -4,7 +4,9 @@ namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -67,6 +69,19 @@ abstract class AbstractConnector implements ProviderConnector
         // Most providers' connect token is already long lived. Override where a
         // distinct short-to-long exchange is required at connect.
         return null;
+    }
+
+    /**
+     * The base request every provider call starts from. The timeouts keep a
+     * slow provider from outliving the 60s renewal lock, which would let a
+     * second process refresh the same credential (fatal with TikTok's
+     * single-use refresh tokens). Laravel's default is a 30s timeout and no
+     * connect timeout.
+     */
+    protected function http(): PendingRequest
+    {
+        return Http::timeout((int) config('social-tokens.http.timeout', 15))
+            ->connectTimeout((int) config('social-tokens.http.connect_timeout', 5));
     }
 
     /**

@@ -4,7 +4,6 @@ namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -70,7 +69,7 @@ class FacebookConnector extends AbstractConnector
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
 
-        $response = $this->attempt(fn () => Http::acceptJson()->get("https://graph.facebook.com/{$version}/oauth/access_token", [
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get("https://graph.facebook.com/{$version}/oauth/access_token", [
             'grant_type' => 'fb_exchange_token',
             'client_id' => $this->clientId(),
             'client_secret' => $this->clientSecret(),
@@ -122,7 +121,7 @@ class FacebookConnector extends AbstractConnector
 
         $version = $this->config['graph_version'] ?? 'v23.0';
 
-        $response = $this->attempt(fn () => Http::acceptJson()->get("https://graph.facebook.com/{$version}/debug_token", [
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get("https://graph.facebook.com/{$version}/debug_token", [
             'input_token' => $userToken,
             'access_token' => $appToken,
         ]));
@@ -187,7 +186,7 @@ class FacebookConnector extends AbstractConnector
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
 
-        $response = $this->attempt(fn () => Http::withToken($userToken)
+        $response = $this->attempt(fn () => $this->http()->withToken($userToken)
             ->acceptJson()
             ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id']));
 
@@ -236,8 +235,8 @@ class FacebookConnector extends AbstractConnector
             // Without a query argument: even an empty one replaces the URL's own
             // query string, which would drop paging.next's cursor.
             $response = $this->attempt(fn () => $query === null
-                ? Http::withToken($userToken)->acceptJson()->get($url)
-                : Http::withToken($userToken)->acceptJson()->get($url, $query));
+                ? $this->http()->withToken($userToken)->acceptJson()->get($url)
+                : $this->http()->withToken($userToken)->acceptJson()->get($url, $query));
 
             if ($response instanceof RenewalResult) {
                 return $response;

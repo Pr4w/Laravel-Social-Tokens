@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -49,7 +48,7 @@ class TikTokConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing refresh token.');
         }
 
-        $response = $this->attempt(fn () => Http::asForm()
+        $response = $this->attempt(fn () => $this->http()->asForm()
             ->acceptJson()
             ->post(self::TOKEN_URL, [
                 'client_key' => $this->clientId(),
@@ -99,7 +98,7 @@ class TikTokConnector extends AbstractConnector
         }
 
         try {
-            Http::asForm()->post(self::REVOKE_URL, [
+            $this->http()->asForm()->post(self::REVOKE_URL, [
                 'client_key' => $this->clientId(),
                 'client_secret' => $this->clientSecret(),
                 'token' => $token->access_token,

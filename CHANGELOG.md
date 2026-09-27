@@ -35,6 +35,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   Both now paginate to the end (safety cap: 20 result pages), and any failure
   along the way — including the cap — returns a failure instead of a partial
   list, so the actions throw before reconciling and flag nothing.
+- Provider requests had no explicit timeout (Laravel's default: 30s, no connect
+  timeout) while the renewal lock lived 30s, so a slow provider could outlive
+  the lock and let a second process refresh the same credential — fatal with
+  TikTok's single-use refresh tokens. Every connector request now goes through
+  `AbstractConnector::http()` (15s timeout, 5s connect timeout, configurable
+  under `social-tokens.http`), and the lock lives 60s.
 - The renewal dispatcher skips credentials no account uses any more (left
   behind when a reconnect created a new credential) instead of renewing them for
   nothing.

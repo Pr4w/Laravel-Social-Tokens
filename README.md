@@ -290,7 +290,10 @@ has everything it needs — and skip or warn on the ones that fall short.
 Create one class extending `AbstractConnector`, implement `refreshCredential()`
 for that provider's exact refresh mechanism, declare its `renewalStrategy()` and
 `leadTime()`, and register it under its key in the config. See `TikTokConnector`
-for a complete reference. Nothing else in the package needs to change.
+for a complete reference. Nothing else in the package needs to change. Build
+requests from `$this->http()` rather than the `Http` facade so they carry the
+configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx
+and 429 come back as transient failures.
 
 Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when the
 credential is refreshed under another provider's key (Instagram returns

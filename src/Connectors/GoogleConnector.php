@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -48,7 +47,7 @@ class GoogleConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing refresh token (was access_type=offline used?).');
         }
 
-        $response = $this->attempt(fn () => Http::asForm()
+        $response = $this->attempt(fn () => $this->http()->asForm()
             ->acceptJson()
             ->post(self::TOKEN_URL, [
                 'grant_type' => 'refresh_token',
@@ -97,7 +96,7 @@ class GoogleConnector extends AbstractConnector
         }
 
         try {
-            Http::asForm()->post(self::REVOKE_URL, ['token' => $token]);
+            $this->http()->asForm()->post(self::REVOKE_URL, ['token' => $token]);
         } catch (Throwable) {
             // Best effort.
         }

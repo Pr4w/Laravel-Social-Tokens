@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -66,7 +65,7 @@ class LinkedInConnector extends AbstractConnector
             return RenewalResult::terminalFailure('No refresh token (re-authorisation required).');
         }
 
-        $response = $this->attempt(fn () => Http::asForm()->acceptJson()->post(self::TOKEN_URL, [
+        $response = $this->attempt(fn () => $this->http()->asForm()->acceptJson()->post(self::TOKEN_URL, [
             'grant_type' => 'refresh_token',
             'refresh_token' => $refreshToken,
             'client_id' => $this->clientId(),
@@ -136,7 +135,7 @@ class LinkedInConnector extends AbstractConnector
         $start = 0;
 
         for ($resultPage = 0; $resultPage < self::MAX_RESULT_PAGES; $resultPage++) {
-            $response = $this->attempt(fn () => Http::withToken($accessToken)
+            $response = $this->attempt(fn () => $this->http()->withToken($accessToken)
                 ->acceptJson()
                 ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
                 ->get(self::ORGANIZATION_ACLS_URL, [

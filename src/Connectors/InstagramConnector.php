@@ -3,7 +3,6 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
-use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -63,7 +62,7 @@ class InstagramConnector extends AbstractConnector
         $version = $this->config['graph_version'] ?? 'v23.0';
         $url = "https://graph.facebook.com/{$version}/oauth/access_token";
 
-        $response = $this->attempt(fn () => Http::acceptJson()->get($url, [
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($url, [
             'grant_type' => 'fb_exchange_token',
             'client_id' => $this->clientId(),
             'client_secret' => $this->clientSecret(),

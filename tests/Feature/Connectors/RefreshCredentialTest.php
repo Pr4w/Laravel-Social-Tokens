@@ -123,3 +123,19 @@ it('renews a still-valid credential once its renewal window opens', function (st
     'google' => ['google', 'oauth2.googleapis.com/*', ['access_token' => 'renewed', 'expires_in' => 3600], ['refresh_token' => 'r1']],
     'linkedin' => ['linkedin', 'linkedin.com/*', ['access_token' => 'renewed', 'expires_in' => 5184000], ['refresh_token' => 'r1']],
 ]);
+
+it('bounds every provider request with a timeout shorter than the renewal lock', function () {
+    $options = (fn () => $this->http()->getOptions())->call(connector('tiktok'));
+
+    expect($options['timeout'])->toBe(15)
+        ->and($options['connect_timeout'])->toBe(5)
+        ->and($options['timeout'] + $options['connect_timeout'])->toBeLessThan(60); // the lock lives 60s
+});
+
+it('reads request timeouts from config', function () {
+    config()->set('social-tokens.http', ['timeout' => 25, 'connect_timeout' => 3]);
+
+    $options = (fn () => $this->http()->getOptions())->call(connector('google'));
+
+    expect($options['timeout'])->toBe(25)->and($options['connect_timeout'])->toBe(3);
+});

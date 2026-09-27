@@ -46,7 +46,7 @@ class SocialTokens
         $connector = $this->registry->for($token->provider);
 
         try {
-            return Cache::lock($this->lockKey($token), 30)->block(10, function () use ($token, $connector) {
+            return Cache::lock($this->lockKey($token), 60)->block(10, function () use ($token, $connector) {
                 $token->refresh();
 
                 // Another process may have renewed while we waited for the lock:

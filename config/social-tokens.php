@@ -49,6 +49,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Provider requests
+    |--------------------------------------------------------------------------
+    |
+    | Timeouts (seconds) for every call to a provider. Keep their sum well under
+    | 60s: renewals run under a 60s lock, and a request that outlives it lets a
+    | second process refresh the same credential.
+    |
+    */
+    'http' => [
+        'timeout' => 15,
+        'connect_timeout' => 5,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Job retry behaviour
     |--------------------------------------------------------------------------
     */
