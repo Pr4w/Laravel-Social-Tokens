@@ -18,6 +18,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - LinkedIn `refresh_token_client_mismatch` (a refresh token issued to another
   LinkedIn app, e.g. after switching apps) is now terminal instead of being
   retried as an unknown error.
+- Meta errors are classified by code, not by type. Meta sends rate limits (codes
+  4, 17, 32, 613, 80001–80014) as `OAuthException` in HTTP 400/403, and every
+  `OAuthException` used to be terminal, so a rate limit during renewal flagged
+  the credential `needs_reconnect`. Now: invalid token (190, 102, session
+  subcodes) and lost permissions (10, 200–299) are terminal; rate limits,
+  temporary errors and `is_transient: true` are transient; anything else is an
+  unknown (transient, logged) failure whose context carries `code`,
+  `error_subcode` and `fbtrace_id`.
 - The renewal dispatcher skips credentials no account uses any more (left
   behind when a reconnect created a new credential) instead of renewing them for
   nothing.
