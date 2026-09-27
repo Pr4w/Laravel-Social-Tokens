@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
@@ -69,6 +70,42 @@ it('applies a renewal, recomputes the window, and fires CredentialRenewed', func
         ->and($token->renew_at->timestamp)->toEqualWithDelta(now()->addHour()->subMinutes(15)->timestamp, 2);
 
     Event::assertDispatched(CredentialRenewed::class, fn ($e) => $e->token->is($token));
+});
+
+it('keeps a credential renewable when the provider omits the expiry', function () {
+    Log::spy();
+    $token = socialToken(['expires_at' => now()->addDay(), 'renew_at' => now()->subMinute()]);
+
+    $token->applyRenewal(RenewalResult::success(accessToken: 'fresh'), new FakeConnector); // 15 minute lead time
+
+    expect($token->access_token)->toBe('fresh')
+        ->and($token->expires_at)->toBeNull() // unknown, not the stale previous expiry
+        ->and($token->renew_at)->not->toBeNull() // still scheduled, never silently dropped
+        ->and($token->renew_at->timestamp)->toEqualWithDelta(now()->addMinutes(15)->timestamp, 2);
+
+    Log::shouldHaveReceived('warning')->withArgs(fn ($message) => str_contains($message, 'no expiry'))->once();
+});
+
+it('updates the credential scopes when the provider returns them', function (string $scope, array $expected) {
+    $token = socialToken(['scopes' => ['old.scope']]);
+
+    $token->applyRenewal(
+        RenewalResult::success(accessToken: 'fresh', expiresAt: now()->addHour(), profile: ['scope' => $scope]),
+        new FakeConnector,
+    );
+
+    expect($token->fresh()->scopes)->toBe($expected);
+})->with([
+    'comma separated (TikTok, LinkedIn)' => ['user.info.basic,video.publish', ['user.info.basic', 'video.publish']],
+    'space separated (Google)' => ['openid https://www.googleapis.com/auth/youtube.upload', ['openid', 'https://www.googleapis.com/auth/youtube.upload']],
+]);
+
+it('keeps the credential scopes when the provider does not return them', function () {
+    $token = socialToken(['scopes' => ['kept']]);
+
+    $token->applyRenewal(RenewalResult::success(accessToken: 'fresh', expiresAt: now()->addHour()), new FakeConnector);
+
+    expect($token->fresh()->scopes)->toBe(['kept']);
 });
 
 it('marks a credential for reconnection and fires CredentialNeedsReconnect', function () {

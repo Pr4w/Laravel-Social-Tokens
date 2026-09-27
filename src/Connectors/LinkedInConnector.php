@@ -113,6 +113,9 @@ class LinkedInConnector extends AbstractConnector
             refreshExpiresAt: isset($body['refresh_token_expires_in'])
                 ? now()->addSeconds((int) $body['refresh_token_expires_in'])
                 : null,
+            profile: array_filter([
+                'scope' => $body['scope'] ?? null,
+            ]),
         );
     }
 

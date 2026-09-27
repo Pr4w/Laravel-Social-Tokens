@@ -41,6 +41,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   TikTok's single-use refresh tokens. Every connector request now goes through
   `AbstractConnector::http()` (15s timeout, 5s connect timeout, configurable
   under `social-tokens.http`), and the lock lives 60s.
+- A renewal that came back without an expiry set `renew_at` to null and kept the
+  stale `expires_at`, silently turning the credential static: it was never
+  renewed again. The expiry is now recorded as unknown, the next check is
+  scheduled one lead time out, and a warning is logged (when
+  `log_unknown_errors` is on).
+- Credential `scopes` are updated from the scope list TikTok, Google and LinkedIn
+  echo on refresh (they were ignored). Account-level `scopes` are unchanged.
 - The renewal dispatcher skips credentials no account uses any more (left
   behind when a reconnect created a new credential) instead of renewing them for
   nothing.

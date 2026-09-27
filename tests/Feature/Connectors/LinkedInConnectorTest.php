@@ -53,6 +53,14 @@ it('renews via the refresh token grant', function () {
         && $request['refresh_token'] === 'refresh-1');
 });
 
+it('passes the refreshed scopes along', function () {
+    Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response([
+        'access_token' => 'new-access', 'expires_in' => 5184000, 'scope' => 'r_basicprofile,w_organization_social',
+    ])]);
+
+    expect(linkedin()->refreshCredential(linkedinCredential())->profile)->toBe(['scope' => 'r_basicprofile,w_organization_social']);
+});
+
 it('is terminal without a refresh token', function () {
     Http::fake();
 

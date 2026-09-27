@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
@@ -120,11 +121,29 @@ class SocialToken extends Model
             $this->expires_at = $result->expiresAt;
             $this->renew_at = $result->expiresAt->copy()->sub($connector->leadTime());
         } else {
-            $this->renew_at = null;
+            // A renewable credential came back without an expiry. Keeping the
+            // old expires_at would be stale, and a null renew_at would turn it
+            // static and never renew it again — so mark the expiry unknown and
+            // check back after one lead time.
+            $this->expires_at = null;
+            $this->renew_at = now()->add($connector->leadTime());
+
+            if (config('social-tokens.log_unknown_errors', true)) {
+                Log::warning('[social-tokens] Renewal returned no expiry', [
+                    'provider' => $this->provider,
+                    'token_id' => $this->getKey(),
+                ]);
+            }
         }
 
         if ($result->refreshExpiresAt !== null) {
             $this->refresh_expires_at = $result->refreshExpiresAt;
+        }
+
+        // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
+        // Google spaces): keep the credential's list current.
+        if (is_string($result->profile['scope'] ?? null)) {
+            $this->scopes = preg_split('/[\s,]+/', trim($result->profile['scope']), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         }
 
         $this->status = AccountStatus::Active;
