@@ -1,8 +1,12 @@
 <?php
 
+use Illuminate\Support\Facades\Event;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
+use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
@@ -55,6 +59,66 @@ it('flags an expired refresh token without calling the provider', function () {
     expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
         ->and($token->fresh()->last_error)->toBe('Refresh token has expired.')
         ->and(FakeConnector::$renewCalls)->toBe(0);
+});
+
+it('warns a reauth-only credential ahead of expiry but keeps it usable', function () {
+    Event::fake([CredentialExpiringSoon::class, CredentialNeedsReconnect::class]);
+    FakeConnector::$strategy = RenewalStrategy::ReauthOnly;
+    $token = jobCredential(['expires_at' => now()->addDays(4), 'renew_at' => now()->subMinute()]);
+    $account = SocialAccount::create(['provider' => 'fake', 'provider_user_id' => 'a-'.uniqid(), 'social_token_id' => $token->getKey(), 'status' => AccountStatus::Active]);
+
+    runJob($token);
+
+    $fresh = $token->fresh();
+
+    expect($fresh->status)->toBe(AccountStatus::Active)
+        ->and($fresh->renew_at->equalTo($fresh->expires_at))->toBeTrue() // next pass lands at expiry
+        ->and(FakeConnector::$renewCalls)->toBe(0)
+        ->and(app(SocialTokens::class)->validAccessTokenFor($account))->toBe('token'); // still posts
+
+    Event::assertDispatchedTimes(CredentialExpiringSoon::class, 1);
+    Event::assertDispatched(CredentialExpiringSoon::class, fn ($event) => $event->token->is($token)
+        && $event->expiresAt->equalTo($fresh->expires_at));
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
+});
+
+it('does not warn twice before expiry', function () {
+    Event::fake([CredentialExpiringSoon::class]);
+    FakeConnector::$strategy = RenewalStrategy::ReauthOnly;
+    $token = jobCredential(['expires_at' => now()->addDays(4), 'renew_at' => now()->subMinute()]);
+
+    runJob($token);
+    runJob($token); // e.g. a duplicate dispatch
+
+    Event::assertDispatchedTimes(CredentialExpiringSoon::class, 1);
+});
+
+it('flags a reauth-only credential once it has actually expired', function () {
+    FakeConnector::$strategy = RenewalStrategy::ReauthOnly;
+    $token = jobCredential(['expires_at' => now()->addDays(4), 'renew_at' => now()->subMinute()]);
+
+    runJob($token);
+    $this->travelTo(now()->addDays(4)->addMinute());
+    runJob($token);
+
+    expect($token->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
+        ->and($token->fresh()->last_error)->toBe('Provider requires manual re-authorisation.');
+});
+
+it('warns rather than flags when the refresh token died but the access token still works', function () {
+    Event::fake([CredentialExpiringSoon::class]);
+    $token = jobCredential([
+        'expires_at' => now()->addDays(4),
+        'renew_at' => now()->subMinute(),
+        'refresh_expires_at' => now()->subDay(),
+    ]);
+
+    runJob($token);
+
+    expect($token->fresh()->status)->toBe(AccountStatus::Active)
+        ->and(FakeConnector::$renewCalls)->toBe(0);
+
+    Event::assertDispatched(CredentialExpiringSoon::class, fn ($event) => $event->reason === 'Refresh token has expired.');
 });
 
 it('renews successfully', function () {

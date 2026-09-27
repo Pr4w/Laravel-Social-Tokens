@@ -55,7 +55,20 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   throw with `$transient = true`. Non-breaking: the class and the `for()`
   constructor are unchanged, and existing `catch` blocks still catch both cases.
 
+- `CredentialExpiringSoon` event (`$token`, `$expiresAt`, `$reason`).
+
 ### Changed
+- **Behaviour change:** a credential that cannot be renewed unattended is no
+  longer cut off when its renewal window opens. LinkedIn without refresh tokens
+  (`ReauthOnly`) used to go `needs_reconnect` five days before expiry, so
+  `validAccessTokenFor()` refused a token that still worked; the same happened
+  once a refresh token outlived its own lifetime. The job now fires
+  `CredentialExpiringSoon` once, sets `renew_at` to the expiry, and flags the
+  credential only if it actually expires. If you notified users from
+  `CredentialNeedsReconnect` to get them to reconnect in time, listen to
+  `CredentialExpiringSoon` for that now.
+- The renewal job does nothing when the credential is no longer due (renewed
+  synchronously or already warned since it was dispatched).
 - Corrected the claim that flagging a credential "fans out" to its accounts'
   rows: it never did. Status is resolved at read time instead.
 

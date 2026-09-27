@@ -9,6 +9,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
+use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
@@ -68,20 +69,24 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return; // already reconnected, revoked, or deleted
         }
 
-        $connector = $registry->for($token->provider);
-
-        // Providers that cannot renew unattended: flag for reconnection ahead of
-        // expiry instead of attempting a doomed call. This is the expected path
-        // for LinkedIn without MDP, not an error.
-        if (! $connector->renewalStrategy()->canRenewUnattended()) {
-            $token->markNeedsReconnect('Provider requires manual re-authorisation.');
-
+        // Handled since dispatch (renewed synchronously, or already warned):
+        // nothing to do until the window opens again.
+        if (! $token->isDueForRenewal() && ! $token->isAccessTokenExpired()) {
             return;
         }
 
-        // A dead refresh token can never produce a new access token.
-        if ($token->isRefreshTokenExpired()) {
-            $token->markNeedsReconnect('Refresh token has expired.');
+        $connector = $registry->for($token->provider);
+
+        // No unattended renewal is possible: the expected path for LinkedIn
+        // without MDP, or once a refresh token has outlived its own lifetime.
+        $blocker = match (true) {
+            ! $connector->renewalStrategy()->canRenewUnattended() => 'Provider requires manual re-authorisation.',
+            $token->isRefreshTokenExpired() => 'Refresh token has expired.',
+            default => null,
+        };
+
+        if ($blocker !== null) {
+            $this->warnOrFlag($token, $blocker);
 
             return;
         }
@@ -100,6 +105,25 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
                 'Transient renewal failure: '.($result->reason ?? 'unknown')
             ),
         };
+    }
+
+    /**
+     * A credential that cannot be renewed still works until it expires, so do
+     * not cut it off early: warn now, and move renew_at to the expiry so the
+     * next pass lands exactly then — and flags it, if nobody reconnected.
+     */
+    protected function warnOrFlag(SocialToken $token, string $reason): void
+    {
+        if ($token->expires_at === null || $token->isAccessTokenExpired()) {
+            $token->markNeedsReconnect($reason);
+
+            return;
+        }
+
+        $token->renew_at = $token->expires_at;
+        $token->save();
+
+        event(new CredentialExpiringSoon($token, $token->expires_at, $reason));
     }
 
     /**

@@ -27,8 +27,9 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *    override 'scopes' in config to change it
  *
  * Strategy is config driven:
- *  - default: ReauthOnly, the account is flagged for reconnection ahead of the
- *    60 day expiry
+ *  - default: ReauthOnly, CredentialExpiringSoon fires ahead of the 60 day
+ *    expiry; the credential keeps posting until then, and is flagged
+ *    needs_reconnect only once it has actually expired
  *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
  */
 class LinkedInConnector extends AbstractConnector

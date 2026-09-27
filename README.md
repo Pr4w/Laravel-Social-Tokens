@@ -192,6 +192,12 @@ Renewal failures are classified:
 - terminal (invalid_grant, revoked, refresh token expired): the credential moves
   to `needs_reconnect` and an event fires, no further attempts
 
+A credential that cannot be renewed unattended (LinkedIn without refresh tokens,
+or a refresh token past its own lifetime) is not cut off early: when its window
+opens, `CredentialExpiringSoon` fires once with the expiry date, the credential
+keeps posting, and it moves to `needs_reconnect` only if it actually expires
+before the user reconnects.
+
 Renewals run under a per-credential lock so a scheduled job and a synchronous
 `validAccessTokenFor()` can never refresh the same credential at once (which would
 break rotating-refresh-token providers like TikTok). This needs a cache store that
@@ -223,7 +229,8 @@ try {
 
 ```
 active ──(renew succeeds)──────────────────────> active
-       └─(cannot renew, or terminal failure)──> needs_reconnect ──(user reconnects)──> active
+       ├─(cannot renew unattended)──> active + CredentialExpiringSoon ──(expires)──> needs_reconnect
+       └─(terminal failure)──────────> needs_reconnect ──(user reconnects)──> active
 
 revoked: terminal, set explicitly when you revoke an account; never retried.
 ```
@@ -245,8 +252,9 @@ SocialAccount::unusable()->get(); // accounts that need attention, whatever the 
 Eager-load `credential` when listing accounts (`SocialAccount::with('credential')`)
 to avoid one query per row.
 
-Listen for `AccountConnected`, `CredentialRenewed`, `CredentialNeedsReconnect`,
-`CredentialRevoked`, `AccountNeedsReconnect` and `AccountRevoked` to drive
+Listen for `AccountConnected`, `CredentialRenewed`, `CredentialExpiringSoon`,
+`CredentialNeedsReconnect`, `CredentialRevoked`, `AccountNeedsReconnect` and
+`AccountRevoked` to drive
 notifications and a reconnect button in your panel. A dead credential fires
 `CredentialNeedsReconnect` once, not once per account: notify the user from that
 event, listing the affected accounts through `$event->token->accounts`, so a user

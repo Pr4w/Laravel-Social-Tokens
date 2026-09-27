@@ -107,8 +107,9 @@ return [
         'linkedin' => [
             'driver' => LinkedInConnector::class,
             // Set true only if your app has Marketing Developer Platform access
-            // and therefore receives refresh tokens. Otherwise the connector
-            // flags accounts for re-authorisation before the 60 day expiry.
+            // and therefore receives refresh tokens. Otherwise the credential
+            // fires CredentialExpiringSoon ahead of the 60 day expiry and is
+            // flagged for re-authorisation once it actually expires.
             'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', false),
         ],
 
