@@ -66,6 +66,20 @@ it('maps invalid_grant to terminal', function () {
     expect(linkedin()->refreshCredential(linkedinCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
+it('maps a refresh token issued to another LinkedIn app to terminal', function () {
+    // Seen in production after an app switched LinkedIn apps: the old refresh
+    // token can never be redeemed by the new client, retrying is pointless.
+    Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response([
+        'error' => 'refresh_token_client_mismatch',
+        'error_description' => 'The passed in client_id does not own the refresh token',
+    ], 400)]);
+
+    $result = linkedin()->refreshCredential(linkedinCredential());
+
+    expect($result->outcome)->toBe(RenewalOutcome::Terminal)
+        ->and($result->reason)->toContain('refresh_token_client_mismatch');
+});
+
 it('maps an unknown oauth error to transient', function () {
     Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response(['error' => 'server_error'], 400)]);
 

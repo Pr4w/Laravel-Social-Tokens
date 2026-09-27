@@ -3,17 +3,25 @@
 use Illuminate\Support\Facades\Bus;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
 
-function makeCredential(array $attrs): SocialToken
+/** A credential backing one account, unless $withAccount is false (an orphan). */
+function makeCredential(array $attrs, bool $withAccount = true): SocialToken
 {
-    return SocialToken::create(array_merge([
+    $token = SocialToken::create(array_merge([
         'provider' => 'fake',
         'provider_holder_id' => 'h-'.uniqid(),
         'status' => AccountStatus::Active,
     ], $attrs));
+
+    if ($withAccount) {
+        SocialAccount::create(['provider' => 'fake', 'provider_user_id' => 'a-'.uniqid(), 'social_token_id' => $token->getKey(), 'status' => AccountStatus::Active]);
+    }
+
+    return $token;
 }
 
 it('dispatches a renewal job only for due credentials', function () {
@@ -48,6 +56,17 @@ it('stops dispatching a credential once its renewal has run', function () {
     $this->artisan('social-tokens:dispatch-renewals')->expectsOutputToContain('Dispatched 0 renewal job(s).');
 
     expect(FakeConnector::$renewCalls)->toBe(1);
+});
+
+it('skips due credentials that no account uses any more', function () {
+    Bus::fake();
+
+    $used = makeCredential(['renew_at' => now()->subMinute()]);
+    makeCredential(['renew_at' => now()->subMinute()], withAccount: false); // orphan, e.g. left behind by a reconnect
+
+    $this->artisan('social-tokens:dispatch-renewals')->expectsOutputToContain('Dispatched 1 renewal job(s).');
+
+    Bus::assertDispatched(RenewCredential::class, fn ($job) => $job->token->is($used));
 });
 
 it('dispatches nothing when no credentials are due', function () {

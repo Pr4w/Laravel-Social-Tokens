@@ -15,6 +15,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   providers (TikTok, Google, LinkedIn) only renewed late. The check now looks at
   the renewal window: a credential is skipped only when it is valid *and* its
   `renew_at` is in the future (or null, for static credentials).
+- LinkedIn `refresh_token_client_mismatch` (a refresh token issued to another
+  LinkedIn app, e.g. after switching apps) is now terminal instead of being
+  retried as an unknown error.
+- The renewal dispatcher skips credentials no account uses any more (left
+  behind when a reconnect created a new credential) instead of renewing them for
+  nothing.
 
 ### Added
 - `SocialToken::isDueForRenewal()`, the instance counterpart of the

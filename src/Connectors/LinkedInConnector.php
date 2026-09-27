@@ -78,8 +78,9 @@ class LinkedInConnector extends AbstractConnector
             $description = (string) ($body['error_description'] ?? '');
 
             // Known terminal cases: refresh token expired/revoked, the one year
-            // cap reached, or bad client. The member must re-authorise.
-            $terminal = ['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_request'];
+            // cap reached, bad client, or a refresh token issued to another
+            // LinkedIn app (after switching apps). The member must re-authorise.
+            $terminal = ['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_request', 'refresh_token_client_mismatch'];
 
             if (in_array($error, $terminal, true)) {
                 return RenewalResult::terminalFailure(trim("{$error}: {$description}"));

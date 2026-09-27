@@ -16,8 +16,11 @@ class DispatchDueRenewals extends Command
     {
         $count = 0;
 
+        // A credential no account posts with (e.g. left behind when a reconnect
+        // created a new one) is not worth keeping alive.
         SocialToken::query()
             ->dueForRenewal()
+            ->has('accounts')
             ->each(function (SocialToken $token) use (&$count) {
                 RenewCredential::dispatch($token);
                 $count++;
