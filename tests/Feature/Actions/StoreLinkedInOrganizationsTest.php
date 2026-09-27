@@ -75,3 +75,19 @@ it('throws when the organization listing fails', function () {
 
     $this->store->handle(accessToken: 'member-token', memberId: 'member-1');
 })->throws(RuntimeException::class);
+
+it('keeps organizations from a later result page', function () {
+    SocialAccount::create([
+        'provider' => 'linkedin', 'provider_user_id' => '222',
+        'provider_holder_id' => 'member-1', 'status' => AccountStatus::Active,
+    ]);
+
+    Http::fake(fn ($request) => Http::response((int) ($request['start'] ?? 0) === 0
+        ? ['paging' => ['start' => 0, 'count' => 100, 'total' => 2], 'elements' => [orgElement('111', 'Acme')]]
+        : ['paging' => ['start' => 1, 'count' => 100, 'total' => 2], 'elements' => [orgElement('222', 'Globex')]]));
+
+    $this->store->handle(accessToken: 'member-token', memberId: 'member-1');
+
+    expect(SocialAccount::where('provider_user_id', '222')->first()->status)->toBe(AccountStatus::Active)
+        ->and(SocialAccount::where('provider_holder_id', 'member-1')->count())->toBe(2);
+});

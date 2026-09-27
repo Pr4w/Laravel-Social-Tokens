@@ -49,6 +49,42 @@ it('fetches pages with the requested fields', function () {
     Http::assertSent(fn ($request) => $request['fields'] === 'id,name,access_token');
 });
 
+it('follows paging.next until every page is listed', function () {
+    Http::fake(function ($request) {
+        return str_contains($request->url(), 'after=CURSOR2')
+            ? Http::response(['data' => [['id' => 'p2']]]) // last page: no paging.next
+            : Http::response(['data' => [['id' => 'p1']], 'paging' => [
+                'next' => 'https://graph.facebook.com/v23.0/me/accounts?limit=100&after=CURSOR2',
+            ]]);
+    });
+
+    expect(facebook()->fetchPages('user-token'))->toBe([['id' => 'p1'], ['id' => 'p2']]);
+
+    Http::assertSentCount(2);
+    Http::assertSent(fn ($request) => ($request['limit'] ?? null) == 100 && ! str_contains($request->url(), 'after='));
+});
+
+it('fails instead of returning a partial list when a later page errors', function () {
+    Http::fake(function ($request) {
+        return str_contains($request->url(), 'after=')
+            ? Http::response(['error' => ['code' => 2, 'message' => 'Service temporarily unavailable']], 500)
+            : Http::response(['data' => [['id' => 'p1']], 'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=X']]);
+    });
+
+    expect(facebook()->fetchPages('user-token'))->toBeInstanceOf(RenewalResult::class);
+});
+
+it('gives up with a failure rather than paginating forever', function () {
+    Http::fake(fn () => Http::response(['data' => [['id' => 'p']], 'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=again']]));
+
+    $result = facebook()->fetchPages('user-token');
+
+    expect($result)->toBeInstanceOf(RenewalResult::class)
+        ->and($result->unknown)->toBeTrue();
+
+    Http::assertSentCount(20);
+});
+
 it('resolves the facebook user id', function () {
     Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'user-999'])]);
 

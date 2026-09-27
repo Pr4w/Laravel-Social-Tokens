@@ -26,7 +26,7 @@ function fakeFacebookGraph(array $o = []): void
         return match (true) {
             str_contains($url, '/oauth/access_token') => Http::response($extend),
             str_contains($url, '/debug_token') => Http::response($debug),
-            str_contains($url, '/me/accounts') => Http::response($pages),
+            str_contains($url, '/me/accounts') => is_callable($pages) ? $pages($request) : Http::response($pages),
             str_contains($url, '/me') => Http::response($me),
             default => Http::response([], 404),
         };
@@ -117,4 +117,47 @@ it('does not double up credentials on reconnect', function () {
 
     expect(SocialToken::where('provider_holder_id', 'page-1')->count())->toBe(1)
         ->and(SocialAccount::where('provider_user_id', 'page-1')->count())->toBe(1);
+});
+
+it('stores pages spread over several result pages and flags none of them', function () {
+    // An account from the second result page: it must not be taken as dropped.
+    SocialAccount::create([
+        'provider' => 'facebook', 'provider_user_id' => 'page-26',
+        'provider_holder_id' => 'user-1', 'status' => AccountStatus::Active,
+    ]);
+
+    fakeFacebookGraph(['pages' => fn ($request) => str_contains($request->url(), 'after=')
+        ? Http::response(['data' => [['id' => 'page-26', 'name' => 'Page 26', 'access_token' => 'pt-26']]])
+        : Http::response([
+            'data' => [['id' => 'page-1', 'name' => 'Page One', 'access_token' => 'pt-1']],
+            'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=NEXT'],
+        ]),
+    ]);
+
+    $accounts = $this->store->handle(userToken: 'short', userId: 'user-1');
+
+    expect($accounts)->toHaveCount(2)
+        ->and(SocialAccount::where('provider_user_id', 'page-26')->first()->status)->toBe(AccountStatus::Active);
+});
+
+it('flags nothing when a later result page fails', function () {
+    $existing = SocialAccount::create([
+        'provider' => 'facebook', 'provider_user_id' => 'page-26',
+        'provider_holder_id' => 'user-1', 'status' => AccountStatus::Active,
+    ]);
+
+    fakeFacebookGraph(['pages' => fn ($request) => str_contains($request->url(), 'after=')
+        ? Http::response(['error' => ['code' => 2, 'message' => 'Service temporarily unavailable']], 500)
+        : Http::response([
+            'data' => [['id' => 'page-1', 'name' => 'Page One', 'access_token' => 'pt-1']],
+            'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=NEXT'],
+        ]),
+    ]);
+
+    try {
+        $this->store->handle(userToken: 'short', userId: 'user-1');
+        $this->fail('expected RuntimeException');
+    } catch (RuntimeException) {
+        expect($existing->fresh()->status)->toBe(AccountStatus::Active);
+    }
 });

@@ -126,3 +126,33 @@ it('returns a failure result when the org listing errors', function () {
 
     expect(linkedin()->fetchOrganizations('member-token'))->toBeInstanceOf(RenewalResult::class);
 });
+
+it('pages through organizations until the total is reached', function () {
+    Http::fake(function ($request) {
+        $start = (int) ($request['start'] ?? 0);
+
+        return Http::response([
+            'paging' => ['start' => $start, 'count' => 100, 'total' => 2],
+            'elements' => [[
+                'role' => 'ADMINISTRATOR',
+                'state' => 'APPROVED',
+                'organization~' => ['id' => $start + 1, 'localizedName' => 'Org '.($start + 1)],
+            ]],
+        ]);
+    });
+
+    expect(collect(linkedin()->fetchOrganizations('member-token'))->pluck('id')->all())->toBe(['1', '2']);
+
+    Http::assertSentCount(2);
+});
+
+it('fails instead of returning a partial organization list when a later page errors', function () {
+    Http::fake(fn ($request) => (int) ($request['start'] ?? 0) > 0
+        ? Http::response(['message' => 'boom'], 500)
+        : Http::response([
+            'paging' => ['start' => 0, 'count' => 100, 'total' => 2],
+            'elements' => [['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => 1]]],
+        ]));
+
+    expect(linkedin()->fetchOrganizations('member-token'))->toBeInstanceOf(RenewalResult::class);
+});

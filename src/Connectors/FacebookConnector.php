@@ -24,6 +24,9 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class FacebookConnector extends AbstractConnector
 {
+    /** Safety cap on /me/accounts result pages (100 Pages each). */
+    protected const MAX_RESULT_PAGES = 20;
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::ExtendLongLived;
@@ -212,32 +215,55 @@ class FacebookConnector extends AbstractConnector
 
     /**
      * List the Pages a user token can manage, each carrying its own page access
-     * token. Shared by renew() (find one page), the page-seeding action (all
-     * pages), and the Instagram action (which requests the linked IG account
-     * field via $fields).
+     * token. Shared by the page-seeding action (all pages) and the Instagram
+     * action (which requests the linked IG account field via $fields).
+     *
+     * Follows paging.next to the end: the actions reconcile against this list
+     * and flag every page missing from it, so a truncated list would flag pages
+     * the user still manages. Any failure, including hitting the safety cap,
+     * returns a RenewalResult rather than a partial list.
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
     public function fetchPages(string $userToken, string $fields = 'id,name,access_token,picture{url}'): array|RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
+        $url = "https://graph.facebook.com/{$version}/me/accounts";
+        $query = ['fields' => $fields, 'limit' => 100];
+        $pages = [];
 
-        $response = $this->attempt(fn () => Http::withToken($userToken)
-            ->acceptJson()
-            ->get("https://graph.facebook.com/{$version}/me/accounts", [
-                'fields' => $fields,
-            ]));
+        for ($resultPage = 0; $resultPage < self::MAX_RESULT_PAGES; $resultPage++) {
+            // Without a query argument: even an empty one replaces the URL's own
+            // query string, which would drop paging.next's cursor.
+            $response = $this->attempt(fn () => $query === null
+                ? Http::withToken($userToken)->acceptJson()->get($url)
+                : Http::withToken($userToken)->acceptJson()->get($url, $query));
 
-        if ($response instanceof RenewalResult) {
-            return $response;
+            if ($response instanceof RenewalResult) {
+                return $response;
+            }
+
+            $body = $response->json() ?? [];
+
+            if (! empty($body['error'])) {
+                return MetaErrorMapper::map($body['error']);
+            }
+
+            $pages = array_merge($pages, $body['data'] ?? []);
+            $next = $body['paging']['next'] ?? null;
+
+            if ($next === null) {
+                return $pages;
+            }
+
+            // paging.next is a complete URL that already carries every parameter.
+            $url = $next;
+            $query = null;
         }
 
-        $body = $response->json() ?? [];
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        return $body['data'] ?? [];
+        return RenewalResult::unknownFailure('Too many Facebook Pages to list; refusing to return a partial list.', [
+            'result_pages' => self::MAX_RESULT_PAGES,
+            'pages_so_far' => count($pages),
+        ]);
     }
 }

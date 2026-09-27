@@ -26,6 +26,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   temporary errors and `is_transient: true` are transient; anything else is an
   unknown (transient, logged) failure whose context carries `code`,
   `error_subcode` and `fbtrace_id`.
+- Facebook Pages and LinkedIn organizations are now listed in full.
+  `FacebookConnector::fetchPages()` read only the first page of `/me/accounts`
+  (25 Pages by default) and `LinkedInConnector::fetchOrganizations()` only the
+  first 100 organizations; since `StoreFacebookPages`, `StoreInstagramAccounts`
+  and `StoreLinkedInOrganizations` flag every account missing from that list, a
+  user with more Pages had the rest flagged `needs_reconnect` on every connect.
+  Both now paginate to the end (safety cap: 20 result pages), and any failure
+  along the way — including the cap — returns a failure instead of a partial
+  list, so the actions throw before reconciling and flag nothing.
 - The renewal dispatcher skips credentials no account uses any more (left
   behind when a reconnect created a new credential) instead of renewing them for
   nothing.

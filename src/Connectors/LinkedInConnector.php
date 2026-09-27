@@ -37,6 +37,11 @@ class LinkedInConnector extends AbstractConnector
 
     protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
 
+    protected const ORGANIZATION_PAGE_SIZE = 100;
+
+    /** Safety cap on organizationAcls result pages. */
+    protected const MAX_RESULT_PAGES = 20;
+
     public function renewalStrategy(): RenewalStrategy
     {
         return ($this->config['refresh_enabled'] ?? false)
@@ -118,33 +123,66 @@ class LinkedInConnector extends AbstractConnector
      * credential rather than holding its own. Requires the member token to carry
      * an organization admin scope (e.g. rw_organization_admin).
      *
+     * Pages through the results with start/count: the action reconciles against
+     * this list, so a truncated one would flag organizations the member still
+     * administers. Any failure returns a RenewalResult, never a partial list.
+     *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
     public function fetchOrganizations(string $accessToken): array|RenewalResult
     {
-        $response = $this->attempt(fn () => Http::withToken($accessToken)
-            ->acceptJson()
-            ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
-            ->get(self::ORGANIZATION_ACLS_URL, [
-                'q' => 'roleAssignee',
-                'projection' => '(paging,elements*(role,state,organization~(id,localizedName,logoV2(original~:playableStreams))))',
-                'count' => 100,
-            ]));
+        $elements = [];
+        $start = 0;
 
-        if ($response instanceof RenewalResult) {
-            return $response;
+        for ($resultPage = 0; $resultPage < self::MAX_RESULT_PAGES; $resultPage++) {
+            $response = $this->attempt(fn () => Http::withToken($accessToken)
+                ->acceptJson()
+                ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
+                ->get(self::ORGANIZATION_ACLS_URL, [
+                    'q' => 'roleAssignee',
+                    'projection' => '(paging,elements*(role,state,organization~(id,localizedName,logoV2(original~:playableStreams))))',
+                    'start' => $start,
+                    'count' => self::ORGANIZATION_PAGE_SIZE,
+                ]));
+
+            if ($response instanceof RenewalResult) {
+                return $response;
+            }
+
+            if ($response->failed()) {
+                return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().').', [
+                    'status' => $response->status(),
+                    'body' => $response->json(),
+                ]);
+            }
+
+            $batch = $response->json('elements', []);
+            $elements = array_merge($elements, $batch);
+            $start += count($batch);
+            $total = $response->json('paging.total');
+
+            $done = $batch === []
+                || ($total !== null ? $start >= (int) $total : count($batch) < self::ORGANIZATION_PAGE_SIZE);
+
+            if ($done) {
+                return $this->mapOrganizations($elements);
+            }
         }
 
-        if ($response->failed()) {
-            return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().').', [
-                'status' => $response->status(),
-                'body' => $response->json(),
-            ]);
-        }
+        return RenewalResult::unknownFailure('Too many LinkedIn organizations to list; refusing to return a partial list.', [
+            'result_pages' => self::MAX_RESULT_PAGES,
+        ]);
+    }
 
+    /**
+     * @param  array<int, array<string, mixed>>  $elements  Raw organizationAcls elements.
+     * @return array<int, array<string, mixed>>
+     */
+    private function mapOrganizations(array $elements): array
+    {
         $organizations = [];
 
-        foreach ($response->json('elements', []) as $element) {
+        foreach ($elements as $element) {
             // Only approved admin grants are postable.
             if (($element['state'] ?? null) !== 'APPROVED') {
                 continue;
