@@ -19,6 +19,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 ### Added
 - `SocialToken::isDueForRenewal()`, the instance counterpart of the
   `dueForRenewal` scope.
+- `SocialAccount::effectiveStatus()`, `isUsable()` and the `usable()` /
+  `unusable()` scopes, which combine an account's status with its credential's.
+  A credential in `needs_reconnect` leaves its accounts' `status` column at
+  `active`, so a UI reading that column showed dead accounts as healthy. Read
+  the effective status instead (see "Account status" in the README).
+
+### Changed
+- Corrected the claim that flagging a credential "fans out" to its accounts'
+  rows: it never did. Status is resolved at read time instead.
 
 ## [1.0.2]
 

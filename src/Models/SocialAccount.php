@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
@@ -13,7 +14,8 @@ use Pr4w\SocialTokens\Events\AccountRevoked;
  * A postable identity. It holds no tokens: it posts with its credential
  * (SocialToken), which owns renewal. The account keeps its own status so an
  * individual account can be flagged (e.g. a page the user no longer manages)
- * independently of the credential.
+ * independently of the credential. A dead credential is not copied onto its
+ * accounts: effectiveStatus() / usable() combine the two.
  *
  * @property ?int $social_token_id
  * @property ?SocialToken $credential
@@ -106,6 +108,61 @@ class SocialAccount extends Model
     public function missingScopes(array $scopes): array
     {
         return array_values(array_diff($scopes, $this->grantedScopes()));
+    }
+
+    // Effective status ------------------------------------------------------
+
+    /**
+     * What the account can actually do, combining its own status with its
+     * credential's. The `status` column only records account-level flags (e.g. a
+     * page the user no longer manages); when the shared credential dies, its
+     * accounts' rows stay untouched, so read this — not `status` — to show
+     * whether an account can post. The most severe of the two wins, and an
+     * account without a credential cannot post.
+     */
+    public function effectiveStatus(): AccountStatus
+    {
+        $credentialStatus = $this->credential->status ?? AccountStatus::NeedsReconnect;
+
+        foreach ([AccountStatus::Revoked, AccountStatus::NeedsReconnect] as $status) {
+            if ($this->status === $status || $credentialStatus === $status) {
+                return $status;
+            }
+        }
+
+        return AccountStatus::Active;
+    }
+
+    public function isUsable(): bool
+    {
+        return $this->effectiveStatus()->isUsable();
+    }
+
+    /**
+     * Accounts that can post: active themselves, backed by an active credential.
+     *
+     * @param  Builder<SocialAccount>  $query
+     * @return Builder<SocialAccount>
+     */
+    public function scopeUsable(Builder $query): Builder
+    {
+        return $query
+            ->where('status', AccountStatus::Active->value)
+            ->whereHas('credential', fn (Builder $credential) => $credential->where('status', AccountStatus::Active->value));
+    }
+
+    /**
+     * Accounts that cannot post, whether flagged themselves or through their
+     * credential (or with no credential at all). The complement of usable().
+     *
+     * @param  Builder<SocialAccount>  $query
+     * @return Builder<SocialAccount>
+     */
+    public function scopeUnusable(Builder $query): Builder
+    {
+        return $query->where(fn (Builder $query) => $query
+            ->where('status', '!=', AccountStatus::Active->value)
+            ->orWhereDoesntHave('credential', fn (Builder $credential) => $credential->where('status', AccountStatus::Active->value)));
     }
 
     // State -----------------------------------------------------------------

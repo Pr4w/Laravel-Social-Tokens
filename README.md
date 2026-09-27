@@ -223,11 +223,29 @@ active ──(renew succeeds)─────────────────
 revoked: terminal, set explicitly when you revoke an account; never retried.
 ```
 
+Status lives at two levels. A credential's status covers every account it backs
+(its shared token died or was revoked); an account's own `status` column only
+records account-level flags (e.g. a page the user no longer manages). When a
+credential dies, its accounts' rows are **not** rewritten — so to show whether
+an account can post, read its effective status, never the raw column:
+
+```php
+$account->effectiveStatus(); // most severe of the account's and its credential's status
+$account->isUsable();        // true only when both are active
+
+SocialAccount::usable()->get();   // accounts that can post
+SocialAccount::unusable()->get(); // accounts that need attention, whatever the cause
+```
+
+Eager-load `credential` when listing accounts (`SocialAccount::with('credential')`)
+to avoid one query per row.
+
 Listen for `AccountConnected`, `CredentialRenewed`, `CredentialNeedsReconnect`,
 `CredentialRevoked`, `AccountNeedsReconnect` and `AccountRevoked` to drive
-notifications and a reconnect button in your panel. The credential events cover
-every account a credential backs (its shared token died / was revoked); the
-account events are per account (e.g. a page the user no longer manages).
+notifications and a reconnect button in your panel. A dead credential fires
+`CredentialNeedsReconnect` once, not once per account: notify the user from that
+event, listing the affected accounts through `$event->token->accounts`, so a user
+with ten pages behind one token gets one message, not ten.
 
 To disconnect an account, revoke its credential — this tells the provider to
 invalidate it and marks the credential and its accounts revoked:

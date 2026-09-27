@@ -127,9 +127,10 @@ class SocialTokens
             }
         }
 
-        // Terminal failure: the connection is broken, flag the credential (which
-        // fans out to every account it backs). Transient: leave it usable so
-        // background retries continue, but we still cannot post on this attempt.
+        // Terminal failure: the connection is broken, flag the credential. Its
+        // accounts' rows are not rewritten; every account it backs reports it
+        // through effectiveStatus(). Transient: leave it usable so background
+        // retries continue, but we still cannot post on this attempt.
         if ($result->outcome === RenewalOutcome::Terminal) {
             $token->markNeedsReconnect($result->reason);
         }
