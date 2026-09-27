@@ -90,6 +90,15 @@ class SocialToken extends Model
             && $this->expires_at->lessThanOrEqualTo(now()->addSeconds($bufferSeconds));
     }
 
+    /**
+     * The renewal window has opened (same rule as the dueForRenewal scope). A
+     * token can be due well before it expires: that is the point of the lead time.
+     */
+    public function isDueForRenewal(): bool
+    {
+        return $this->renew_at !== null && ! $this->renew_at->isFuture();
+    }
+
     public function isRefreshTokenExpired(): bool
     {
         return $this->refresh_expires_at !== null && $this->refresh_expires_at->isPast();

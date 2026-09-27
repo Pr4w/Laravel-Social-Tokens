@@ -49,8 +49,11 @@ class SocialTokens
             return Cache::lock($this->lockKey($token), 30)->block(10, function () use ($token, $connector) {
                 $token->refresh();
 
-                // Another process may have renewed while we waited for the lock.
-                if (! $token->isAccessTokenExpired() && $token->access_token !== null) {
+                // Another process may have renewed while we waited for the lock:
+                // a successful renewal leaves a valid token whose window has moved
+                // into the future. Checking expiry alone is not enough — the job
+                // runs at renew_at, days before expiry, and must go through.
+                if ($token->access_token !== null && ! $token->isAccessTokenExpired() && ! $token->isDueForRenewal()) {
                     return RenewalResult::success(
                         accessToken: $token->access_token,
                         expiresAt: $token->expires_at,

@@ -1,9 +1,11 @@
 <?php
 
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -52,13 +54,49 @@ it('renews an expired credential and applies the result', function () {
         ->and($token->fresh()->status)->toBe(AccountStatus::Active);
 });
 
-it('short-circuits under the lock when the credential was already renewed', function () {
-    $token = fakeCredential(['expires_at' => now()->addHour()]); // not expired
+it('renews a credential whose renewal window has opened, before it expires', function () {
+    Event::fake([CredentialRenewed::class]);
+    $token = fakeCredential(['expires_at' => now()->addDays(6), 'renew_at' => now()->subMinute()]);
+    FakeConnector::$nextResult = RenewalResult::success(accessToken: 'extended', expiresAt: now()->addDays(60));
+
+    $result = $this->tokens->renewCredential($token);
+
+    $fresh = $token->fresh();
+
+    expect($result->succeeded())->toBeTrue()
+        ->and(FakeConnector::$renewCalls)->toBe(1)
+        ->and($fresh->access_token)->toBe('extended')
+        ->and($fresh->expires_at->greaterThan(now()->addDays(59)))->toBeTrue()
+        ->and($fresh->renew_at->isFuture())->toBeTrue();
+
+    Event::assertDispatchedTimes(CredentialRenewed::class, 1);
+});
+
+it('short-circuits under the lock when another process renewed in the meantime', function () {
+    $token = fakeCredential(['expires_at' => now()->addDays(6), 'renew_at' => now()->subMinute()]);
+
+    // Another process renews while this one waits for the lock: $token is now stale.
+    SocialToken::find($token->getKey())->update([
+        'access_token' => 'renewed-elsewhere',
+        'expires_at' => now()->addDays(60),
+        'renew_at' => now()->addDays(53),
+    ]);
 
     $result = $this->tokens->renewCredential($token);
 
     expect($result->succeeded())->toBeTrue()
+        ->and($result->accessToken)->toBe('renewed-elsewhere')
         ->and(FakeConnector::$renewCalls)->toBe(0); // provider never called
+});
+
+it('never calls the provider for a static credential', function () {
+    $token = fakeCredential(['expires_at' => null, 'renew_at' => null, 'access_token' => 'page-token']);
+
+    $result = $this->tokens->renewCredential($token);
+
+    expect($result->succeeded())->toBeTrue()
+        ->and($result->accessToken)->toBe('page-token')
+        ->and(FakeConnector::$renewCalls)->toBe(0);
 });
 
 it('returns a transient failure without touching the credential', function () {

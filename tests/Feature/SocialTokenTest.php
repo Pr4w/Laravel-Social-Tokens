@@ -39,6 +39,12 @@ it('detects expired access and refresh tokens', function () {
         ->and(socialToken(['refresh_expires_at' => now()->subDay()])->isRefreshTokenExpired())->toBeTrue();
 });
 
+it('knows when its renewal window has opened, independently of expiry', function () {
+    expect(socialToken(['expires_at' => now()->addDays(6), 'renew_at' => now()->subMinute()])->isDueForRenewal())->toBeTrue()
+        ->and(socialToken(['expires_at' => now()->addDays(60), 'renew_at' => now()->addDays(53)])->isDueForRenewal())->toBeFalse()
+        ->and(socialToken(['expires_at' => null, 'renew_at' => null])->isDueForRenewal())->toBeFalse(); // static
+});
+
 it('scopes credentials due for renewal', function () {
     socialToken(['provider_holder_id' => 'due', 'renew_at' => now()->subMinute()]);
     socialToken(['provider_holder_id' => 'later', 'renew_at' => now()->addHour()]);

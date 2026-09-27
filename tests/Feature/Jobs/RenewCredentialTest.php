@@ -67,6 +67,18 @@ it('renews successfully', function () {
         ->and($token->fresh()->access_token)->toBe('fresh');
 });
 
+it('renews a credential that is due but not yet expired', function () {
+    $token = jobCredential(['expires_at' => now()->addDays(6), 'renew_at' => now()->subMinute()]);
+    FakeConnector::$nextResult = RenewalResult::success(accessToken: 'extended', expiresAt: now()->addDays(60));
+
+    runJob($token);
+
+    expect(FakeConnector::$renewCalls)->toBe(1)
+        ->and($token->fresh()->access_token)->toBe('extended')
+        ->and($token->fresh()->renew_at->isFuture())->toBeTrue()
+        ->and(SocialToken::query()->dueForRenewal()->count())->toBe(0);
+});
+
 it('flags a terminal failure for reconnection', function () {
     $token = jobCredential();
     FakeConnector::$nextResult = RenewalResult::terminalFailure('revoked');

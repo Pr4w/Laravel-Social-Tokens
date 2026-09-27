@@ -5,6 +5,7 @@ use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 function connector(string $provider): ProviderConnector
@@ -97,3 +98,28 @@ it('is terminal when the credential has no token to refresh', function () {
 
     Http::assertNothingSent();
 });
+
+it('renews a still-valid credential once its renewal window opens', function (string $provider, string $url, array $response, array $attrs) {
+    config()->set('social-tokens.connectors.linkedin.refresh_enabled', true);
+    Http::fake([$url => Http::response($response)]);
+
+    $token = credential($provider, array_merge([
+        'access_token' => 'current',
+        'expires_at' => now()->addHour(), // not expired: only the window is open
+        'renew_at' => now()->subMinute(),
+    ], $attrs));
+
+    $result = app(SocialTokens::class)->renewCredential($token);
+
+    expect($result->succeeded())->toBeTrue()
+        ->and($token->fresh()->access_token)->toBe('renewed')
+        ->and($token->fresh()->renew_at->isFuture())->toBeTrue();
+
+    Http::assertSentCount(1);
+})->with([
+    'facebook / instagram' => ['facebook', 'graph.facebook.com/*', ['access_token' => 'renewed', 'expires_in' => 5183944], []],
+    'threads' => ['threads', 'graph.threads.net/*', ['access_token' => 'renewed', 'expires_in' => 5183944], []],
+    'tiktok' => ['tiktok', 'open.tiktokapis.com/*', ['access_token' => 'renewed', 'expires_in' => 86400, 'refresh_token' => 'r2', 'refresh_expires_in' => 31536000], ['refresh_token' => 'r1']],
+    'google' => ['google', 'oauth2.googleapis.com/*', ['access_token' => 'renewed', 'expires_in' => 3600], ['refresh_token' => 'r1']],
+    'linkedin' => ['linkedin', 'linkedin.com/*', ['access_token' => 'renewed', 'expires_in' => 5184000], ['refresh_token' => 'r1']],
+]);

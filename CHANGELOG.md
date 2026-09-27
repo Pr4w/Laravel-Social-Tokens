@@ -3,6 +3,23 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- Scheduled renewal never ran ahead of expiry. The double-check under the renewal
+  lock treated any unexpired token as "already renewed", so the job fired at
+  `renew_at` (days before expiry), did nothing, and was re-dispatched on every
+  scheduler tick until the token actually expired. Tokens that cannot be
+  extended once expired (Threads, the Meta user credential behind Instagram)
+  then died and went to `needs_reconnect` after ~60 days; refresh-token
+  providers (TikTok, Google, LinkedIn) only renewed late. The check now looks at
+  the renewal window: a credential is skipped only when it is valid *and* its
+  `renew_at` is in the future (or null, for static credentials).
+
+### Added
+- `SocialToken::isDueForRenewal()`, the instance counterpart of the
+  `dueForRenewal` scope.
+
 ## [1.0.2]
 
 ### Fixed
