@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Jobs;
 
+use Carbon\CarbonInterface;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -32,6 +33,12 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
     use Queueable;
     use SerializesModels;
 
+    /**
+     * A credential deleted before the job runs drops the job quietly. Must be a
+     * property default: the queue reads it from the class, not the instance.
+     */
+    public bool $deleteWhenMissingModels = true;
+
     public function __construct(public SocialToken $token)
     {
         $this->onConnection(config('social-tokens.queue.connection'));
@@ -43,9 +50,20 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         return 'social-tokens-renew-'.$this->token->getKey();
     }
 
+    /**
+     * Hold the uniqueness lock across every configured retry, so a dispatcher
+     * run while the job is still retrying never stacks a second one.
+     */
     public function uniqueFor(): int
     {
-        return 600; // release the uniqueness lock after 10 min as a safety net
+        $backoff = $this->backoff();
+        $span = 0;
+
+        for ($attempt = 1; $attempt < $this->tries(); $attempt++) {
+            $span += (int) ($backoff[$attempt - 1] ?? (end($backoff) ?: 0));
+        }
+
+        return $span + 300; // margin for the tries themselves (10s lock wait + HTTP timeouts)
     }
 
     public function tries(): int
@@ -95,9 +113,9 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         // applied to the credential inside renewCredential().
         $result = $tokens->renewCredential($token);
 
-        // Transient: throw so the queue retries with backoff while there is still
-        // a usable window. Once the token has actually expired and retries are
-        // exhausted, the failed() hook escalates to needs_reconnect.
+        // Transient: throw so the queue retries with backoff. Once retries are
+        // exhausted, failed() backs renew_at off, or flags the credential if it
+        // truly can no longer be renewed.
         match ($result->outcome) {
             RenewalOutcome::Success => null,
             RenewalOutcome::Terminal => $token->markNeedsReconnect($result->reason),
@@ -137,11 +155,53 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        // If the token is already expired, the connection is effectively broken
-        // and needs human attention. Otherwise leave it active: a later run of
-        // the dispatcher will try again while the window is still open.
-        if ($token->isAccessTokenExpired(0)) {
-            $token->markNeedsReconnect('Renewal failed after retries: '.$exception->getMessage());
+        $reason = 'Renewal failed after retries: '.$exception->getMessage();
+
+        // Only a credential that can no longer be renewed at all needs the user.
+        // An outage on a refresh-token provider is not that, even once the access
+        // token has expired: the refresh token still works when it comes back.
+        if ($token->isAccessTokenExpired(0) && ! $this->canStillRenew($token)) {
+            $token->markNeedsReconnect($reason);
+
+            return;
         }
+
+        // Stay active and back off at the credential level, so the dispatcher
+        // does not re-dispatch it on every tick. last_error records the outage;
+        // the status, not last_error, says whether the credential is broken.
+        $token->renew_at = $this->retryAt($token);
+        $token->last_error = $reason;
+        $token->save();
+    }
+
+    protected function canStillRenew(SocialToken $token): bool
+    {
+        $registry = app(ConnectorRegistry::class);
+
+        if (! $registry->has($token->provider)) {
+            return true; // a config problem, not something the user can fix by reconnecting
+        }
+
+        $strategy = $registry->for($token->provider)->renewalStrategy();
+
+        return $strategy->canRenewUnattended()
+            && ! $strategy->requiresLiveAccessToken()
+            && ! $token->isRefreshTokenExpired();
+    }
+
+    /**
+     * Soon when the token has already expired; otherwise a quarter of the time
+     * left, between 5 and 60 minutes, and never past the expiry.
+     */
+    protected function retryAt(SocialToken $token): CarbonInterface
+    {
+        if ($token->expires_at === null || $token->isAccessTokenExpired(0)) {
+            return now()->addMinutes(15);
+        }
+
+        $remaining = (int) now()->diffInMinutes($token->expires_at, true);
+        $minutes = max(5, min(60, intdiv($remaining, 4)));
+
+        return now()->addMinutes($minutes)->min($token->expires_at);
     }
 }

@@ -24,4 +24,10 @@ enum RenewalStrategy: string
     {
         return $this !== self::ReauthOnly;
     }
+
+    /** Renewal needs a still-valid access token: an expired long-lived token can no longer be extended. */
+    public function requiresLiveAccessToken(): bool
+    {
+        return $this === self::ExtendLongLived;
+    }
 }

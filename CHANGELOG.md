@@ -3,6 +3,35 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **A provider outage no longer disconnects a refresh-token credential.**
+  `RenewCredential::failed()` flagged `needs_reconnect` any credential whose
+  access token had expired by the time the queue gave up — including Google,
+  TikTok and LinkedIn-with-refresh credentials whose refresh token still worked.
+  It now flags only a credential that truly can no longer be renewed (an expired
+  long-lived Meta/Threads token, an expired `ReauthOnly` token, or an expired
+  refresh token). Otherwise the credential stays `active`, `renew_at` is backed
+  off (15 min once the token has expired, otherwise a quarter of the time left,
+  5–60 min) so the dispatcher stops re-dispatching it on every tick, and
+  `last_error` records the outage.
+- The job's uniqueness lock now covers every configured retry (it was a fixed
+  10 minutes, shorter than the default backoff), so a dispatcher run can no
+  longer stack a second job for a credential that is still retrying.
+- A renewal job whose credential was deleted before it ran is dropped quietly
+  instead of landing in `failed_jobs`.
+
+### Added
+- `RenewalStrategy::requiresLiveAccessToken()`.
+
+### Upgrading
+- `CredentialNeedsReconnect` is no longer fired after a provider outage on a
+  refresh-token credential. If you relied on it to detect outages, watch
+  `last_error` / `last_renewed_at` instead. A non-null `last_error` on an
+  `active` credential now means "recent failures, still retrying": the status,
+  not `last_error`, says whether a credential is broken.
+
 ## [1.1.0]
 
 ### Fixed

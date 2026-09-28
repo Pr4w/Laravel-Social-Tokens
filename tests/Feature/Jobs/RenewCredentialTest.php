@@ -160,7 +160,8 @@ it('throws on a transient failure so the queue retries', function () {
     runJob($token);
 })->throws(RuntimeException::class, 'Transient renewal failure');
 
-it('escalates to needs_reconnect after the final attempt when the token has expired', function () {
+it('escalates to needs_reconnect after the final attempt when an expired token cannot be extended', function () {
+    FakeConnector::$strategy = RenewalStrategy::ExtendLongLived; // an expired long-lived token is dead
     $token = jobCredential(['expires_at' => now()->subMinute()]);
 
     (new RenewCredential($token))->failed(new Exception('gave up'));
