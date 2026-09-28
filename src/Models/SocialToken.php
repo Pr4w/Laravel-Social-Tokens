@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Events\CredentialRevoked;
@@ -127,9 +129,22 @@ class SocialToken extends Model
             $this->refresh_token = $result->refreshToken;
         }
 
+        $notExtended = false;
+
         if ($result->expiresAt !== null) {
             $this->expires_at = $result->expiresAt;
-            $this->renew_at = $result->expiresAt->copy()->sub($connector->leadTime());
+            $renewAt = $result->expiresAt->copy()->sub($connector->leadTime());
+
+            if ($renewAt->isFuture()) {
+                $this->renew_at = $renewAt;
+            } else {
+                // The provider did not push the expiry past the lead time (e.g.
+                // Meta returning the remaining lifetime): renewing again on every
+                // tick would change nothing. Land the next pass at the expiry,
+                // where the token is flagged if nobody reconnected.
+                $notExtended = true;
+                $this->renew_at = $result->expiresAt->copy();
+            }
         } else {
             // A renewable credential came back without an expiry. Keeping the
             // old expires_at would be stale, and a null renew_at would turn it
@@ -162,6 +177,34 @@ class SocialToken extends Model
         $this->save();
 
         event(new CredentialRenewed($this));
+
+        $strategy = $connector->renewalStrategy();
+
+        if ($result->expiresAt !== null && $strategy === RenewalStrategy::ExtendLongLived) {
+            // Record what the provider granted: whether Meta really extends a
+            // still-valid long-lived token is not documented.
+            Log::info('[social-tokens] Long-lived token extended', [
+                'provider' => $this->provider,
+                'token_id' => $this->getKey(),
+                'expires_in' => (int) now()->diffInSeconds($result->expiresAt, false),
+            ]);
+        }
+
+        if ($notExtended && $result->expiresAt !== null) {
+            Log::warning('[social-tokens] Renewal did not extend the credential past its lead time', [
+                'provider' => $this->provider,
+                'token_id' => $this->getKey(),
+                'expires_in' => (int) now()->diffInSeconds($result->expiresAt, false),
+                'expires_at' => $result->expiresAt->toIso8601String(),
+            ]);
+
+            // Nothing renews a long-lived token that will not extend: the user
+            // has to reconnect before it expires. Refresh-token providers will
+            // still refresh at the expiry, so they get no warning.
+            if ($strategy === RenewalStrategy::ExtendLongLived) {
+                event(new CredentialExpiringSoon($this, $result->expiresAt, 'Provider did not extend the token.'));
+            }
+        }
 
         return $this;
     }

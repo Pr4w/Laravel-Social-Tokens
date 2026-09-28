@@ -73,6 +73,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   (`check_static_breaker`: more than 20% of at least 10 checked) flags nothing
   and raises `Log::critical`, a credential that throws is logged and skipped,
   and a credential whose token changed during the check is left alone.
+- **A renewal that does not extend the token no longer re-runs on every tick.**
+  When a provider returned a success whose expiry was still inside the lead time
+  (e.g. Meta answering with the remaining lifetime), `renew_at` landed in the
+  past and the dispatcher called the provider every 15 minutes until expiry.
+  `renew_at` now moves to the expiry, a warning logs the `expires_in` received,
+  and for long-lived tokens (Meta, Threads) `CredentialExpiringSoon` fires once.
+  Each successful long-lived extension also logs its `expires_in` (info), to
+  confirm in production whether Meta really extends.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -100,6 +108,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
   mention the refresh token (a truly dead refresh token will be flagged again,
   properly, by `invalid_grant`).
+- For Meta/Threads, `CredentialExpiringSoon` can now also follow a
+  "successful" renewal that did not extend the token: the user must reconnect.
 - **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an
   error tracker may hold `client_secret=` from a connection failure. Existing
   `last_error` values written by earlier versions may also contain secrets:

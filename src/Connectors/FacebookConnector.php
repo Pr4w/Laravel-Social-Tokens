@@ -89,8 +89,10 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
 
     /**
      * Exchange a user token for a fresh long-lived one via the fb_exchange_token
-     * grant. Idempotent: safe to call on a token that is already long lived.
-     * Shared by renew() and the initial page-seeding action.
+     * grant. Safe to call on a token that is already long lived, but whether
+     * Meta then pushes the expiry further is not documented: renewals log the
+     * expires_in they get, and a non-extending one is handled by applyRenewal().
+     * Shared by renewal and the connect-time actions.
      *
      * @return array{token: string, expiresAt: ?Carbon}|RenewalResult
      */

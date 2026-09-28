@@ -10,7 +10,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 /**
  * Threads publishing via the Threads API.
  *
- * Token facts (verified against Meta developer docs):
+ * Token facts (per Meta developer docs; renewal behaviour is not guaranteed,
+ * see SocialToken::applyRenewal() for a renewal that does not extend):
  *  - long lived access token lives ~60 days (expires_in ~5183944)
  *  - no refresh token; the long lived token is extended via th_refresh_token
  *  - extension only works while the token is still valid and at least 24h old

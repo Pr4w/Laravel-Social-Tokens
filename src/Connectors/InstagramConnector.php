@@ -10,7 +10,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 /**
  * Instagram publishing via the Instagram Graph API (Facebook Login path).
  *
- * Token facts (verified against Meta developer docs):
+ * Token facts (per Meta developer docs; renewal behaviour is not guaranteed,
+ * see SocialToken::applyRenewal() for a renewal that does not extend):
  *  - publishing uses a Facebook long lived User access token (~60 days)
  *  - there is NO refresh token; the long lived token is extended in place via
  *    the fb_exchange_token grant on graph.facebook.com
