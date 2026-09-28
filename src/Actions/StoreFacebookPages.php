@@ -97,6 +97,7 @@ class StoreFacebookPages
                     'scopes' => $scopes,
                     'status' => AccountStatus::Active,
                     'last_error' => null,
+                    'failed_checks' => 0,
                 ],
             );
 

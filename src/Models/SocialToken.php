@@ -15,9 +15,10 @@ use Pr4w\SocialTokens\Events\CredentialRevoked;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
- * The renewable credential. One credential backs many accounts (a Meta user
- * token backs every Facebook page and Instagram account; a LinkedIn member token
- * backs every organization). Renewal happens here, once, not per account.
+ * The renewable credential. One credential can back many accounts (a Meta user
+ * token backs every Instagram account of a Facebook user; a LinkedIn member token
+ * backs every organization). Renewal happens here, once, not per account. Each
+ * Facebook Page posts with its own static page-token credential.
  *
  * @property string $provider
  * @property ?string $provider_holder_id
@@ -29,6 +30,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * @property ?CarbonInterface $last_renewed_at
  * @property array<int, string>|null $scopes
  * @property ?string $last_error
+ * @property int $failed_checks
  * @property AccountStatus $status
  */
 class SocialToken extends Model

@@ -115,6 +115,7 @@ class StoreInstagramAccounts
                     'renew_at' => $expiresAt?->copy()->sub($facebook->leadTime()),
                     'status' => AccountStatus::Active,
                     'last_error' => null,
+                    'failed_checks' => 0,
                 ],
             );
 
@@ -156,6 +157,7 @@ class StoreInstagramAccounts
                         'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
                         'status' => AccountStatus::Active,
                         'last_error' => null,
+                        'failed_checks' => 0,
                     ],
                 );
 

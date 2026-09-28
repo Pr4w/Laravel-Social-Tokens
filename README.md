@@ -206,7 +206,17 @@ Static credentials (Facebook page tokens) are never renewed, but die when the
 user changes their password, removes the app or loses the Page's admin role. A
 daily `social-tokens:check-static` run asks Meta about each one and flags the
 dead ones `needs_reconnect` (set `check_static_schedule` to `null` to disable).
-A custom connector opts in by implementing `Contracts\ChecksCredential`.
+Because a verdict cuts the Page off, the run is cautious: a session error
+("password changed", "app removed") flags at once, any other rejection must be
+confirmed by the next day's run, a permission error on `/me` is only logged, and
+when more than 20% of at least 10 checked tokens are rejected at once (a
+Meta-side incident) nothing is flagged and a critical log is raised instead
+(`check_static_breaker`). A credential that cannot be checked (e.g. it cannot be
+decrypted after an `APP_KEY` change) is logged and skipped.
+
+A custom connector opts in by implementing `Contracts\ChecksCredential`. Its
+plain `terminalFailure()` needs two consecutive runs to flag; return
+`terminalFailure($reason, ['definitive' => true])` to flag on the first.
 
 Renewals run under a per-credential lock so a scheduled job and a synchronous
 `validAccessTokenFor()` can never refresh the same credential at once (which would
@@ -268,7 +278,11 @@ Listen for `AccountConnected`, `CredentialRenewed`, `CredentialExpiringSoon`,
 notifications and a reconnect button in your panel. A dead credential fires
 `CredentialNeedsReconnect` once, not once per account: notify the user from that
 event, listing the affected accounts through `$event->token->accounts`, so a user
-with ten pages behind one token gets one message, not ten.
+with ten Instagram accounts or LinkedIn organizations behind one token gets one
+message, not ten. Facebook Pages are the exception: each Page has its own static
+credential, so `check-static` fires one event per dead Page. Group those
+notifications yourself if you need to, e.g. by the accounts'
+`provider_holder_id` (the Facebook user) or by owner.
 
 To disconnect an account, revoke its credential — this tells the provider to
 invalidate it and marks the credential and its accounts revoked:

@@ -48,14 +48,21 @@ final class RenewalResult
         );
     }
 
-    public static function transientFailure(string $reason): self
+    /**
+     * @param  array<string, mixed>  $context  Catalogued detail; does not make the failure "unknown".
+     */
+    public static function transientFailure(string $reason, array $context = []): self
     {
-        return new self(outcome: RenewalOutcome::Transient, reason: $reason);
+        return new self(outcome: RenewalOutcome::Transient, reason: $reason, context: $context);
     }
 
-    public static function terminalFailure(string $reason): self
+    /**
+     * @param  array<string, mixed>  $context  Catalogued detail; does not make the failure "unknown".
+     *                                         `definitive => true` lets a credential check flag at once.
+     */
+    public static function terminalFailure(string $reason, array $context = []): self
     {
-        return new self(outcome: RenewalOutcome::Terminal, reason: $reason);
+        return new self(outcome: RenewalOutcome::Terminal, reason: $reason, context: $context);
     }
 
     /**

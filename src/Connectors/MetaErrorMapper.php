@@ -58,4 +58,40 @@ final class MetaErrorMapper
             'fbtrace_id' => $error['fbtrace_id'] ?? null,
         ]);
     }
+
+    /**
+     * Classification for a credential health check (GET /me with a token that
+     * is not being renewed), where a verdict cuts the account off. Stricter than
+     * map(): only a session subcode is definitive; a bare 190/102 is terminal
+     * but must be confirmed by a second run; a permission code on /me proves
+     * nothing about the token and is only logged.
+     *
+     * @param  array<string, mixed>  $error
+     */
+    public static function mapCredentialCheck(array $error): RenewalResult
+    {
+        $code = (int) ($error['code'] ?? 0);
+        $subcode = isset($error['error_subcode']) ? (int) $error['error_subcode'] : null;
+        $type = (string) ($error['type'] ?? '');
+        $message = (string) ($error['message'] ?? 'Unknown Meta error.');
+        $reason = trim("{$code} {$type}: {$message}");
+
+        if (in_array($subcode, self::SESSION_SUBCODES, true)) {
+            return RenewalResult::terminalFailure($reason, ['definitive' => true]);
+        }
+
+        if (in_array($code, self::INVALID_TOKEN_CODES, true)) {
+            return RenewalResult::terminalFailure($reason);
+        }
+
+        if ($code === 10 || ($code >= 200 && $code <= 299)) {
+            return RenewalResult::unknownFailure("Missing permission — {$reason}", [
+                'code' => $code,
+                'error_subcode' => $subcode,
+                'fbtrace_id' => $error['fbtrace_id'] ?? null,
+            ]);
+        }
+
+        return self::map($error);
+    }
 }

@@ -47,6 +47,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   assuming a short page is the last one, resolves an organization from its URN
   when LinkedIn throttles its decoration (keeping the stored name and logo), and
   refuses to reconcile while an approved grant cannot be resolved.
+- **`social-tokens:check-static` no longer flags healthy Pages.** A verdict
+  cuts a Page off and a flagged static token is never checked again, yet a
+  permission code (10, 200–299) on `GET /me`, a single unconfirmed 190, or a
+  Meta-side incident answering 190 for everyone flagged Pages on the spot; one
+  credential that threw (e.g. undecryptable after an `APP_KEY` rotation) stopped
+  the whole run; and a Page reconnected while its check was in flight had its
+  fresh token flagged. Now: session subcodes flag at once, a bare 190/102 needs
+  two consecutive runs, permission codes are only logged, a breaker
+  (`check_static_breaker`: more than 20% of at least 10 checked) flags nothing
+  and raises `Log::critical`, a credential that throws is logged and skipped,
+  and a credential whose token changed during the check is left alone.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -54,6 +65,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 ### Added
 - `RenewalStrategy::requiresLiveAccessToken()`.
 - `RenewalResult::clientFailure()` and `RenewalResult::$clientError`.
+- `RenewalResult::terminalFailure()` and `transientFailure()` take an optional
+  `$context`, which does not mark the result unknown.
+- `MetaErrorMapper::mapCredentialCheck()`, the stricter mapping used by
+  credential health checks.
+- Migration `2025_01_01_000006`: `social_tokens.failed_checks`.
+- Config `check_static_breaker`.
 
 ### Upgrading
 - `CredentialNeedsReconnect` is no longer fired after a provider outage on a
@@ -68,6 +85,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
   mention the refresh token (a truly dead refresh token will be flagged again,
   properly, by `invalid_grant`).
+- **Run `php artisan migrate`** (new column `social_tokens.failed_checks`). If
+  you published the package migrations, publish or copy
+  `2025_01_01_000006_add_failed_checks_to_social_tokens_table.php` too.
+- `check-static`: a bare Meta 190/102 is now flagged a day later (second
+  consecutive run); permission codes no longer flag. A custom `ChecksCredential`
+  connector that returns a plain `terminalFailure()` now needs two runs; return
+  `terminalFailure($reason, ['definitive' => true])` to flag on the first.
+  An aborted run exits with a failure code.
+- Facebook Pages each have their own credential, so `check-static` fires one
+  `CredentialNeedsReconnect` per dead Page: group notifications yourself.
 - Personal LinkedIn rows wrongly flagged by earlier versions can be repaired by
   reconnecting the profile, or with (check the linked credential is active first):
   ```sql

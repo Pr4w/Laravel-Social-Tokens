@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
@@ -66,12 +67,24 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     public function checkCredential(SocialToken $token): RenewalResult
     {
         if (empty($token->access_token)) {
-            return RenewalResult::terminalFailure('Missing page token.');
+            return RenewalResult::terminalFailure('Missing page token.', ['definitive' => true]);
         }
 
-        $id = $this->fetchUserId($token->access_token);
+        $response = $this->fetchMe($token->access_token);
 
-        return $id instanceof RenewalResult ? $id : RenewalResult::success(accessToken: $token->access_token);
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        // The health check's own mapping: only a session subcode is definitive.
+        if (is_array($body['error'] ?? null)) {
+            return MetaErrorMapper::mapCredentialCheck($body['error']);
+        }
+
+        return RenewalResult::success(accessToken: $token->access_token);
     }
 
     /**
@@ -200,11 +213,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      */
     public function fetchUserId(string $userToken): string|RenewalResult
     {
-        $version = $this->config['graph_version'] ?? 'v23.0';
-
-        $response = $this->attempt(fn () => $this->http()->withToken($userToken)
-            ->acceptJson()
-            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id']));
+        $response = $this->fetchMe($userToken);
 
         if ($response instanceof RenewalResult) {
             return $response;
@@ -226,6 +235,18 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
         }
 
         return (string) $id;
+    }
+
+    /**
+     * GET /me?fields=id with the given token, transport outcomes normalised.
+     */
+    protected function fetchMe(string $token): Response|RenewalResult
+    {
+        $version = $this->config['graph_version'] ?? 'v23.0';
+
+        return $this->attempt(fn () => $this->http()->withToken($token)
+            ->acceptJson()
+            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id']));
     }
 
     /**

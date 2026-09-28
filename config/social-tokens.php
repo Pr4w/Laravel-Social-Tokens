@@ -48,6 +48,14 @@ return [
     'check_static_schedule' => 'daily',
 
     /*
+    | Safety breaker for that check: when at least `min_checked` credentials were
+    | checked and more than `max_terminal_ratio` of them came back rejected, the
+    | run treats it as a provider-side incident, flags nothing and logs a
+    | critical alert instead.
+    */
+    'check_static_breaker' => ['min_checked' => 10, 'max_terminal_ratio' => 0.2],
+
+    /*
     |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
