@@ -32,6 +32,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   client is rejected, renewal jobs for that provider skip the provider call for
   15 minutes. `invalid_grant`, `refresh_token_client_mismatch` and an
   `invalid_request` about the refresh token stay terminal.
+- `StoreLinkedInOrganizations` no longer flags the member's personal LinkedIn row
+  (the row whose `provider_user_id` is the member id) during reconciliation,
+  including when the member administers no organizations. That row shares the
+  member's `provider_holder_id`, so it was flagged "Organization no longer
+  administered" and could no longer post.
+- README: `StoreConnection` stores the LinkedIn personal profile only (it never
+  fans out to organizations), and the personal row does carry a
+  `provider_holder_id`.
 
 ### Added
 - `RenewalStrategy::requiresLiveAccessToken()`.
@@ -50,6 +58,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
   mention the refresh token (a truly dead refresh token will be flagged again,
   properly, by `invalid_grant`).
+- Personal LinkedIn rows wrongly flagged by earlier versions can be repaired by
+  reconnecting the profile, or with (check the linked credential is active first):
+  ```sql
+  UPDATE social_accounts SET status = 'active', last_error = NULL
+  WHERE provider = 'linkedin' AND provider_user_id = provider_holder_id
+    AND status = 'needs_reconnect'
+    AND last_error = 'Organization no longer administered by the connected LinkedIn member.';
+  ```
 
 ## [1.1.0]
 

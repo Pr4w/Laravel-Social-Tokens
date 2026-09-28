@@ -23,9 +23,10 @@ use RuntimeException;
  * Because LinkedIn's token exchange is app-side (Socialite's driver can't fetch
  * the profile with non-OIDC scopes), this action takes an already-obtained
  * member token and its metadata rather than a Socialite user. The personal
- * profile is a separate row (store it with StoreAccountFromSocialite) and is left
- * untouched by reconciliation — organization rows carry provider_holder_id, the
- * personal row does not.
+ * profile is a separate row (store it with StoreAccountFromSocialite). It also
+ * carries provider_holder_id = member id and shares the (linkedin, member id)
+ * credential with the organizations, so reconciliation excludes it explicitly
+ * by its provider_user_id (the member id).
  */
 class StoreLinkedInOrganizations
 {
@@ -115,13 +116,15 @@ class StoreLinkedInOrganizations
         });
 
         // Reconcile: organizations this member no longer administers (absent from
-        // the response) are flagged. Scoped to provider_holder_id, so the member's
-        // personal row (holder id null) and other members' orgs are never touched.
+        // the response) are flagged. Scoped to provider_holder_id, so other
+        // members' orgs are never touched; the member's personal row shares that
+        // holder id and is excluded by its provider_user_id.
         $managedIds = collect($organizations)->pluck('id')->filter()->values()->all();
 
         SocialAccount::query()
             ->where('provider', 'linkedin')
             ->where('provider_holder_id', $memberId)
+            ->where('provider_user_id', '!=', $memberId) // never the member's personal row
             ->where('status', AccountStatus::Active->value)
             ->when($managedIds !== [], fn ($query) => $query->whereNotIn('provider_user_id', $managedIds))
             ->get()

@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Actions\StoreAccountFromSocialite;
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -56,11 +57,9 @@ it('reconciles organizations the member no longer administers', function () {
         'provider' => 'linkedin', 'provider_user_id' => 'dropped-org',
         'provider_holder_id' => 'member-1', 'status' => AccountStatus::Active,
     ]);
-    // The member's personal row (holder id null) must never be touched.
-    $personal = SocialAccount::create([
-        'provider' => 'linkedin', 'provider_user_id' => 'member-1',
-        'provider_holder_id' => null, 'status' => AccountStatus::Active,
-    ]);
+    // The member's personal row (stored by the real action, so it carries the
+    // same holder id as the organizations) must never be touched.
+    $personal = app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser(['id' => 'member-1']));
 
     fakeOrganizations([orgElement('111', 'Acme')]);
     $this->store->handle(accessToken: 'member-token', memberId: 'member-1');

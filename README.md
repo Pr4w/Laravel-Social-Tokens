@@ -93,7 +93,8 @@ drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 
 Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
-handles TikTok, Google, Instagram, Threads, LinkedIn and Facebook.
+handles TikTok, Google, Instagram, Threads and Facebook, and the LinkedIn
+personal profile (for LinkedIn organizations, see below).
 
 Which scopes to request is your app's decision (they drive the consent screen
 and your provider app review), so you supply them at redirect — the package does
@@ -155,9 +156,10 @@ call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages
 ### LinkedIn: company pages
 
 LinkedIn's token exchange is app-side (Socialite's driver can't fetch the profile
-with the non-OIDC posting scopes), so `StoreConnection` doesn't route it. You
-obtain the member token yourself, then fan out to the organizations they
-administer with `StoreLinkedInOrganizations`:
+with the non-OIDC posting scopes). `StoreConnection` stores only the member's
+personal profile (one row, through `StoreAccountFromSocialite`); it does not fan
+out to organizations. You obtain the member token yourself, then fan out to the
+organizations they administer with `StoreLinkedInOrganizations`:
 
 ```php
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
@@ -174,8 +176,10 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
 
 Every organization posts with the same member token, so each row mirrors it (the
 organization URN is stored in `profile` for posting). If you also post as the
-member, store that as its own row with `StoreAccountFromSocialite` — it carries no
-`provider_holder_id`, so reconciliation only ever touches the organization rows.
+member, store that as its own row with `StoreAccountFromSocialite`. It shares the
+member's credential and `provider_holder_id` with the organizations, and
+reconciliation excludes it by its `provider_user_id` (the member id), so it only
+ever touches the organization rows.
 
 ## Renewing
 
