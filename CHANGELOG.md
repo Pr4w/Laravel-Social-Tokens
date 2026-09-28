@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [1.2.0]
 
 ### Security
 - **Secrets no longer leak through error messages.** Guzzle ends transport
