@@ -45,16 +45,22 @@ class SocialTokensServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
         $this->app->afterResolving(Schedule::class, function (Schedule $schedule) {
-            $frequency = config('social-tokens.dispatch_schedule', 'everyFifteenMinutes');
-
-            $schedule->command('social-tokens:dispatch-renewals')
-                ->{$frequency}()
-                ->withoutOverlapping();
+            // Read here, not in boot(): each schedule:run resolves a fresh
+            // Schedule. A falsy frequency disables that entry (the command stays
+            // available to schedule yourself).
+            if ($frequency = config('social-tokens.dispatch_schedule', 'everyFifteenMinutes')) {
+                $schedule->command('social-tokens:dispatch-renewals')
+                    ->{$frequency}()
+                    ->withoutOverlapping(10) // it only dispatches unique jobs: never hold the mutex for a day
+                    ->onOneServer();
+            }
 
             if ($checkFrequency = config('social-tokens.check_static_schedule', 'daily')) {
                 $schedule->command('social-tokens:check-static')
                     ->{$checkFrequency}()
-                    ->withoutOverlapping();
+                    ->withoutOverlapping(120)
+                    ->onOneServer()
+                    ->runInBackground(); // N sequential provider calls must not delay the app's own tasks
             }
         });
     }

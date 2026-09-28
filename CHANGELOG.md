@@ -92,6 +92,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   longer hands out the cached token of a credential disabled after the caller
   loaded it. This makes the README's "`CredentialNeedsReconnect` fires once"
   true under concurrency.
+- `dispatch_schedule => null` (or `false`) crashed the host app's scheduler
+  (`schedule:run`, `schedule:list` — including the app's own tasks); it now
+  disables the dispatcher schedule, like `check_static_schedule => null`.
+- Both scheduled commands now use `onOneServer()`, and `check-static` runs in the
+  background so its provider calls do not delay the app's tasks due the same
+  minute. Their overlap mutexes expire after 10 and 120 minutes (Laravel's
+  default is 24 hours: a killed process stopped every renewal for a day).
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -128,6 +135,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `terminalFailure('Credential is …')` without calling the provider.
   `validAccessTokenFor()` does one or two more queries per call, and throws
   `NeedsReconnectException` for an account deleted since it was loaded.
+- `check-static` runs in the background: its "Checked …" line no longer shows
+  in `schedule:run` output.
 - For Meta/Threads, `CredentialExpiringSoon` can now also follow a
   "successful" renewal that did not extend the token: the user must reconnect.
 - **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an

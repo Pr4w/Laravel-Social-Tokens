@@ -31,6 +31,10 @@ return [
     | lead time, so this only needs to run often enough to catch the shortest lead
     | time you support (TikTok renews a couple of hours early).
     |
+    | Set to null to disable (e.g. to schedule social-tokens:dispatch-renewals
+    | yourself). Both scheduled commands run withoutOverlapping()->onOneServer(),
+    | which needs a cache store shared by your servers.
+    |
     */
     'dispatch_schedule' => 'everyFifteenMinutes',
 

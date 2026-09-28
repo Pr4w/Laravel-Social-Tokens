@@ -188,6 +188,10 @@ passed and dispatches one `RenewCredential` job per credential — so one renewa
 keeps every account sharing that credential alive. Each provider declares its own
 lead time, so a single command handles token lifetimes from one hour to sixty
 days. The schedule is registered automatically; just run the Laravel scheduler.
+Set `dispatch_schedule` to `null` to schedule the command yourself. Both scheduled
+commands run `withoutOverlapping()->onOneServer()` (`check-static` also in the
+background): on several servers, use a shared cache store (redis, memcached,
+database, dynamodb) so that really runs once.
 
 Renewal failures are classified:
 
