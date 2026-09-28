@@ -225,16 +225,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   are corrected; a "Using a connector on its own" section is added.
 
 ### Upgrading
-- **If you followed the README and call `revoke($account->credential)` to remove
-  one account, switch to `disconnect($account)`**: `revoke()` revokes every
-  Instagram account of the same Facebook user, and every LinkedIn organization
-  plus the personal profile.
+- **Run `php artisan migrate`** (new column `social_tokens.failed_checks`). If
+  you published the package migrations, publish or copy
+  `2025_01_01_000006_add_failed_checks_to_social_tokens_table.php` too.
+- **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an
+  error tracker may hold `client_secret=` from a connection failure. Existing
+  `last_error` values written by earlier versions may also contain secrets:
+  clear or redact them (e.g. with `AbstractConnector::redactQueryStrings()`).
 - **Breaking:** `StoreConnection` and `StoreAccountFromSocialite` throw
   `InvalidArgumentException` for a provider without a connector (missing key or
   `driver => null`); they used to store the account as static, and it broke at
   expiry. Configure a connector (e.g. `'youtube' => ['driver' =>
   GoogleConnector::class]`, reading `services.youtube`) or stop routing that
   provider (e.g. X/Twitter) through the package.
+- **If you followed the README and call `revoke($account->credential)` to remove
+  one account, switch to `disconnect($account)`**: `revoke()` revokes every
+  Instagram account of the same Facebook user, and every LinkedIn organization
+  plus the personal profile.
+- `SocialToken::toArray()` / `toJson()` no longer include `access_token` /
+  `refresh_token`. Read them as attributes (`$token->access_token`) or call
+  `makeVisible([...])`.
 - Meta user credentials created by earlier versions with neither `expires_at`
   nor `renew_at` stay static. Schedule them once:
   ```php
@@ -311,16 +321,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ```
 - For Meta/Threads, `CredentialExpiringSoon` can now also follow a
   "successful" renewal that did not extend the token: the user must reconnect.
-- **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an
-  error tracker may hold `client_secret=` from a connection failure. Existing
-  `last_error` values written by earlier versions may also contain secrets:
-  clear or redact them (e.g. with `AbstractConnector::redactQueryStrings()`).
-- `SocialToken::toArray()` / `toJson()` no longer include `access_token` /
-  `refresh_token`. Read them as attributes (`$token->access_token`) or call
-  `makeVisible([...])`.
-- **Run `php artisan migrate`** (new column `social_tokens.failed_checks`). If
-  you published the package migrations, publish or copy
-  `2025_01_01_000006_add_failed_checks_to_social_tokens_table.php` too.
 - `check-static`: a bare Meta 190/102 is now flagged a day later (second
   consecutive run); permission codes no longer flag. A custom `ChecksCredential`
   connector that returns a plain `terminalFailure()` now needs two runs; return
