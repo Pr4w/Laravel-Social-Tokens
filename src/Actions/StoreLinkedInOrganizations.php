@@ -65,6 +65,21 @@ class StoreLinkedInOrganizations
             throw new RuntimeException('Could not list LinkedIn organizations: '.$organizations->reason);
         }
 
+        // Never forget a known refresh token: a re-sync without one (or the
+        // personal profile stored meanwhile) must not wipe it or its expiry.
+        $existing = SocialToken::query()
+            ->where('provider', 'linkedin')
+            ->where('provider_holder_id', $memberId)
+            ->first();
+
+        if ($existing !== null) {
+            $refreshToken ??= $existing->refresh_token;
+
+            if ($refreshExpiresAt === null && $refreshToken === $existing->refresh_token) {
+                $refreshExpiresAt = $existing->refresh_expires_at;
+            }
+        }
+
         $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
 
         // The shared renewable member credential every organization posts with.

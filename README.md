@@ -221,7 +221,11 @@ A credential that cannot be renewed unattended (LinkedIn without refresh tokens,
 or a refresh token past its own lifetime) is not cut off early: when its window
 opens, `CredentialExpiringSoon` fires once with the expiry date, the credential
 keeps posting, and it moves to `needs_reconnect` only if it actually expires
-before the user reconnects.
+before the user reconnects. The same warning comes a lead time **before** a
+refresh token dies (LinkedIn's live 365 days and are never extended), with the
+date the credential really stops working, so the member can re-authorise in
+time. A reconnect that brings a new refresh token re-arms it; storing a profile
+without a refresh token never erases a known one.
 
 Static credentials (Facebook page tokens) are never renewed, but die when the
 user changes their password, removes the app or loses the Page's admin role. A

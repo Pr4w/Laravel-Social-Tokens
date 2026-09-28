@@ -39,9 +39,11 @@ class StoreAccountFromSocialite
         $refreshToken = $user->refreshToken ?: null;
         $expiresAt = $user->expiresIn ? now()->addSeconds((int) $user->expiresIn) : null;
 
-        // refresh_expires_in is not on the Socialite contract; read it from the
-        // raw token response when the provider exposes it (e.g. TikTok).
-        $refreshExpiresIn = data_get($user, 'accessTokenResponseBody.refresh_expires_in');
+        // The refresh token lifetime is not on the Socialite contract; read it
+        // from the raw token response when the driver exposes it (TikTok names
+        // it refresh_expires_in, LinkedIn refresh_token_expires_in).
+        $refreshExpiresIn = data_get($user, 'accessTokenResponseBody.refresh_expires_in')
+            ?? data_get($user, 'accessTokenResponseBody.refresh_token_expires_in');
         $refreshExpiresAt = $refreshExpiresIn ? now()->addSeconds((int) $refreshExpiresIn) : null;
 
         // Upgrade to a long-lived token where the provider needs a distinct
@@ -61,6 +63,22 @@ class StoreAccountFromSocialite
                 $expiresAt = $exchanged->expiresAt ?? $expiresAt;
                 $refreshToken = $exchanged->refreshToken ?? $refreshToken;
                 $refreshExpiresAt = $exchanged->refreshExpiresAt ?? $refreshExpiresAt;
+            }
+        }
+
+        // Never forget a known refresh token: storing a profile without one
+        // (e.g. the LinkedIn personal row next to the organizations, which share
+        // this credential) must not wipe it or its expiry.
+        $existing = SocialToken::query()
+            ->where('provider', $connector->credentialProvider())
+            ->where('provider_holder_id', $user->getId())
+            ->first();
+
+        if ($existing !== null) {
+            $refreshToken ??= $existing->refresh_token;
+
+            if ($refreshExpiresAt === null && $refreshToken === $existing->refresh_token) {
+                $refreshExpiresAt = $existing->refresh_expires_at;
             }
         }
 

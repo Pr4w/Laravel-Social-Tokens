@@ -131,6 +131,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - Google's lead time was 10 minutes, shorter than the 15-minute dispatcher
   cadence, so Google tokens routinely expired before their renewal; it is now
   25 minutes.
+- **Users are warned before a refresh token dies, not after.** LinkedIn
+  refresh tokens live 365 days and are never extended, but nothing looked at
+  `refresh_expires_at` until it had passed: the warning came at best a lead
+  time before the access token died, and with an access token capped at the
+  refresh token's expiry there was none at all — the job refreshed on every
+  pass, then flagged the credential. `renew_at` now accounts for the refresh
+  token's expiry, and `CredentialExpiringSoon` fires once, a lead time before
+  it, with the date the credential really stops working.
+- `StoreAccountFromSocialite` and `StoreLinkedInOrganizations` no longer replace
+  a known refresh token or its expiry with null (storing the LinkedIn personal
+  profile, or re-syncing organizations, without one wiped it from the shared
+  credential), and `StoreAccountFromSocialite` also reads LinkedIn's
+  `refresh_token_expires_in`.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -152,6 +165,7 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   provider first. A renewable credential used to stay "usable" until its renewal
   came due (~53 days for Meta and Threads) even after the user revoked it.
 - `SocialToken::markNeedsReconnectOnce($reason, $checkedToken)`.
+- `SocialToken::isRefreshTokenExpiring($lead)`.
 - Config `check_renewable` (`SOCIAL_TOKENS_CHECK_RENEWABLE`, off by default):
   `check-static` also checks renewable credentials between renewals.
   `ThreadsConnector` (`/me`) and `LinkedInConnector` (token introspection) now
@@ -207,6 +221,22 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   to `needs_reconnect` (with `AccountNeedsReconnect`) at the member's next
   connect. To keep a different role list, set `posting_roles` in your published
   config.
+- `CredentialExpiringSoon` can now arrive **before** a refresh token expires
+  (reason "Refresh token expires soon…", `expiresAt` = the date the credential
+  stops working), and `renew_at` can be earlier than before. The connect actions
+  no longer erase `refresh_token` / `refresh_expires_at`; to forget a refresh
+  token, revoke or reconnect. Existing credentials only get the early warning
+  after their next renewal; to schedule it now, run once:
+  ```php
+  $registry = app(\Pr4w\SocialTokens\Support\ConnectorRegistry::class);
+  SocialToken::where('status', 'active')->whereNotNull('refresh_expires_at')->whereNotNull('renew_at')
+      ->each(function (SocialToken $token) use ($registry) {
+          if ($registry->has($token->provider)) {
+              $warnAt = $token->refresh_expires_at->copy()->sub($registry->for($token->provider)->leadTime());
+              $token->forceFill(['renew_at' => $token->renew_at->min($warnAt)])->save();
+          }
+      });
+  ```
 - For Meta/Threads, `CredentialExpiringSoon` can now also follow a
   "successful" renewal that did not extend the token: the user must reconnect.
 - **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an

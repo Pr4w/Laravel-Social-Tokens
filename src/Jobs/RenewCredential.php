@@ -17,6 +17,7 @@ use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
 use Throwable;
 
@@ -129,10 +130,45 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // The refresh token still works but is about to die, and nothing can
+        // extend it: warn the user, once, while there is still time.
+        if ($token->isRefreshTokenExpiring($connector->leadTime())) {
+            // One last refresh only if the access token would die before the
+            // refresh token does; a rotating refresh token may also come back
+            // with a new lifetime, in which case there is nothing to announce.
+            $refreshExpiresAt = $token->refresh_expires_at; // not null: the refresh token is expiring
+
+            if ($token->expires_at === null || ($refreshExpiresAt !== null && $token->expires_at->lessThan($refreshExpiresAt))) {
+                $result = $tokens->renewCredential($token);
+
+                if (! $result->succeeded()) {
+                    $this->handleFailure($token, $result);
+
+                    return;
+                }
+
+                $token->refresh();
+
+                if (! $token->isRefreshTokenExpiring($connector->leadTime())) {
+                    return;
+                }
+            }
+
+            $this->warnBeforeRefreshExpiry($token);
+
+            return;
+        }
+
         // Locked + double-checked renewal. On success the result is already
         // applied to the credential inside renewCredential().
-        $result = $tokens->renewCredential($token);
+        $this->handleFailure($token, $tokens->renewCredential($token));
+    }
 
+    /**
+     * React to a renewal result (success needs nothing: it is already applied).
+     */
+    protected function handleFailure(SocialToken $token, RenewalResult $result): void
+    {
         // A misconfigured app client is the operator's problem (already logged
         // as critical), never the member's: no retry storm, no flag. renew_at
         // stays in the past, so a later dispatcher run tries again.
@@ -152,6 +188,34 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
                 'Transient renewal failure: '.($result->reason ?? 'unknown')
             ),
         };
+    }
+
+    /**
+     * Announce the date the credential really stops working (the later of the
+     * access and refresh token expiries), once: renew_at is parked on it, the
+     * same convention as warnOrFlag(), so later passes neither re-warn nor
+     * refresh until then — where warnOrFlag() flags it if nobody reconnected.
+     */
+    protected function warnBeforeRefreshExpiry(SocialToken $token): void
+    {
+        $refreshExpiresAt = $token->refresh_expires_at;
+
+        if ($refreshExpiresAt === null) {
+            return;
+        }
+
+        $deadline = $token->expires_at !== null && $token->expires_at->greaterThan($refreshExpiresAt)
+            ? $token->expires_at
+            : $refreshExpiresAt;
+
+        if ($token->renew_at !== null && $token->renew_at->equalTo($deadline)) {
+            return;
+        }
+
+        $token->renew_at = $deadline;
+        $token->save();
+
+        event(new CredentialExpiringSoon($token, $deadline, 'Refresh token expires soon; the member must re-authorise.'));
     }
 
     /**

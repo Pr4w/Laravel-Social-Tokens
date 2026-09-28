@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Models;
 
 use Carbon\CarbonInterface;
+use Carbon\CarbonInterval;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -179,6 +180,14 @@ class SocialToken extends Model
         return $this->refresh_expires_at !== null && $this->refresh_expires_at->isPast();
     }
 
+    /** The refresh token still works but dies within $lead: time to warn the user. */
+    public function isRefreshTokenExpiring(CarbonInterval $lead): bool
+    {
+        return $this->refresh_expires_at !== null
+            && ! $this->isRefreshTokenExpired()
+            && $this->refresh_expires_at->copy()->sub($lead)->lessThanOrEqualTo(now());
+    }
+
     /**
      * Apply a successful credential refresh and recompute the renewal window.
      */
@@ -206,14 +215,20 @@ class SocialToken extends Model
             $this->refresh_token = $result->refreshToken;
         }
 
+        // Before renew_at: a refresh token nearing its end pulls renewal earlier.
+        if ($result->refreshExpiresAt !== null) {
+            $this->refresh_expires_at = $result->refreshExpiresAt;
+        }
+
         $notExtended = false;
 
         if ($result->expiresAt !== null) {
             $this->expires_at = $result->expiresAt;
-            $renewAt = $result->expiresAt->copy()->sub($connector->leadTime());
 
-            if ($renewAt->isFuture()) {
-                $this->renew_at = $renewAt;
+            // "Not extended" is judged on the access token alone: renew_at may
+            // legitimately land earlier because of the refresh token.
+            if ($result->expiresAt->copy()->sub($connector->leadTime())->isFuture()) {
+                $this->renew_at = static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at);
             } else {
                 // The provider did not push the expiry past the lead time (e.g.
                 // Meta returning the remaining lifetime): renewing again on every
@@ -228,7 +243,7 @@ class SocialToken extends Model
             // static and never renew it again — so mark the expiry unknown and
             // check back after one lead time.
             $this->expires_at = null;
-            $this->renew_at = now()->add($connector->leadTime());
+            $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at) ?? now()->add($connector->leadTime());
 
             if (config('social-tokens.log_unknown_errors', true)) {
                 Log::warning('[social-tokens] Renewal returned no expiry', [
@@ -236,10 +251,6 @@ class SocialToken extends Model
                     'token_id' => $this->getKey(),
                 ]);
             }
-        }
-
-        if ($result->refreshExpiresAt !== null) {
-            $this->refresh_expires_at = $result->refreshExpiresAt;
         }
 
         // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
