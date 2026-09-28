@@ -7,6 +7,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -35,6 +36,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * @property array<int, string>|null $scopes
  * @property ?string $last_error
  * @property int $failed_checks
+ * @property ?string $ownable_type
+ * @property int|string|null $ownable_id
  * @property AccountStatus $status
  */
 class SocialToken extends Model
@@ -76,6 +79,17 @@ class SocialToken extends Model
     // Relationships ---------------------------------------------------------
 
     /**
+     * The owner of the grant (2.0): each owner keeps its own credential, even
+     * for the same external holder.
+     *
+     * @return MorphTo<Model, $this>
+     */
+    public function ownable(): MorphTo
+    {
+        return $this->morphTo();
+    }
+
+    /**
      * @return HasMany<SocialAccount, $this>
      */
     public function accounts(): HasMany
@@ -84,6 +98,19 @@ class SocialToken extends Model
     }
 
     // Scopes ----------------------------------------------------------------
+
+    /**
+     * Credentials of one owner (or the owner-less ones for null).
+     *
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
+     */
+    public function scopeOwnedBy(Builder $query, ?Model $owner): Builder
+    {
+        return $owner === null
+            ? $query->whereNull('ownable_type')->whereNull('ownable_id')
+            : $query->whereMorphedTo('ownable', $owner);
+    }
 
     /**
      * Credentials whose renewal window has opened.
@@ -119,7 +146,15 @@ class SocialToken extends Model
             ->orWhereExists(fn ($sub) => $sub->selectRaw('1')->from($accounts)
                 ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
                 ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
-                ->where("{$accounts}.status", $active)));
+                ->where("{$accounts}.status", $active)
+                // Same owner (null-safe): another owner's Pages keep their own credential alive.
+                ->where(fn ($owner) => $owner
+                    ->where(fn ($same) => $same
+                        ->whereColumn("{$accounts}.ownable_type", "{$tokens}.ownable_type")
+                        ->whereColumn("{$accounts}.ownable_id", "{$tokens}.ownable_id"))
+                    ->orWhere(fn ($none) => $none
+                        ->whereNull("{$accounts}.ownable_type")
+                        ->whereNull("{$tokens}.ownable_type")))));
     }
 
     // Scopes ------------------------------------------------------------------

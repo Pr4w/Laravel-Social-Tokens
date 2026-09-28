@@ -85,6 +85,37 @@ class SocialAccount extends Model
         return $this->morphTo('connected_by');
     }
 
+    // Owner -----------------------------------------------------------------
+
+    /**
+     * The owner part of an account's (or credential's) identity: since 2.0 a
+     * row is unique per (provider, external id, owner). Uses the morph class,
+     * as associate() does, so a morph map is honoured. Null means no owner.
+     *
+     * @return array{ownable_type: ?string, ownable_id: mixed}
+     */
+    public static function ownerKey(?Model $owner): array
+    {
+        return [
+            'ownable_type' => $owner?->getMorphClass(),
+            'ownable_id' => $owner?->getKey(),
+        ];
+    }
+
+    /**
+     * Rows of one owner (or the owner-less ones for null). An external account
+     * can now have one row per owner: scope lookups by provider_user_id with it.
+     *
+     * @param  Builder<SocialAccount>  $query
+     * @return Builder<SocialAccount>
+     */
+    public function scopeOwnedBy(Builder $query, ?Model $owner): Builder
+    {
+        return $owner === null
+            ? $query->whereNull('ownable_type')->whereNull('ownable_id')
+            : $query->whereMorphedTo('ownable', $owner);
+    }
+
     // Scopes (per-account granted scopes) -----------------------------------
 
     /**

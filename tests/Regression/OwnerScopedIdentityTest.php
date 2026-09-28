@@ -36,10 +36,6 @@ use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Tests\Fixtures\Owner;
 
-// Owner-scoped identity changes the unique indexes and adds a backfill
-// migration: a breaking schema change planned for 2.0, out of scope for 1.x.
-beforeEach(fn () => $this->markTestSkipped('Owner-scoped identity is planned for 2.0 (schema change).'));
-
 /**
  * Fake the Graph API. /me/accounts answers per user token (read from the bearer
  * header), so each owner's user sees their own page tokens. An unknown token

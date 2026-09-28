@@ -73,6 +73,7 @@ class StoreLinkedInOrganizations
         $existing = SocialToken::query()
             ->where('provider', 'linkedin')
             ->where('provider_holder_id', $memberId)
+            ->ownedBy($owner)
             ->first();
 
         if ($existing !== null) {
@@ -91,7 +92,7 @@ class StoreLinkedInOrganizations
 
         // The shared renewable member credential every organization posts with.
         $credential = SocialToken::query()->updateOrCreate(
-            ['provider' => 'linkedin', 'provider_holder_id' => $memberId],
+            ['provider' => 'linkedin', 'provider_holder_id' => $memberId] + SocialAccount::ownerKey($owner),
             [
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,
@@ -125,7 +126,7 @@ class StoreLinkedInOrganizations
 
             // profile is merged, not replaced: keys the app stored itself survive.
             $account = SocialAccount::query()
-                ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $org['id']])
+                ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $org['id']] + SocialAccount::ownerKey($owner))
                 ->fill($attributes)
                 ->mergeProfile(['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null]);
 

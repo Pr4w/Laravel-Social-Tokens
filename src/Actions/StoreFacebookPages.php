@@ -95,7 +95,7 @@ class StoreFacebookPages
         // when the user manages a Page, so no credential is left orphaned.
         if ($pages !== []) {
             SocialToken::query()->updateOrCreate(
-                ['provider' => 'facebook', 'provider_holder_id' => $userId],
+                ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $userToken,
                     'refresh_token' => null,
@@ -118,7 +118,7 @@ class StoreFacebookPages
             $withScopes = $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[(string) $page['id']] ?? []];
 
             $token = SocialToken::query()->updateOrCreate(
-                ['provider' => 'facebook', 'provider_holder_id' => $page['id']],
+                ['provider' => 'facebook', 'provider_holder_id' => $page['id']] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $page['access_token'], // page token, ready to post with
                     'refresh_token' => null,
@@ -131,7 +131,7 @@ class StoreFacebookPages
             );
 
             return $this->persistAccount(
-                ['provider' => 'facebook', 'provider_user_id' => $page['id']],
+                ['provider' => 'facebook', 'provider_user_id' => $page['id']] + SocialAccount::ownerKey($owner),
                 [
                     'social_token_id' => $token->getKey(),
                     'provider_holder_id' => $userId,     // the Facebook user behind this page

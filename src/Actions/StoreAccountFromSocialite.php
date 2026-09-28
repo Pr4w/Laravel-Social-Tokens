@@ -72,6 +72,7 @@ class StoreAccountFromSocialite
         $existing = SocialToken::query()
             ->where('provider', $connector->credentialProvider())
             ->where('provider_holder_id', $user->getId())
+            ->ownedBy($owner)
             ->first();
 
         if ($existing !== null) {
@@ -93,7 +94,7 @@ class StoreAccountFromSocialite
             [
                 'provider' => $connector->credentialProvider(),
                 'provider_holder_id' => $user->getId(),
-            ],
+            ] + SocialAccount::ownerKey($owner), // one credential per owner: each keeps its own grant
             [
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,
@@ -110,7 +111,7 @@ class StoreAccountFromSocialite
             [
                 'provider' => $provider,
                 'provider_user_id' => $user->getId(),
-            ],
+            ] + SocialAccount::ownerKey($owner), // one row per owner
             [
                 'social_token_id' => $token->getKey(),
                 'provider_holder_id' => $user->getId(),

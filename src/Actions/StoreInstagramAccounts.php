@@ -110,7 +110,7 @@ class StoreInstagramAccounts
         $credential = $managedIgIds === []
             ? null
             : SocialToken::query()->updateOrCreate(
-                ['provider' => 'facebook', 'provider_holder_id' => $userId],
+                ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $userToken,
                     'refresh_token' => null,
@@ -133,7 +133,7 @@ class StoreInstagramAccounts
             }
 
             $accounts->push($this->persistAccount(
-                ['provider' => 'instagram', 'provider_user_id' => $ig['id']],
+                ['provider' => 'instagram', 'provider_user_id' => $ig['id']] + SocialAccount::ownerKey($owner),
                 [
                     'social_token_id' => $credential->getKey(), // posts with the shared user token
                     'provider_holder_id' => $userId,
@@ -151,7 +151,7 @@ class StoreInstagramAccounts
             // Companion Facebook Page: a static page-token credential + account.
             if ($withLinkedPages && ! empty($page['id']) && ! empty($page['access_token'])) {
                 $pageToken = SocialToken::query()->updateOrCreate(
-                    ['provider' => 'facebook', 'provider_holder_id' => $page['id']],
+                    ['provider' => 'facebook', 'provider_holder_id' => $page['id']] + SocialAccount::ownerKey($owner),
                     [
                         'access_token' => $page['access_token'],
                         'refresh_token' => null,
@@ -164,7 +164,7 @@ class StoreInstagramAccounts
                 );
 
                 $accounts->push($this->persistAccount(
-                    ['provider' => 'facebook', 'provider_user_id' => $page['id']],
+                    ['provider' => 'facebook', 'provider_user_id' => $page['id']] + SocialAccount::ownerKey($owner),
                     [
                         'social_token_id' => $pageToken->getKey(),
                         'provider_holder_id' => $userId,
