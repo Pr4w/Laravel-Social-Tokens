@@ -144,6 +144,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   profile, or re-syncing organizations, without one wiped it from the shared
   credential), and `StoreAccountFromSocialite` also reads LinkedIn's
   `refresh_token_expires_in`.
+- `MetaErrorMapper::map()` accepts any value: a response whose `error` is a
+  string (OAuth 2 style) used to throw a `TypeError` out of every Meta call; it
+  is now an unknown, retried and logged failure. Terminal and transient Meta
+  results now carry `code`, `error_subcode`, `type`, `message` and
+  `fbtrace_id` in their context, and the reason names the subcode
+  (`190/460 OAuthException: …`), which reaches `last_error` and
+  `CredentialNeedsReconnect`. A scalar JSON body no longer breaks any connector.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -228,6 +235,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   to `needs_reconnect` (with `AccountNeedsReconnect`) at the member's next
   connect. To keep a different role list, set `posting_roles` in your published
   config.
+- Meta reasons (`$result->reason`, `last_error`, `CredentialNeedsReconnect::$reason`)
+  read `190/460 OAuthException: …` when Meta sends a subcode (unchanged without
+  one). Code that parses them should read `$result->context['code']` /
+  `['error_subcode']` instead. To tell an uncatalogued error, test
+  `$result->unknown`, not a non-empty `context`.
 - If you extend `SocialTokens` and override `validAccessTokenFor()` or
   `renewCredential()`, add the new optional `int $minValiditySeconds = 30`
   parameter to your signature.

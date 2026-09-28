@@ -74,7 +74,8 @@ class InstagramConnector extends AbstractConnector
             return $response;
         }
 
-        $body = $response->json() ?? [];
+        $body = $response->json();
+        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
 
         if (! empty($body['error'])) {
             return MetaErrorMapper::map($body['error']);

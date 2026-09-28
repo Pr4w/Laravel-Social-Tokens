@@ -58,7 +58,8 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
             return $response;
         }
 
-        $body = $response->json() ?? [];
+        $body = $response->json();
+        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
 
         if (! empty($body['error'])) {
             return MetaErrorMapper::map($body['error']);
@@ -103,7 +104,7 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
         $body = $response->json();
         $body = is_array($body) ? $body : [];
 
-        if (is_array($body['error'] ?? null)) {
+        if (! empty($body['error'])) {
             return MetaErrorMapper::mapCredentialCheck($body['error']);
         }
 
@@ -130,7 +131,8 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
             return $response;
         }
 
-        $body = $response->json() ?? [];
+        $body = $response->json();
+        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
 
         if (! empty($body['error'])) {
             return MetaErrorMapper::map($body['error']);

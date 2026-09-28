@@ -118,7 +118,8 @@ class LinkedInConnector extends AbstractConnector implements ChecksCredential
             return $response;
         }
 
-        $body = $response->json() ?? [];
+        $body = $response->json();
+        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
 
         if (! empty($body['error'])) {
             $error = (string) $body['error'];
