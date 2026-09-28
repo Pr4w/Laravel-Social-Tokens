@@ -85,17 +85,25 @@ class StoreLinkedInOrganizations
         $accounts = collect($organizations)->map(function (array $org) use (
             $memberId, $credential, $owner, $connectedBy
         ) {
+            $attributes = [
+                'social_token_id' => $credential->getKey(), // shared member token
+                'provider_holder_id' => $memberId,          // the member whose token backs this org
+                'name' => $org['name'] ?? null,
+                'avatar' => $org['logo'] ?? null,
+                'status' => AccountStatus::Active,
+                'last_error' => null,
+                'profile' => ['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null],
+            ];
+
+            // Resolved from its URN because LinkedIn throttled the decoration:
+            // keep the name and logo already stored rather than erase them.
+            if (($org['name'] ?? null) === null) {
+                unset($attributes['name'], $attributes['avatar']);
+            }
+
             $account = SocialAccount::query()->updateOrCreate(
                 ['provider' => 'linkedin', 'provider_user_id' => $org['id']],
-                [
-                    'social_token_id' => $credential->getKey(), // shared member token
-                    'provider_holder_id' => $memberId,          // the member whose token backs this org
-                    'name' => $org['name'] ?? null,
-                    'avatar' => $org['logo'] ?? null,
-                    'status' => AccountStatus::Active,
-                    'last_error' => null,
-                    'profile' => ['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null],
-                ],
+                $attributes,
             );
 
             if ($owner) {

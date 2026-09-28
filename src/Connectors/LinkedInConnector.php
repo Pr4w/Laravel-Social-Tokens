@@ -135,7 +135,11 @@ class LinkedInConnector extends AbstractConnector
      *
      * Pages through the results with start/count: the action reconciles against
      * this list, so a truncated one would flag organizations the member still
-     * administers. Any failure returns a RenewalResult, never a partial list.
+     * administers. It goes on while LinkedIn announces paging.links rel=next or
+     * serves a full page (per paging.count). An organization whose decoration
+     * LinkedIn throttled is resolved from its URN. Any failure returns a
+     * RenewalResult, never a partial list: a non-2xx, a 2xx without an
+     * `elements` list, an approved grant it cannot resolve, or the safety cap.
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
@@ -150,7 +154,7 @@ class LinkedInConnector extends AbstractConnector
                 ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
                 ->get(self::ORGANIZATION_ACLS_URL, [
                     'q' => 'roleAssignee',
-                    'projection' => '(paging,elements*(role,state,organization~(id,localizedName,logoV2(original~:playableStreams))))',
+                    'projection' => '(paging,elements*(role,state,organization,organization~(id,localizedName,logoV2(original~:playableStreams))))',
                     'start' => $start,
                     'count' => self::ORGANIZATION_PAGE_SIZE,
                 ]));
@@ -162,17 +166,30 @@ class LinkedInConnector extends AbstractConnector
             if ($response->failed()) {
                 return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().').', [
                     'status' => $response->status(),
-                    'body' => $response->json(),
+                    'start' => $start,
                 ]);
             }
 
-            $batch = $response->json('elements', []);
+            $batch = $response->json('elements');
+
+            if (! is_array($batch) || ! array_is_list($batch)) {
+                return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().', no elements list).', [
+                    'status' => $response->status(),
+                    'start' => $start,
+                ]);
+            }
+
             $elements = array_merge($elements, $batch);
             $start += count($batch);
             $total = $response->json('paging.total');
 
+            // The page size LinkedIn actually served, and whether it says more follow.
+            $pageSize = min(self::ORGANIZATION_PAGE_SIZE, (int) ($response->json('paging.count') ?: self::ORGANIZATION_PAGE_SIZE));
+            $links = $response->json('paging.links');
+            $hasNext = is_array($links) && in_array('next', array_column(array_filter($links, 'is_array'), 'rel'), true);
+
             $done = $batch === []
-                || ($total !== null ? $start >= (int) $total : count($batch) < self::ORGANIZATION_PAGE_SIZE);
+                || ($total !== null ? $start >= (int) $total : (! $hasNext && count($batch) < $pageSize));
 
             if ($done) {
                 return $this->mapOrganizations($elements);
@@ -186,9 +203,9 @@ class LinkedInConnector extends AbstractConnector
 
     /**
      * @param  array<int, array<string, mixed>>  $elements  Raw organizationAcls elements.
-     * @return array<int, array<string, mixed>>
+     * @return array<int, array<string, mixed>>|RenewalResult
      */
-    private function mapOrganizations(array $elements): array
+    private function mapOrganizations(array $elements): array|RenewalResult
     {
         $organizations = [];
 
@@ -198,11 +215,19 @@ class LinkedInConnector extends AbstractConnector
                 continue;
             }
 
-            $org = $element['organization~'] ?? [];
+            // LinkedIn swaps `organization~` for `organization!` when it throttles
+            // decoration: name and logo are then unknown, the id is in the URN.
+            $org = is_array($element['organization~'] ?? null) ? $element['organization~'] : [];
             $id = $org['id'] ?? null;
 
+            if ($id === null && preg_match('/^urn:li:organization:(\d+)$/', (string) ($element['organization'] ?? ''), $matches)) {
+                $id = $matches[1];
+            }
+
+            // An approved grant we cannot place would read as "no longer
+            // administered": refuse the whole list rather than reconcile on it.
             if ($id === null) {
-                continue;
+                return RenewalResult::unknownFailure('LinkedIn returned an approved organization grant without a resolvable organization.');
             }
 
             $organizations[] = [

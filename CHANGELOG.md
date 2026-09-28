@@ -37,6 +37,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   including when the member administers no organizations. That row shares the
   member's `provider_holder_id`, so it was flagged "Organization no longer
   administered" and could no longer post.
+- **An incomplete or malformed listing no longer flags accounts.** Reconciliation
+  flags every account missing from the provider's listing, and a listing page
+  that was not a 2xx carrying the list (an HTML 4xx from a proxy or WAF, `{}`, an
+  empty 404, a 200 without `data` / `elements`) was read as "end of the list".
+  `fetchPages()` and `fetchOrganizations()` now return a failure instead, so the
+  `Store*` actions throw their documented `RuntimeException` before reconciling.
+  LinkedIn also pages on `paging.links rel=next` / `paging.count` instead of
+  assuming a short page is the last one, resolves an organization from its URN
+  when LinkedIn throttles its decoration (keeping the stored name and logo), and
+  refuses to reconcile while an approved grant cannot be resolved.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.

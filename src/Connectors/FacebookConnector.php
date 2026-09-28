@@ -235,8 +235,9 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      *
      * Follows paging.next to the end: the actions reconcile against this list
      * and flag every page missing from it, so a truncated list would flag pages
-     * the user still manages. Any failure, including hitting the safety cap,
-     * returns a RenewalResult rather than a partial list.
+     * the user still manages. Any failure returns a RenewalResult rather than a
+     * partial list: a Graph error, a non-2xx, a 2xx without a `data` list (an
+     * HTML page from a proxy, `{}`, a captive portal), or the safety cap.
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
@@ -258,13 +259,25 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
                 return $response;
             }
 
-            $body = $response->json() ?? [];
+            $body = $response->json();
+            $body = is_array($body) ? $body : [];
 
             if (! empty($body['error'])) {
                 return MetaErrorMapper::map($body['error']);
             }
 
-            $pages = array_merge($pages, $body['data'] ?? []);
+            // Anything but a 2xx carrying a list is not "the end of the list".
+            // No body in the context: a partial one may hold page tokens.
+            $data = $body['data'] ?? null;
+
+            if (! $response->successful() || ! is_array($data) || ! array_is_list($data)) {
+                return RenewalResult::unknownFailure('Could not list Facebook pages (HTTP '.$response->status().', no data list).', [
+                    'status' => $response->status(),
+                    'result_page' => $resultPage + 1,
+                ]);
+            }
+
+            $pages = array_merge($pages, $data);
             $next = $body['paging']['next'] ?? null;
 
             if ($next === null) {
