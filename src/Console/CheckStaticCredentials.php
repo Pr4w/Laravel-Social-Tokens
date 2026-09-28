@@ -27,6 +27,12 @@ use Throwable;
  *    rotation) is logged and skipped, never flagged;
  *  - a credential whose token changed during the check (reconnected meanwhile)
  *    is left alone.
+ *
+ * With `check_renewable` on, it also asks about renewable credentials between
+ * two renewals (the Meta user token behind Instagram, Threads, LinkedIn), so a
+ * token revoked by the user is caught before its renewal comes due. A
+ * credential whose renewal is due, or whose token expired, is left to the
+ * renewal job. Checks only ask: nothing is renewed or re-dated.
  */
 class CheckStaticCredentials extends Command
 {
@@ -35,24 +41,36 @@ class CheckStaticCredentials extends Command
 
     protected $signature = 'social-tokens:check-static';
 
-    protected $description = 'Flag static credentials (e.g. Facebook page tokens) the provider no longer accepts.';
+    protected $description = 'Flag static credentials (e.g. Facebook page tokens), and optionally renewable ones, the provider no longer accepts.';
 
     public function handle(ConnectorRegistry $registry): int
     {
         $checked = 0;
         $errors = 0;
+        $checkedByKind = ['static' => 0, 'renewable' => 0];
 
-        /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int}> $terminal */
+        /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int, kind: string}> $terminal */
         $terminal = [];
+
+        $checkRenewable = (bool) config('social-tokens.check_renewable', false);
 
         // Phase 1: ask the provider about every credential, writing no verdict.
         SocialToken::query()
             ->where('status', AccountStatus::Active->value)
-            ->whereNull('expires_at')
-            ->whereNull('renew_at')
+            ->where(function ($query) use ($checkRenewable) {
+                $query->where(fn ($query) => $query->whereNull('expires_at')->whereNull('renew_at'));
+
+                if ($checkRenewable) {
+                    // Renewable, and not the renewal job's yet.
+                    $query->orWhere(fn ($query) => $query->whereNotNull('renew_at')->where('renew_at', '>', now())
+                        ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()->addMinute())));
+                }
+            })
             ->has('accounts')
             ->lazyById()
-            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal) {
+            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind) {
+                $kind = $token->renew_at === null ? 'static' : 'renewable';
+
                 if (! $registry->has($token->provider)) {
                     return;
                 }
@@ -79,6 +97,7 @@ class CheckStaticCredentials extends Command
                 }
 
                 $checked++;
+                $checkedByKind[$kind]++;
                 $cipher = $token->getRawOriginal('access_token');
 
                 if ($result->succeeded()) {
@@ -92,6 +111,7 @@ class CheckStaticCredentials extends Command
                         'reason' => (string) $result->reason,
                         'definitive' => (bool) ($result->context['definitive'] ?? false),
                         'strikes' => $token->failed_checks + 1,
+                        'kind' => $kind,
                     ];
                 } elseif ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
@@ -120,18 +140,18 @@ class CheckStaticCredentials extends Command
                 'max_terminal_ratio' => $maxRatio,
             ]);
 
-            $this->info("Checked {$checked} static credential(s), flagged 0.");
+            $this->info("Checked {$checkedByKind['static']} static credential(s), flagged 0.");
             $this->error('Aborted: '.count($terminal)." of {$checked} credentials were rejected at once; nothing was flagged.");
 
             return self::FAILURE;
         }
 
-        $flagged = 0;
+        $flagged = ['static' => 0, 'renewable' => 0];
 
         foreach ($terminal as $verdict) {
             try {
                 if ($verdict['definitive'] || $verdict['strikes'] >= self::STRIKES_TO_FLAG) {
-                    $flagged += $this->flag($verdict['id'], $verdict['cipher'], $verdict['reason']) ? 1 : 0;
+                    $flagged[$verdict['kind']] += $this->flag($verdict['id'], $verdict['cipher'], $verdict['reason']) ? 1 : 0;
                 } else {
                     SocialToken::query()
                         ->whereKey($verdict['id'])
@@ -148,7 +168,11 @@ class CheckStaticCredentials extends Command
             }
         }
 
-        $this->info("Checked {$checked} static credential(s), flagged {$flagged}.");
+        $this->info("Checked {$checkedByKind['static']} static credential(s), flagged {$flagged['static']}.");
+
+        if ($checkRenewable) {
+            $this->info("Checked {$checkedByKind['renewable']} renewable credential(s), flagged {$flagged['renewable']}.");
+        }
 
         if ($errors > 0) {
             $this->warn("{$errors} credential(s) could not be checked; see the log.");

@@ -145,6 +145,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - Migration `2025_01_01_000006`: `social_tokens.failed_checks`.
 - Config `check_static_breaker`.
 - `SocialToken::inUse()` scope and `SocialToken::renewAtFor()`.
+- `SocialTokens::reportRejected($account, $reason, terminal: true, rejectedToken: null)`:
+  report a token the provider rejected at publish time. Flags the credential
+  once (returns whether this call did), never touches a revoked credential or
+  one that no longer holds `$rejectedToken`, and with `terminal: false` asks the
+  provider first. A renewable credential used to stay "usable" until its renewal
+  came due (~53 days for Meta and Threads) even after the user revoked it.
+- `SocialToken::markNeedsReconnectOnce($reason, $checkedToken)`.
+- Config `check_renewable` (`SOCIAL_TOKENS_CHECK_RENEWABLE`, off by default):
+  `check-static` also checks renewable credentials between renewals.
+  `ThreadsConnector` (`/me`) and `LinkedInConnector` (token introspection) now
+  implement `ChecksCredential`.
 - Config `connectors.linkedin.posting_roles` (defaults to
   `LinkedInConnector::DEFAULT_POSTING_ROLES`; an empty or missing list falls
   back to the defaults, so a published v1.1 config keeps working).

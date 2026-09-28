@@ -266,6 +266,29 @@ try {
 }
 ```
 
+When the provider rejects a token at publish time, report it, so every account
+sharing that credential stops posting (and your app is told once):
+
+```php
+try {
+    // ... call the provider API with $token
+} catch (YourProviderError $e) {
+    app(SocialTokens::class)->reportRejected(
+        $account,
+        $e->safeMessage(),                 // no secrets in the reason
+        terminal: $e->isDeadToken(),       // Meta 190/102 or a session subcode, OAuth invalid_grant/invalid_token
+        rejectedToken: $token,             // ignored if the user reconnected meanwhile
+    );
+}
+```
+
+With `terminal: false` (an ambiguous 401), the package first asks the provider
+whether the token still works, and flags only if it confirms. To catch revoked
+tokens between two renewals without waiting for a failed post, set
+`SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
+checks renewable Meta, Threads and LinkedIn credentials (LinkedIn uses
+`services.linkedin` for token introspection).
+
 ## Account status
 
 ```

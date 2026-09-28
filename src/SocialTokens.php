@@ -6,6 +6,7 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
@@ -199,6 +200,63 @@ class SocialTokens
         $token->markRevoked();
 
         $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
+    }
+
+    /**
+     * Report that the provider rejected an account's token at publish time.
+     * Flags the account's credential needs_reconnect, once: returns true only
+     * when THIS call flagged it (one CredentialNeedsReconnect, the first reason
+     * kept). A revoked credential, or one that no longer holds $rejectedToken
+     * (the user reconnected meanwhile), is left alone.
+     *
+     * $terminal: the rejection proves the token is dead (Meta 190/102 or a
+     * session subcode, OAuth invalid_grant/invalid_token) and is trusted as is,
+     * with no provider call. Otherwise (an ambiguous 401) the provider is asked,
+     * when the connector implements ChecksCredential, and the credential is
+     * flagged only if it confirms. Pass a reason without secrets.
+     */
+    public function reportRejected(SocialAccount $account, string $reason, bool $terminal = true, ?string $rejectedToken = null): bool
+    {
+        // Fresh from the database: the caller's loaded relation may be stale.
+        $token = $account->social_token_id !== null ? SocialToken::query()->find($account->social_token_id) : null;
+
+        if ($token === null || $token->status !== AccountStatus::Active) {
+            return false;
+        }
+
+        if (! $terminal) {
+            if (! $this->registry->has($token->provider)) {
+                return false;
+            }
+
+            $connector = $this->registry->for($token->provider);
+
+            if (! $connector instanceof ChecksCredential) {
+                return false;
+            }
+
+            $checkedToken = $token->access_token;
+            $result = $connector->checkCredential($token);
+
+            if ($result->outcome !== RenewalOutcome::Terminal) {
+                if ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
+                    Log::error('[social-tokens] Uncatalogued credential check error', [
+                        'provider' => $token->provider,
+                        'token_id' => $token->getKey(),
+                        'reason' => $result->reason,
+                        'context' => $result->context,
+                    ]);
+                }
+
+                return false;
+            }
+
+            // The provider's reason ("password changed") is the real cause.
+            $reason = $result->reason ?? $reason;
+            $rejectedToken ??= $checkedToken;
+        }
+
+        return $token->markNeedsReconnectOnce($reason, $rejectedToken);
     }
 
     protected function lockKey(SocialToken $token): string

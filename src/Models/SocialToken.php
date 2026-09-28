@@ -295,11 +295,52 @@ class SocialToken extends Model
      */
     public function markNeedsReconnect(?string $reason = null): self
     {
-        if ($this->transitionStatus(AccountStatus::NeedsReconnect, [AccountStatus::Active], ['last_error' => $reason])) {
+        $this->markNeedsReconnectOnce($reason);
+
+        return $this;
+    }
+
+    /**
+     * markNeedsReconnect() that says whether THIS call flagged the credential,
+     * and can be limited to a given token: with $checkedToken, the credential
+     * is flagged only if it still holds that token (a rejection of a token a
+     * reconnect already replaced says nothing about the new one).
+     */
+    public function markNeedsReconnectOnce(?string $reason = null, ?string $checkedToken = null): bool
+    {
+        if ($checkedToken !== null && $this->exists) {
+            // Tokens are encrypted with a random IV: compare the decrypted value
+            // of the current row, then pin the update to that exact ciphertext.
+            $current = $this->newQuery()->whereKey($this->getKey())->first();
+
+            if ($current === null || ! hash_equals((string) $current->access_token, $checkedToken)) {
+                if ($current !== null) {
+                    $this->status = $current->status;
+                    $this->syncOriginalAttribute('status');
+                }
+
+                return false;
+            }
+
+            $changed = $this->newQuery()
+                ->whereKey($this->getKey())
+                ->where('status', AccountStatus::Active->value)
+                ->where('access_token', $current->getRawOriginal('access_token'))
+                ->update(['status' => AccountStatus::NeedsReconnect->value, 'last_error' => $reason]) > 0;
+
+            if ($changed) {
+                $this->forceFill(['status' => AccountStatus::NeedsReconnect, 'last_error' => $reason])
+                    ->syncOriginalAttributes(['status', 'last_error']);
+            }
+        } else {
+            $changed = $this->transitionStatus(AccountStatus::NeedsReconnect, [AccountStatus::Active], ['last_error' => $reason]);
+        }
+
+        if ($changed) {
             event(new CredentialNeedsReconnect($this, $reason));
         }
 
-        return $this;
+        return $changed;
     }
 
     /** One-way and idempotent: fires CredentialRevoked only on the actual change. */

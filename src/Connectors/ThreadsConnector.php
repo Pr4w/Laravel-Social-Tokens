@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -19,11 +20,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * Mechanically identical to Instagram's strategy, different host and grant.
  * The refresh call needs only the access token, no client credentials.
  */
-class ThreadsConnector extends AbstractConnector
+class ThreadsConnector extends AbstractConnector implements ChecksCredential
 {
     protected const REFRESH_URL = 'https://graph.threads.net/refresh_access_token';
 
     protected const EXCHANGE_URL = 'https://graph.threads.net/access_token';
+
+    protected const ME_URL = 'https://graph.threads.net/v1.0/me';
 
     public function renewalStrategy(): RenewalStrategy
     {
@@ -75,6 +78,38 @@ class ThreadsConnector extends AbstractConnector
             expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
             refreshToken: null,
         );
+    }
+
+    /**
+     * Ask Threads whether the token still works (GET /me), without renewing it.
+     */
+    public function checkCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing access token.', ['definitive' => true]);
+        }
+
+        $accessToken = $token->access_token;
+
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get(self::ME_URL, [
+            'fields' => 'id',
+            'access_token' => $accessToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        if (is_array($body['error'] ?? null)) {
+            return MetaErrorMapper::mapCredentialCheck($body['error']);
+        }
+
+        return isset($body['id'])
+            ? RenewalResult::success(accessToken: $accessToken)
+            : RenewalResult::unknownFailure('Malformed Threads /me response, no id.', ['status' => $response->status()]);
     }
 
     /**

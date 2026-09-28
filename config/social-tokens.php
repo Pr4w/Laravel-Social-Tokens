@@ -60,6 +60,14 @@ return [
     'check_static_breaker' => ['min_checked' => 10, 'max_terminal_ratio' => 0.2],
 
     /*
+    | When true, that same run also asks about renewable credentials between two
+    | renewals (the Meta user token behind Instagram, Threads, LinkedIn), for
+    | connectors implementing ChecksCredential, so a token the user revoked is
+    | caught before its renewal comes due. One light call per credential per run.
+    */
+    'check_renewable' => env('SOCIAL_TOKENS_CHECK_RENEWABLE', false),
+
+    /*
     |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------

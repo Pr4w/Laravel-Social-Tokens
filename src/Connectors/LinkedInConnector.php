@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -30,11 +31,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *    needs_reconnect only once it has actually expired
  *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
  */
-class LinkedInConnector extends AbstractConnector
+class LinkedInConnector extends AbstractConnector implements ChecksCredential
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
     protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
+
+    protected const INTROSPECT_URL = 'https://www.linkedin.com/oauth/v2/introspectToken';
 
     protected const ORGANIZATION_PAGE_SIZE = 100;
 
@@ -59,6 +62,38 @@ class LinkedInConnector extends AbstractConnector
     public function leadTime(): CarbonInterval
     {
         return CarbonInterval::days(5);
+    }
+
+    /**
+     * Ask LinkedIn whether the member token still works (token introspection),
+     * without renewing it. Only an explicit `active: false` is a verdict; any
+     * other answer (e.g. invalid_client) proves nothing about the member.
+     */
+    public function checkCredential(SocialToken $token): RenewalResult
+    {
+        if (empty($token->access_token)) {
+            return RenewalResult::terminalFailure('Missing access token.', ['definitive' => true]);
+        }
+
+        $accessToken = $token->access_token;
+
+        $response = $this->attempt(fn () => $this->http()->asForm()->acceptJson()->post(self::INTROSPECT_URL, [
+            'client_id' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+            'token' => $accessToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $active = $response->json('active');
+
+        return match ($active) {
+            true => RenewalResult::success(accessToken: $accessToken),
+            false => RenewalResult::terminalFailure('LinkedIn token '.($response->json('status') ?? 'inactive').'.', ['definitive' => true]),
+            default => RenewalResult::unknownFailure('Unexpected LinkedIn token introspection response.', ['status' => $response->status()]),
+        };
     }
 
     public function refreshCredential(SocialToken $token): RenewalResult
