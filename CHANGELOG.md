@@ -160,6 +160,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   could not post. Now `null` means unknown and never overwrites a known list,
   lists are normalised, `profile` is merged, and Pages without a token are not
   stored (they still count as managed, so they are not flagged either).
+- Threads renewals are refused (transient, no call to Meta) while the token is
+  less than 24 hours old, which `th_refresh_token` rejects. The token's age comes
+  from `last_renewed_at`, now also set at connection and reconnection; rows
+  where it is unknown are renewed as before.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -261,6 +265,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `profile` is merged, not replaced. To clean old rows:
   `SocialAccount::whereNotNull('scopes')->each(fn ($a) => $a->forceFill(['scopes' => SocialToken::normaliseScopes($a->scopes)])->saveQuietly())`
   (same for `SocialToken`; leave `[]` from Meta alone, it may be a real "none").
+- `social_tokens.last_renewed_at` is now the issue date of the current token: it
+  is set at connection and reconnection too, not only by a renewal. If you read
+  `last_renewed_at !== null` as "renewed at least once", adapt it.
 - If you extend `SocialTokens` and override `validAccessTokenFor()` or
   `renewCredential()`, add the new optional `int $minValiditySeconds = 30`
   parameter to your signature.

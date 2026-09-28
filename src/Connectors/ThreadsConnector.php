@@ -38,8 +38,19 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
         return CarbonInterval::days(7);
     }
 
+    /** th_refresh_token refuses a token less than 24 hours old (Meta docs). */
+    public const MINIMUM_TOKEN_AGE_HOURS = 24;
+
     public function refreshCredential(SocialToken $token): RenewalResult
     {
+        // last_renewed_at is when the current token was issued (renewal or
+        // connection). Null means unknown (backfilled or imported rows): keep
+        // trying, as before, rather than guess from updated_at or created_at.
+        if ($token->last_renewed_at !== null
+            && $token->last_renewed_at->greaterThan(now()->subHours(self::MINIMUM_TOKEN_AGE_HOURS))) {
+            return RenewalResult::transientFailure('Threads token is less than 24h old and cannot be refreshed yet.');
+        }
+
         return $this->refreshWithToken($token->access_token);
     }
 

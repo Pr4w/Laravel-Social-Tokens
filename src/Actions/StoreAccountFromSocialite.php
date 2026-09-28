@@ -100,6 +100,7 @@ class StoreAccountFromSocialite
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
                 'renew_at' => $renewAt,
+                'last_renewed_at' => now(), // the token was just issued: its age starts here
                 'status' => AccountStatus::Active,
                 'last_error' => null,
             ] + $withScopes,
