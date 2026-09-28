@@ -183,6 +183,7 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
     owner: auth()->user(),
     refreshToken: $token['refresh_token'] ?? null,
     expiresAt: isset($token['expires_in']) ? now()->addSeconds($token['expires_in']) : null,
+    scopes: explode(',', $token['scope'] ?? ''), // an empty string is stored as "unknown"
 );
 ```
 
@@ -360,6 +361,16 @@ grant a scope for some Pages or Instagram accounts and not others (granular
 permissions), so `StoreFacebookPages` and `StoreInstagramAccounts` resolve each
 row's real scopes via `debug_token`. That lets you decide whether a given account
 has everything it needs — and skip or warn on the ones that fall short.
+
+`scopes` is `null` when they are **unknown** (the provider did not report them,
+or `debug_token` failed) and a list when known — `[]` means none granted.
+`grantedScopes()` treats unknown as none; call `$account->scopesKnown()` first if
+you want to treat unknown differently. An unknown value never overwrites a known
+list, and lists are normalised (trimmed, no blanks or duplicates). Threads never
+reports scopes, so its rows stay `null` unless you write them. The account's
+`profile` is merged, not replaced: keys you store there yourself survive a
+reconnect. A Facebook Page listed without an `access_token` (the user has no
+posting task on it) is not stored.
 
 ## Adding a provider
 

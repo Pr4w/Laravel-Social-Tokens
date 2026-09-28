@@ -162,7 +162,20 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
             return $response;
         }
 
-        $data = $response->json('data', []);
+        // A failed call (top-level error, 5xx, no `data`) is a failure, never
+        // "no scopes granted": the caller keeps the scopes it already stored.
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        $data = $body['data'] ?? null;
+
+        if ($response->failed() || ! is_array($data)) {
+            return RenewalResult::unknownFailure('Malformed debug_token response.', ['status' => $response->status()]);
+        }
 
         if (! empty($data['error'])) {
             return MetaErrorMapper::map($data['error']);

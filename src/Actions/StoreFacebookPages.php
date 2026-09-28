@@ -86,8 +86,9 @@ class StoreFacebookPages
         $pageIds = collect($pages)->pluck('id')->filter()->map(fn ($id) => (string) $id)->all();
         $scopesByAccount = $connector->grantedScopesByAccount($userToken, $pageIds);
 
+        // Unknown (debug_token failed): keep whatever scopes are stored.
         if ($scopesByAccount instanceof RenewalResult) {
-            $scopesByAccount = [];
+            $scopesByAccount = null;
         }
 
         // 4a. The renewable Meta user credential (shared with Instagram). Only
@@ -108,35 +109,37 @@ class StoreFacebookPages
             );
         }
 
-        // 4. One static page-token credential + one account per page.
-        $accounts = collect($pages)->map(function (array $page) use ($userId, $scopesByAccount, $owner, $connectedBy) {
-            $scopes = $scopesByAccount[(string) ($page['id'] ?? '')] ?? [];
+        // 4. One static page-token credential + one account per page that can
+        // post: a Page listed without an access_token (no posting task for this
+        // user) is not stored. It still counts as managed below.
+        $postable = collect($pages)->filter(fn (array $page) => ! empty($page['id']) && ! empty($page['access_token']));
+
+        $accounts = $postable->values()->map(function (array $page) use ($userId, $scopesByAccount, $owner, $connectedBy) {
+            $withScopes = $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[(string) $page['id']] ?? []];
 
             $token = SocialToken::query()->updateOrCreate(
-                ['provider' => 'facebook', 'provider_holder_id' => $page['id'] ?? null],
+                ['provider' => 'facebook', 'provider_holder_id' => $page['id']],
                 [
-                    'access_token' => $page['access_token'] ?? null, // page token, ready to post with
+                    'access_token' => $page['access_token'], // page token, ready to post with
                     'refresh_token' => null,
                     'expires_at' => null,   // page tokens from a long lived user token do not expire
                     'renew_at' => null,     // static: never auto-refreshed
-                    'scopes' => $scopes,
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                     'failed_checks' => 0,
-                ],
+                ] + $withScopes,
             );
 
             return $this->persistAccount(
-                ['provider' => 'facebook', 'provider_user_id' => $page['id'] ?? null],
+                ['provider' => 'facebook', 'provider_user_id' => $page['id']],
                 [
                     'social_token_id' => $token->getKey(),
                     'provider_holder_id' => $userId,     // the Facebook user behind this page
                     'name' => $page['name'] ?? null,
                     'avatar' => data_get($page, 'picture.data.url'),
-                    'scopes' => $scopes,
                     'status' => AccountStatus::Active,
                     'last_error' => null,
-                ],
+                ] + $withScopes,
                 $owner,
                 $connectedBy,
             );
@@ -166,7 +169,15 @@ class StoreFacebookPages
      */
     private function persistAccount(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
     {
-        $account = SocialAccount::query()->updateOrCreate($keys, $attributes);
+        // profile is merged, not replaced: keys the app stored itself survive.
+        $profile = $attributes['profile'] ?? null;
+        unset($attributes['profile']);
+
+        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes);
+
+        if (is_array($profile)) {
+            $account->mergeProfile($profile);
+        }
 
         if ($owner) {
             $account->ownable()->associate($owner);

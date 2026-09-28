@@ -151,6 +151,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `fbtrace_id` in their context, and the reason names the subcode
   (`190/460 OAuthException: …`), which reaches `last_error` and
   `CredentialNeedsReconnect`. A scalar JSON body no longer breaks any connector.
+- **Stored data stays clean.** A failed `debug_token` (5xx, top-level error, no
+  `data`) wiped every Page's and Instagram account's scopes to `[]`; a provider
+  that reported no scopes stored `[]` or `[""]`, indistinguishable from "none
+  granted"; LinkedIn organizations never got scopes; a reconnect replaced the
+  account's whole `profile`, dropping keys the app stored there; and a Facebook
+  Page listed without an `access_token` was stored as an active account that
+  could not post. Now `null` means unknown and never overwrites a known list,
+  lists are normalised, `profile` is merged, and Pages without a token are not
+  stored (they still count as managed, so they are not flagged either).
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -173,6 +182,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   came due (~53 days for Meta and Threads) even after the user revoked it.
 - `SocialToken::markNeedsReconnectOnce($reason, $checkedToken)`.
 - `SocialToken::isRefreshTokenExpiring($lead)`.
+- `SocialToken::normaliseScopes()`, `SocialToken::scopesKnown()`,
+  `SocialAccount::scopesKnown()`, `SocialAccount::mergeProfile()`.
+- `StoreLinkedInOrganizations::handle(..., ?array $scopes = null)` (last
+  parameter): store the member's granted scopes on the credential and the
+  organizations.
 - `validAccessTokenFor($account, int $minValiditySeconds = 30)` and
   `renewCredential($token, int $minValiditySeconds = 30)`: a job that holds the
   token for minutes (Instagram/Threads container polling, video uploads) can ask
@@ -240,6 +254,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   one). Code that parses them should read `$result->context['code']` /
   `['error_subcode']` instead. To tell an uncatalogued error, test
   `$result->unknown`, not a non-empty `context`.
+- `$account->scopes` / `$credential->scopes` can be `null` where they used to be
+  `[]` or `[""]`; `grantedScopes()` and `hasScope()` answer as before. Use
+  `scopesKnown()` to tell "unknown" from "none granted". Pages without an
+  `access_token` are no longer returned or announced by `AccountConnected`.
+  `profile` is merged, not replaced. To clean old rows:
+  `SocialAccount::whereNotNull('scopes')->each(fn ($a) => $a->forceFill(['scopes' => SocialToken::normaliseScopes($a->scopes)])->saveQuietly())`
+  (same for `SocialToken`; leave `[]` from Meta alone, it may be a real "none").
 - If you extend `SocialTokens` and override `validAccessTokenFor()` or
   `renewCredential()`, add the new optional `int $minValiditySeconds = 30`
   parameter to your signature.

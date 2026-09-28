@@ -87,6 +87,15 @@ class SocialAccount extends Model
 
     // Scopes (per-account granted scopes) -----------------------------------
 
+    /**
+     * Whether the granted scopes are known. null means unknown (grantedScopes()
+     * then reports none); [] means the provider granted none.
+     */
+    public function scopesKnown(): bool
+    {
+        return is_array($this->scopes);
+    }
+
     /** @return array<int, string> */
     public function grantedScopes(): array
     {
@@ -111,6 +120,19 @@ class SocialAccount extends Model
     public function missingScopes(array $scopes): array
     {
         return array_values(array_diff($scopes, $this->grantedScopes()));
+    }
+
+    /**
+     * Merge keys into `profile` rather than replace it: the package's keys win,
+     * keys the app stored itself are kept.
+     *
+     * @param  array<string, mixed>  $values
+     */
+    public function mergeProfile(array $values): static
+    {
+        $this->profile = array_merge($this->profile ?? [], $values);
+
+        return $this;
     }
 
     // Effective status ------------------------------------------------------

@@ -95,9 +95,12 @@ class StoreInstagramAccounts
         // Per-account granted scopes (Meta grants granularly). Best effort.
         $scopesByAccount = $facebook->grantedScopesByAccount($userToken, $accountIds);
 
+        // Unknown (debug_token failed): keep whatever scopes are stored.
         if ($scopesByAccount instanceof RenewalResult) {
-            $scopesByAccount = [];
+            $scopesByAccount = null;
         }
+
+        $scopesFor = fn (string $id): array => $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[$id] ?? []];
 
         $managedIgIds = collect($pages)->pluck('instagram_business_account.id')->filter()->values()->all();
 
@@ -136,11 +139,10 @@ class StoreInstagramAccounts
                     'name' => $ig['username'] ?? ($page['name'] ?? null),
                     'nickname' => $ig['username'] ?? null,
                     'avatar' => $ig['profile_picture_url'] ?? null,
-                    'scopes' => $scopesByAccount[(string) $ig['id']] ?? [],
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                     'profile' => ['fb_page_id' => $page['id'] ?? null],
-                ],
+                ] + $scopesFor((string) $ig['id']),
                 $owner,
                 $connectedBy,
             ));
@@ -154,11 +156,10 @@ class StoreInstagramAccounts
                         'refresh_token' => null,
                         'expires_at' => null,
                         'renew_at' => null, // static
-                        'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
                         'status' => AccountStatus::Active,
                         'last_error' => null,
                         'failed_checks' => 0,
-                    ],
+                    ] + $scopesFor((string) $page['id']),
                 );
 
                 $accounts->push($this->persistAccount(
@@ -167,11 +168,10 @@ class StoreInstagramAccounts
                         'social_token_id' => $pageToken->getKey(),
                         'provider_holder_id' => $userId,
                         'name' => $page['name'] ?? null,
-                        'scopes' => $scopesByAccount[(string) $page['id']] ?? [],
                         'status' => AccountStatus::Active,
                         'last_error' => null,
                         'profile' => ['fb_page_id' => $page['id'], 'ig_account_id' => $ig['id']],
-                    ],
+                    ] + $scopesFor((string) $page['id']),
                     $owner,
                     $connectedBy,
                 ));
@@ -198,7 +198,15 @@ class StoreInstagramAccounts
      */
     private function persistAccount(array $keys, array $attributes, ?Model $owner, ?Model $connectedBy): SocialAccount
     {
-        $account = SocialAccount::query()->updateOrCreate($keys, $attributes);
+        // profile is merged, not replaced: keys the app stored itself survive.
+        $profile = $attributes['profile'] ?? null;
+        unset($attributes['profile']);
+
+        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes);
+
+        if (is_array($profile)) {
+            $account->mergeProfile($profile);
+        }
 
         if ($owner) {
             $account->ownable()->associate($owner);

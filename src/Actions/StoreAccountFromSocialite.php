@@ -84,6 +84,10 @@ class StoreAccountFromSocialite
 
         $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
 
+        // Unknown scopes (none reported) never overwrite a known list.
+        $scopes = SocialToken::normaliseScopes($user->approvedScopes);
+        $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
+
         // The credential (holder = the account's own id for a 1:1 provider).
         $token = SocialToken::query()->updateOrCreate(
             [
@@ -96,10 +100,9 @@ class StoreAccountFromSocialite
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
                 'renew_at' => $renewAt,
-                'scopes' => $user->approvedScopes,
                 'status' => AccountStatus::Active,
                 'last_error' => null,
-            ],
+            ] + $withScopes,
         );
 
         $account = SocialAccount::query()->updateOrCreate(
@@ -114,10 +117,9 @@ class StoreAccountFromSocialite
                 'nickname' => $user->getNickname(),
                 'email' => $user->getEmail(),
                 'avatar' => $user->getAvatar(),
-                'scopes' => $user->approvedScopes,
                 'status' => AccountStatus::Active,
                 'last_error' => null,
-            ],
+            ] + $withScopes,
         );
 
         if ($owner) {

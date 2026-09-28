@@ -40,6 +40,8 @@ class StoreLinkedInOrganizations
      * @param  string|null  $refreshToken  Member refresh token, if your app has MDP.
      * @param  CarbonInterface|null  $expiresAt  Access token expiry.
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
+     * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's `scope`, split on commas);
+     *                                           null means unknown and keeps the stored ones.
      * @return Collection<int, SocialAccount> One row per administered organization.
      *
      * @throws RuntimeException when the organizations cannot be listed.
@@ -52,6 +54,7 @@ class StoreLinkedInOrganizations
         ?string $refreshToken = null,
         ?CarbonInterface $expiresAt = null,
         ?CarbonInterface $refreshExpiresAt = null,
+        ?array $scopes = null,
     ): Collection {
         $connector = $this->registry->for('linkedin');
 
@@ -82,6 +85,10 @@ class StoreLinkedInOrganizations
 
         $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
 
+        // Unknown scopes (null) never overwrite a known list.
+        $scopes = SocialToken::normaliseScopes($scopes);
+        $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
+
         // The shared renewable member credential every organization posts with.
         $credential = SocialToken::query()->updateOrCreate(
             ['provider' => 'linkedin', 'provider_holder_id' => $memberId],
@@ -93,12 +100,12 @@ class StoreLinkedInOrganizations
                 'renew_at' => $renewAt,
                 'status' => AccountStatus::Active,
                 'last_error' => null,
-            ],
+            ] + $withScopes,
         );
 
         // One row per organization, keyed on the organization id.
         $accounts = collect($organizations)->map(function (array $org) use (
-            $memberId, $credential, $owner, $connectedBy
+            $memberId, $credential, $owner, $connectedBy, $withScopes
         ) {
             $attributes = [
                 'social_token_id' => $credential->getKey(), // shared member token
@@ -107,8 +114,7 @@ class StoreLinkedInOrganizations
                 'avatar' => $org['logo'] ?? null,
                 'status' => AccountStatus::Active,
                 'last_error' => null,
-                'profile' => ['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null],
-            ];
+            ] + $withScopes;
 
             // Resolved from its URN because LinkedIn throttled the decoration:
             // keep the name and logo already stored rather than erase them.
@@ -116,10 +122,11 @@ class StoreLinkedInOrganizations
                 unset($attributes['name'], $attributes['avatar']);
             }
 
-            $account = SocialAccount::query()->updateOrCreate(
-                ['provider' => 'linkedin', 'provider_user_id' => $org['id']],
-                $attributes,
-            );
+            // profile is merged, not replaced: keys the app stored itself survive.
+            $account = SocialAccount::query()
+                ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $org['id']])
+                ->fill($attributes)
+                ->mergeProfile(['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null]);
 
             if ($owner) {
                 $account->ownable()->associate($owner);
