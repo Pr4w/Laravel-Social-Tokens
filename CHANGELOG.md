@@ -3,6 +3,37 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [2.0.0]
+
+Identity is scoped to the owner. **Breaking:** see [UPGRADE.md](UPGRADE.md).
+
+### Changed (breaking)
+- An account is unique per `(provider, provider_user_id, owner)` and a
+  credential per `(provider, provider_holder_id, owner)`. When a second owner
+  connected a TikTok account, a Facebook Page, an Instagram account or a
+  LinkedIn organization a first owner already had, 1.x moved the single row (and
+  overwrote its credential with the second owner's token) without any event. Now
+  each owner keeps its own row, backed by its own credential; reconnecting for
+  the same owner, or without an owner, still updates the row in place.
+- A connection with an owner no longer adopts an existing owner-less row; it
+  creates its own.
+- Lookups by external id must be scoped to the owner (`ownedBy()`).
+
+### Added
+- Migration `2025_01_01_000007_scope_identity_to_owner`: adds the owner to
+  `social_tokens`, backfills it from the accounts (splitting a credential shared
+  by several owners), and swaps the unique indexes. Its `down()` refuses once two
+  owners share an external account.
+- `SocialAccount::ownedBy()` / `SocialToken::ownedBy()` scopes,
+  `SocialAccount::ownerKey()`, and the `SocialToken::ownable()` relation.
+
+### Changed
+- `revoke()` / `disconnect()` skip the provider-side revocation while another
+  owner still holds an active credential for the same external user (a Google or
+  TikTok revoke can end that user's whole consent for the app).
+- The renewal dispatcher ties a Meta user credential to the Pages of its own
+  owner only.
+
 ## [1.2.0]
 
 ### Security

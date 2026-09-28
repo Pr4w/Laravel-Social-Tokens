@@ -54,9 +54,45 @@ Renewal happens on the credential, **once** — every account sharing it sees th
 fresh token. A Facebook page token is stored as a *static* credential (no expiry,
 never auto-refreshed); everything else is renewable on its lead time.
 
+### Owners
+
+Identity is scoped to the **owner** you pass when connecting (`owner:` — a User,
+a Team, a Workspace…): an account is unique per *(provider, external id,
+owner)* and a credential per *(provider, external holder, owner)*. So two owners
+can connect the same Facebook Page, Instagram account, LinkedIn organization or
+TikTok account: each gets its own row, backed by its own credential — the grant
+its own user gave — and one owner's reconnect, revoke or disconnect never moves
+or overwrites the other's. Reconnecting for the same owner (or without an owner)
+updates the existing row in place.
+
+Because one external account can now have several rows, scope lookups to the
+owner:
+
+```php
+SocialAccount::ownedBy($workspace)->where('provider', 'facebook')->where('provider_user_id', $pageId)->first();
+SocialToken::ownedBy($workspace)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)->first();
+SocialAccount::ownedBy(null); // the owner-less rows
+```
+
+What stays per **external user**, across owners, because that is how the
+providers grant access:
+
+- **Reconciliation.** When a Facebook user no longer manages a Page (or a
+  LinkedIn member no longer administers an organization), every row of that user
+  is flagged, whichever owner connected it: Meta and LinkedIn grant access per
+  user, not per connection.
+- **Provider-side revocation.** Revoking a token at Google or TikTok can end
+  that user's whole consent for your app, so `revoke()` / `disconnect()` only
+  call the provider once no other owner holds an active credential for the same
+  external user; until then the revoke is local.
+
+A connection with an owner never adopts an existing owner-less row: it creates
+its own. To attach an owner-less row, `associate()` it yourself.
+
 ## Install
 
 Requires PHP 8.2+ (8.3+ on Laravel 13), Laravel 12 / 13, and Laravel Socialite 5.5+.
+Upgrading from 1.x? See [UPGRADE.md](UPGRADE.md).
 
 ```bash
 composer require pr4w/laravel-social-tokens
@@ -157,8 +193,9 @@ more than one account. Most providers give exactly one, so use
   Login for Business configurations for Facebook and Instagram, check the
   Facebook flow's token also carries the `instagram_*` permissions, since it
   replaces the shared credential. Every account records the Facebook user id, so
-  a reconnect flags targets the user no longer manages — scoped to that user, so a
-  co-owner's are never touched. (Instagram and Facebook authenticate via the
+  a reconnect flags targets that user no longer manages — scoped to that user, so
+  another Facebook user's rows are never touched (see "Owners" for rows of the
+  same user under another owner). (Instagram and Facebook authenticate via the
   Facebook driver.)
 
 Need finer control? `StoreConnection` delegates to lower-level actions you can
