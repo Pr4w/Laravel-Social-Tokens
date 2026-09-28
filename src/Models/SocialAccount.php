@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
 use Pr4w\SocialTokens\Events\AccountRevoked;
+use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
 
 /**
  * A postable identity. It holds no tokens: it posts with its credential
@@ -33,6 +34,8 @@ use Pr4w\SocialTokens\Events\AccountRevoked;
  */
 class SocialAccount extends Model
 {
+    use TransitionsStatus;
+
     protected $guarded = [];
 
     /**
@@ -167,23 +170,26 @@ class SocialAccount extends Model
 
     // State -----------------------------------------------------------------
 
+    /**
+     * One-way and idempotent, like the credential's: only an active account is
+     * flagged, and only the call that flags it fires the event. A revoked
+     * account is never downgraded.
+     */
     public function markNeedsReconnect(?string $reason = null): self
     {
-        $this->status = AccountStatus::NeedsReconnect;
-        $this->last_error = $reason;
-        $this->save();
-
-        event(new AccountNeedsReconnect($this, $reason));
+        if ($this->transitionStatus(AccountStatus::NeedsReconnect, [AccountStatus::Active], ['last_error' => $reason])) {
+            event(new AccountNeedsReconnect($this, $reason));
+        }
 
         return $this;
     }
 
+    /** One-way and idempotent: fires AccountRevoked only on the actual change. */
     public function markRevoked(): self
     {
-        $this->status = AccountStatus::Revoked;
-        $this->save();
-
-        event(new AccountRevoked($this));
+        if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect])) {
+            event(new AccountRevoked($this));
+        }
 
         return $this;
     }

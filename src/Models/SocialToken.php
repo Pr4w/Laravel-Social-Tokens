@@ -14,6 +14,7 @@ use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Events\CredentialRevoked;
+use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -37,6 +38,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  */
 class SocialToken extends Model
 {
+    use TransitionsStatus;
+
     protected $guarded = [];
 
     /**
@@ -122,6 +125,21 @@ class SocialToken extends Model
      */
     public function applyRenewal(RenewalResult $result, ProviderConnector $connector): self
     {
+        // Re-read the status from the database: a revoke may have landed while
+        // the provider call was in flight, and must never be undone here.
+        if ($this->exists) {
+            $current = $this->newQuery()->whereKey($this->getKey())->value('status'); // cast: an AccountStatus
+
+            if ($current !== null) {
+                $this->status = $current;
+                $this->syncOriginalAttribute('status');
+            }
+        }
+
+        if ($this->status === AccountStatus::Revoked) {
+            return $this; // no token written, no CredentialRenewed
+        }
+
         $this->access_token = $result->accessToken;
 
         // Only overwrite the refresh token when the provider issued a new one.
@@ -209,23 +227,28 @@ class SocialToken extends Model
         return $this;
     }
 
+    /**
+     * One-way and idempotent: only an active credential moves to
+     * needs_reconnect, and only the call that actually moves it fires the event
+     * and records its reason (the root cause; later callers change nothing). A
+     * revoked credential is never downgraded. Writes only the status and
+     * last_error: save() any other change yourself.
+     */
     public function markNeedsReconnect(?string $reason = null): self
     {
-        $this->status = AccountStatus::NeedsReconnect;
-        $this->last_error = $reason;
-        $this->save();
-
-        event(new CredentialNeedsReconnect($this, $reason));
+        if ($this->transitionStatus(AccountStatus::NeedsReconnect, [AccountStatus::Active], ['last_error' => $reason])) {
+            event(new CredentialNeedsReconnect($this, $reason));
+        }
 
         return $this;
     }
 
+    /** One-way and idempotent: fires CredentialRevoked only on the actual change. */
     public function markRevoked(): self
     {
-        $this->status = AccountStatus::Revoked;
-        $this->save();
-
-        event(new CredentialRevoked($this));
+        if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect])) {
+            event(new CredentialRevoked($this));
+        }
 
         return $this;
     }

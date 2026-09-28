@@ -3,9 +3,11 @@
 namespace Pr4w\SocialTokens;
 
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
+use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -49,6 +51,11 @@ class SocialTokens
             return Cache::lock($this->lockKey($token), 60)->block(10, function () use ($token, $connector) {
                 $token->refresh();
 
+                // Revoked or flagged since the caller loaded it: never renew.
+                if (! $token->status->isUsable()) {
+                    return RenewalResult::terminalFailure("Credential is {$token->status->value}.");
+                }
+
                 // Another process may have renewed while we waited for the lock:
                 // a successful renewal leaves a valid token whose window has moved
                 // into the future. Checking expiry alone is not enough — the job
@@ -85,6 +92,12 @@ class SocialTokens
 
                 if ($result->succeeded()) {
                     $token->applyRenewal($result, $connector);
+
+                    // Revoked while the provider call was in flight: applyRenewal()
+                    // stored nothing, and the token must not be handed out.
+                    if ($token->status === AccountStatus::Revoked) {
+                        return RenewalResult::terminalFailure('Credential was revoked during renewal.');
+                    }
                 }
 
                 return $result;
@@ -107,6 +120,16 @@ class SocialTokens
      */
     public function validAccessTokenFor(SocialAccount $account): string
     {
+        // The caller's copy may be stale: the account or its credential may have
+        // been revoked or flagged since it was loaded.
+        if ($account->exists) {
+            try {
+                $account->refresh(); // also reloads a loaded `credential` relation
+            } catch (ModelNotFoundException) {
+                throw NeedsReconnectException::for($account);
+            }
+        }
+
         if (! $account->status->isUsable()) {
             throw NeedsReconnectException::for($account);
         }

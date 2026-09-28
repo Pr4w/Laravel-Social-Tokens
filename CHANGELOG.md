@@ -81,6 +81,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   and for long-lived tokens (Meta, Threads) `CredentialExpiringSoon` fires once.
   Each successful long-lived extension also logs its `expires_in` (info), to
   confirm in production whether Meta really extends.
+- **Status changes are one-way and idempotent.** `renewCredential()` re-reads
+  the credential under its lock and never renews one that is no longer active
+  (a revoked credential used to be sent to the provider, and a stale copy could
+  resurrect it); `applyRenewal()` never writes over a revoke that landed during
+  the provider call; `markNeedsReconnect()` / `markRevoked()` (on credentials
+  and accounts) are compare-and-set, fire their event only on an actual change,
+  keep the first `last_error` (the root cause), and never downgrade `revoked`;
+  `validAccessTokenFor()` re-reads the account and its credential, so it no
+  longer hands out the cached token of a credential disabled after the caller
+  loaded it. This makes the README's "`CredentialNeedsReconnect` fires once"
+  true under concurrency.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -108,6 +119,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
   mention the refresh token (a truly dead refresh token will be flagged again,
   properly, by `invalid_grant`).
+- `CredentialNeedsReconnect`, `CredentialRevoked`, `AccountNeedsReconnect` and
+  `AccountRevoked` fire only on a real state change; listeners that counted on
+  repeats will not get them. `markNeedsReconnect()` / `markRevoked()` no longer
+  `save()` the model: other unsaved changes are not persisted with them, save
+  those yourself. `markNeedsReconnect()` on a revoked credential or account is
+  a no-op. `renewCredential()` on a credential that is not active returns
+  `terminalFailure('Credential is …')` without calling the provider.
+  `validAccessTokenFor()` does one or two more queries per call, and throws
+  `NeedsReconnectException` for an account deleted since it was loaded.
 - For Meta/Threads, `CredentialExpiringSoon` can now also follow a
   "successful" renewal that did not extend the token: the user must reconnect.
 - **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an
