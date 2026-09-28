@@ -71,7 +71,7 @@ class GoogleConnector extends AbstractConnector
         if ($accessToken === null) {
             return RenewalResult::unknownFailure('Malformed response, no access_token.', [
                 'status' => $response->status(),
-                'body' => $body,
+                'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
         }
 

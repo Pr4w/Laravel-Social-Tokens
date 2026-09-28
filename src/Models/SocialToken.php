@@ -38,6 +38,14 @@ class SocialToken extends Model
     protected $guarded = [];
 
     /**
+     * Never serialised (toArray/toJson, e.g. an account loaded with its
+     * credential). Still readable as attributes; makeVisible() opts back in.
+     *
+     * @var list<string>
+     */
+    protected $hidden = ['access_token', 'refresh_token'];
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array

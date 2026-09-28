@@ -65,7 +65,7 @@ class ThreadsConnector extends AbstractConnector
         if ($accessToken === null) {
             return RenewalResult::unknownFailure('Malformed response, no access_token.', [
                 'status' => $response->status(),
-                'body' => $body,
+                'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
         }
 
@@ -105,7 +105,7 @@ class ThreadsConnector extends AbstractConnector
         if ($token === null) {
             return RenewalResult::unknownFailure('Malformed th_exchange_token response.', [
                 'status' => $response->status(),
-                'body' => $body,
+                'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
         }
 

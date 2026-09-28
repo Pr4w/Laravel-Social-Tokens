@@ -5,6 +5,21 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 ## [Unreleased]
 
+### Security
+- **Secrets no longer leak through error messages.** Guzzle ends transport
+  errors with the full request URI, and Meta calls authenticate through the
+  query string, so a connection failure put `client_secret`, the
+  `{id}|{secret}` app token, user tokens and Threads tokens in the renewal
+  reason — and from there in the job exception (laravel.log, `failed_jobs`,
+  error trackers), the `Store*` exceptions, `NeedsReconnectException`,
+  `social_tokens.last_error` and `CredentialNeedsReconnect`. Query strings are
+  now redacted (`https://host/path?[redacted]`) at the single point those
+  reasons are built, and "malformed response" contexts list the body's keys
+  instead of the body.
+- `SocialToken` hides `access_token` and `refresh_token` from serialisation, so
+  `toArray()` / `toJson()` — including `SocialAccount::with('credential')` —
+  no longer return them decrypted. They stay readable as attributes.
+
 ### Fixed
 - **A provider outage no longer disconnects a refresh-token credential.**
   `RenewCredential::failed()` flagged `needs_reconnect` any credential whose
@@ -85,6 +100,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
   mention the refresh token (a truly dead refresh token will be flagged again,
   properly, by `invalid_grant`).
+- **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an
+  error tracker may hold `client_secret=` from a connection failure. Existing
+  `last_error` values written by earlier versions may also contain secrets:
+  clear or redact them (e.g. with `AbstractConnector::redactQueryStrings()`).
+- `SocialToken::toArray()` / `toJson()` no longer include `access_token` /
+  `refresh_token`. Read them as attributes (`$token->access_token`) or call
+  `makeVisible([...])`.
 - **Run `php artisan migrate`** (new column `social_tokens.failed_checks`). If
   you published the package migrations, publish or copy
   `2025_01_01_000006_add_failed_checks_to_social_tokens_table.php` too.

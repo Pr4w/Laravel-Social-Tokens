@@ -10,6 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
+use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -171,7 +172,8 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $reason = 'Renewal failed after retries: '.$exception->getMessage();
+        // Defence in depth: the queue may hand over an exception of any origin.
+        $reason = 'Renewal failed after retries: '.AbstractConnector::redactQueryStrings($exception->getMessage());
 
         // Only a credential that can no longer be renewed at all needs the user.
         // An outage on a refresh-token provider is not that, even once the access

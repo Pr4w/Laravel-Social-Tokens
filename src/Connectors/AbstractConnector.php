@@ -94,6 +94,17 @@ abstract class AbstractConnector implements ProviderConnector
     }
 
     /**
+     * Guzzle ends transport error messages with the full request URI, query
+     * string included, and Meta calls carry client_secret and user tokens
+     * there. Keep scheme, host and path for debugging; drop the whole query
+     * (an allow-list: a secret parameter added later cannot leak either).
+     */
+    public static function redactQueryStrings(string $message): string
+    {
+        return preg_replace('~(https?://[^\s?#]+)\?[^\s#]*~i', '$1?[redacted]', $message) ?? '[redacted]';
+    }
+
+    /**
      * Run an HTTP call and normalise the transport-level outcomes that are
      * identical for every provider: a dropped connection, an unexpected
      * exception, a provider 5xx or a 429 are all transient and retryable.
@@ -109,9 +120,9 @@ abstract class AbstractConnector implements ProviderConnector
         try {
             $response = $request();
         } catch (ConnectionException $e) {
-            return RenewalResult::transientFailure('Connection error: '.$e->getMessage());
+            return RenewalResult::transientFailure('Connection error: '.static::redactQueryStrings($e->getMessage()));
         } catch (Throwable $e) {
-            return RenewalResult::transientFailure('Unexpected error: '.$e->getMessage());
+            return RenewalResult::transientFailure('Unexpected error: '.static::redactQueryStrings($e->getMessage()));
         }
 
         if ($response->serverError() || $response->status() === 429) {

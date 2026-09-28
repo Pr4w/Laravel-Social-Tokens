@@ -120,7 +120,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
         if ($token === null) {
             return RenewalResult::unknownFailure('Malformed token extension response.', [
                 'status' => $response->status(),
-                'body' => $body,
+                'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
         }
 
@@ -230,7 +230,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
         if ($id === null) {
             return RenewalResult::unknownFailure('Malformed /me response, no id.', [
                 'status' => $response->status(),
-                'body' => $body,
+                'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
         }
 
