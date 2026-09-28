@@ -166,6 +166,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   came due (~53 days for Meta and Threads) even after the user revoked it.
 - `SocialToken::markNeedsReconnectOnce($reason, $checkedToken)`.
 - `SocialToken::isRefreshTokenExpiring($lead)`.
+- `validAccessTokenFor($account, int $minValiditySeconds = 30)` and
+  `renewCredential($token, int $minValiditySeconds = 30)`: a job that holds the
+  token for minutes (Instagram/Threads container polling, video uploads) can ask
+  for one that stays valid that long; a token expiring sooner is renewed first.
+  The 30-second margin stays a floor, and the default behaviour is unchanged.
+  A still-valid token that cannot be renewed unattended is handed out instead of
+  being flagged when such a minimum is asked.
 - Config `check_renewable` (`SOCIAL_TOKENS_CHECK_RENEWABLE`, off by default):
   `check-static` also checks renewable credentials between renewals.
   `ThreadsConnector` (`/me`) and `LinkedInConnector` (token introspection) now
@@ -221,6 +228,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   to `needs_reconnect` (with `AccountNeedsReconnect`) at the member's next
   connect. To keep a different role list, set `posting_roles` in your published
   config.
+- If you extend `SocialTokens` and override `validAccessTokenFor()` or
+  `renewCredential()`, add the new optional `int $minValiditySeconds = 30`
+  parameter to your signature.
 - `CredentialExpiringSoon` can now arrive **before** a refresh token expires
   (reason "Refresh token expires soon…", `expiresAt` = the date the credential
   stops working), and `renew_at` can be earlier than before. The connect actions

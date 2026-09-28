@@ -251,7 +251,11 @@ supports atomic locks: redis, memcached, database, dynamodb, or file.
 ## Posting
 
 The publishing layer never touches refresh tokens. It asks for a valid access
-token and gets one, or a clear signal to reconnect.
+token and gets one, or a clear signal to reconnect. If the job will hold the
+token a while, say how long, and a token expiring sooner is renewed first:
+`validAccessTokenFor($account, 20 * 60)` for an Instagram/Threads container poll
+of up to 15 minutes. Keep it under the provider's token lifetime (1 hour for
+Google), or every call refreshes.
 
 ```php
 use Pr4w\SocialTokens\SocialTokens;

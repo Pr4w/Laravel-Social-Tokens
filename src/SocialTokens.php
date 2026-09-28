@@ -43,13 +43,17 @@ class SocialTokens
      * Applies the result on success (single source of truth). Failures are
      * returned for the caller to handle, since the job and the synchronous
      * path react differently to transient failures.
+     *
+     * $minValiditySeconds (floor 30): a token that will not stay valid that long
+     * is renewed even if another process just stored it.
      */
-    public function renewCredential(SocialToken $token): RenewalResult
+    public function renewCredential(SocialToken $token, int $minValiditySeconds = 30): RenewalResult
     {
+        $minValiditySeconds = max(30, $minValiditySeconds);
         $connector = $this->registry->for($token->provider);
 
         try {
-            return Cache::lock($this->lockKey($token), 60)->block(10, function () use ($token, $connector) {
+            return Cache::lock($this->lockKey($token), 60)->block(10, function () use ($token, $connector, $minValiditySeconds) {
                 $token->refresh();
 
                 // Revoked or flagged since the caller loaded it: never renew.
@@ -61,7 +65,7 @@ class SocialTokens
                 // a successful renewal leaves a valid token whose window has moved
                 // into the future. Checking expiry alone is not enough — the job
                 // runs at renew_at, days before expiry, and must go through.
-                if ($token->access_token !== null && ! $token->isAccessTokenExpired() && ! $token->isDueForRenewal()) {
+                if ($token->access_token !== null && ! $token->isAccessTokenExpired($minValiditySeconds) && ! $token->isDueForRenewal()) {
                     return RenewalResult::success(
                         accessToken: $token->access_token,
                         expiresAt: $token->expires_at,
@@ -117,10 +121,18 @@ class SocialTokens
      * fresh token. A static credential (renew_at null — e.g. a Facebook page
      * token) is returned as-is.
      *
+     * $minValiditySeconds: how long the caller will hold the token (e.g. 20
+     * minutes while polling an Instagram container). A token expiring sooner is
+     * renewed first; keep it under the provider's token lifetime, or every call
+     * refreshes. Never less than 30 seconds.
+     *
      * @throws NeedsReconnectException
      */
-    public function validAccessTokenFor(SocialAccount $account): string
+    public function validAccessTokenFor(SocialAccount $account, int $minValiditySeconds = 30): string
     {
+        // 30 seconds is a floor: a token is never handed out closer to expiry.
+        $minValiditySeconds = max(30, $minValiditySeconds);
+
         // The caller's copy may be stale: the account or its credential may have
         // been revoked or flagged since it was loaded.
         if ($account->exists) {
@@ -141,7 +153,7 @@ class SocialTokens
             throw NeedsReconnectException::for($account);
         }
 
-        if (! $token->isAccessTokenExpired() && $token->access_token !== null) {
+        if (! $token->isAccessTokenExpired($minValiditySeconds) && $token->access_token !== null) {
             return $token->access_token;
         }
 
@@ -159,12 +171,18 @@ class SocialTokens
         $connector = $this->registry->for($token->provider);
 
         if (! $connector->renewalStrategy()->canRenewUnattended() || $token->isRefreshTokenExpired()) {
+            // Cannot be renewed, but still valid: hand it out rather than cut it
+            // off early (the renewal job warns the user ahead of the expiry).
+            if ($token->access_token !== null && ! $token->isAccessTokenExpired()) {
+                return $token->access_token;
+            }
+
             $token->markNeedsReconnect('Token expired and cannot be renewed unattended.');
 
             throw NeedsReconnectException::for($account);
         }
 
-        $result = $this->renewCredential($token);
+        $result = $this->renewCredential($token, $minValiditySeconds);
 
         if ($result->succeeded()) {
             $token->refresh();
