@@ -20,10 +20,9 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * Scope note:
  *  - posting to a PERSONAL profile uses w_member_social
  *  - posting to a COMPANY page uses w_organization_social, restricted to members
- *    with an admin role on that page (ADMINISTRATOR / DIRECT_SPONSORED_CONTENT_
- *    POSTER / RECRUITING_POSTER)
- *  - the default below targets company pages via the Community Management API;
- *    override 'scopes' in config to change it
+ *    with a posting role on that page: only organizations held through one of
+ *    the configured 'posting_roles' (default DEFAULT_POSTING_ROLES) are listed
+ *  - scopes are chosen by the app at redirect (see README "Connecting an account")
  *
  * Strategy is config driven:
  *  - default: ReauthOnly, CredentialExpiringSoon fires ahead of the 60 day
@@ -41,6 +40,14 @@ class LinkedInConnector extends AbstractConnector
 
     /** Safety cap on organizationAcls result pages. */
     protected const MAX_RESULT_PAGES = 20;
+
+    /** organizationAcls roles that can publish as the organization. */
+    public const DEFAULT_POSTING_ROLES = [
+        'ADMINISTRATOR',
+        'CONTENT_ADMINISTRATOR',
+        'DIRECT_SPONSORED_CONTENT_POSTER',
+        'RECRUITING_POSTER',
+    ];
 
     public function renewalStrategy(): RenewalStrategy
     {
@@ -131,7 +138,9 @@ class LinkedInConnector extends AbstractConnector
      * organizationAcls. Each posts with this same member token
      * (w_organization_social), so an organization row mirrors the member's
      * credential rather than holding its own. Requires the member token to carry
-     * an organization admin scope (e.g. rw_organization_admin).
+     * an organization admin scope (e.g. rw_organization_admin). Only approved
+     * grants with a posting role (config `posting_roles`) are kept, one entry
+     * per organization.
      *
      * Pages through the results with start/count: the action reconciles against
      * this list, so a truncated one would flag organizations the member still
@@ -202,16 +211,41 @@ class LinkedInConnector extends AbstractConnector
     }
 
     /**
+     * The organizationAcls roles kept as postable (config `posting_roles`).
+     * An empty or missing list falls back to the defaults: filtering out every
+     * organization would reconcile them all away.
+     *
+     * @return array<int, string>
+     */
+    protected function postingRoles(): array
+    {
+        $roles = $this->config['posting_roles'] ?? null;
+
+        if (is_string($roles)) {
+            $roles = array_filter(array_map('trim', explode(',', $roles)));
+        }
+
+        return is_array($roles) && $roles !== [] ? array_values($roles) : self::DEFAULT_POSTING_ROLES;
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $elements  Raw organizationAcls elements.
      * @return array<int, array<string, mixed>>|RenewalResult
      */
     private function mapOrganizations(array $elements): array|RenewalResult
     {
         $organizations = [];
+        $postingRoles = $this->postingRoles();
 
         foreach ($elements as $element) {
-            // Only approved admin grants are postable.
+            // Only approved grants with a posting role are postable. Filter
+            // before resolving ids, so a grant we would drop anyway (ANALYST,
+            // CURATOR...) never blocks the listing.
             if (($element['state'] ?? null) !== 'APPROVED') {
+                continue;
+            }
+
+            if (! in_array($element['role'] ?? null, $postingRoles, true)) {
                 continue;
             }
 
@@ -230,15 +264,21 @@ class LinkedInConnector extends AbstractConnector
                 return RenewalResult::unknownFailure('LinkedIn returned an approved organization grant without a resolvable organization.');
             }
 
-            $organizations[] = [
+            // LinkedIn returns one element per (organization, role): keep the
+            // first posting role seen for each organization.
+            if (isset($organizations[(string) $id])) {
+                continue;
+            }
+
+            $organizations[(string) $id] = [
                 'id' => (string) $id,
                 'urn' => "urn:li:organization:{$id}",
                 'name' => $org['localizedName'] ?? null,
                 'logo' => data_get($org, 'logoV2.original~.elements.0.identifiers.0.identifier'),
-                'role' => $element['role'] ?? null,
+                'role' => $element['role'],
             ];
         }
 
-        return $organizations;
+        return array_values($organizations);
     }
 }

@@ -183,7 +183,12 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
 ```
 
 Every organization posts with the same member token, so each row mirrors it (the
-organization URN is stored in `profile` for posting). If you also post as the
+organization URN is stored in `profile` for posting). Only organizations where
+the member holds a posting role are stored — by default `ADMINISTRATOR`,
+`CONTENT_ADMINISTRATOR`, `DIRECT_SPONSORED_CONTENT_POSTER` and
+`RECRUITING_POSTER`, configurable with `connectors.linkedin.posting_roles`; an
+organization the member now holds only as `ANALYST`, `CURATOR`, etc. is flagged
+at the next connect. If you also post as the
 member, store that as its own row with `StoreAccountFromSocialite`. It shares the
 member's credential and `provider_holder_id` with the organizations, and
 reconciliation excludes it by its `provider_user_id` (the member id), so it only

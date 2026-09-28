@@ -153,6 +153,10 @@ return [
             // fires CredentialExpiringSoon ahead of the 60 day expiry and is
             // flagged for re-authorisation once it actually expires.
             'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', false),
+            // organizationAcls roles that can publish as the Page. Organizations
+            // the member holds only through other roles (ANALYST, CURATOR,
+            // LEAD_GEN_FORMS_MANAGER...) are not stored, and are reconciled away.
+            'posting_roles' => LinkedInConnector::DEFAULT_POSTING_ROLES,
         ],
 
         // YouTube Shorts via Google OAuth2 (StableRefreshToken strategy).
