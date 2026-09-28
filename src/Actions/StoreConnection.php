@@ -40,7 +40,8 @@ class StoreConnection
         ?Model $connectedBy = null,
         bool $longLived = true,
     ): Collection {
-        $connector = $this->registry->has($provider) ? $this->registry->for($provider) : null;
+        // Throws InvalidArgumentException for a provider without a connector.
+        $connector = $this->registry->for($provider);
 
         // Instagram fans out to one account per linked Instagram Business account
         // (plus the companion Facebook Pages). Authenticated via the Facebook

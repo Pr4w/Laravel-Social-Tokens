@@ -144,6 +144,17 @@ class SocialTokens
             return $token->access_token;
         }
 
+        // A config problem, not the user's: do not ask them to reconnect (a
+        // reconnect would be refused for the same reason).
+        if (! $this->registry->has($token->provider)) {
+            Log::error('[social-tokens] No connector configured for an expired credential', [
+                'provider' => $token->provider,
+                'token_id' => $token->getKey(),
+            ]);
+
+            throw NeedsReconnectException::transient($account, "No connector configured for provider [{$token->provider}].");
+        }
+
         $connector = $this->registry->for($token->provider);
 
         if (! $connector->renewalStrategy()->canRenewUnattended() || $token->isRefreshTokenExpired()) {

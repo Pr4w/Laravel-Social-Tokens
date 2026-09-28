@@ -25,7 +25,7 @@ function googleCredential(array $attrs = []): SocialToken
 
 it('uses the stable refresh strategy', function () {
     expect(google()->renewalStrategy())->toBe(RenewalStrategy::StableRefreshToken)
-        ->and(google()->leadTime()->totalMinutes)->toBe(10.0);
+        ->and(google()->leadTime()->totalMinutes)->toBe(25.0);
 });
 
 it('renews without returning a new refresh token', function () {

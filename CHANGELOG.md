@@ -118,6 +118,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   entries, two `AccountConnected`, and `profile.role` set to whichever role came
   last). Only posting roles are kept now, one entry per organization, and an
   organization the member was demoted on is flagged at the next connect.
+- **Renewal is scheduled from the moment of connection.** A renewable token
+  stored without a known expiry (Meta's `fb_exchange_token` without
+  `expires_in`, `StoreInstagramAccounts(extend: false)`) got `renew_at = null` —
+  it looked static and was never renewed, dying silently. Every connect action
+  now uses `SocialToken::renewAtFor()`: an unknown expiry is checked back after
+  one lead time (a `ReauthOnly` credential stays unscheduled).
+- The dispatcher skips (with a warning) credentials of providers that have no
+  connector instead of dispatching jobs that crash, and no longer renews a
+  credential whose accounts are all revoked or flagged. A renewal job for a
+  provider without a connector ends quietly instead of flagging the credential.
+- Google's lead time was 10 minutes, shorter than the 15-minute dispatcher
+  cadence, so Google tokens routinely expired before their renewal; it is now
+  25 minutes.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -137,6 +150,20 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   back to the defaults, so a published v1.1 config keeps working).
 
 ### Upgrading
+- **Breaking:** `StoreConnection` and `StoreAccountFromSocialite` throw
+  `InvalidArgumentException` for a provider without a connector (missing key or
+  `driver => null`); they used to store the account as static, and it broke at
+  expiry. Configure a connector (e.g. `'youtube' => ['driver' =>
+  GoogleConnector::class]`, reading `services.youtube`) or stop routing that
+  provider (e.g. X/Twitter) through the package.
+- Meta user credentials created by earlier versions with neither `expires_at`
+  nor `renew_at` stay static. Schedule them once:
+  ```php
+  SocialToken::where('provider', 'facebook')->whereNull('expires_at')->whereNull('renew_at')
+      ->whereHas('accounts', fn ($q) => $q->where('provider', 'instagram'))
+      ->update(['renew_at' => now()]);
+  ```
+  (Page tokens only back `facebook` accounts, so this leaves them alone.)
 - `CredentialNeedsReconnect` is no longer fired after a provider outage on a
   refresh-token credential. If you relied on it to detect outages, watch
   `last_error` / `last_renewed_at` instead. A non-null `last_error` on an

@@ -112,7 +112,7 @@ class StoreInstagramAccounts
                     'access_token' => $userToken,
                     'refresh_token' => null,
                     'expires_at' => $expiresAt,
-                    'renew_at' => $expiresAt?->copy()->sub($facebook->leadTime()),
+                    'renew_at' => SocialToken::renewAtFor($expiresAt, $facebook), // never null: an unknown expiry is checked back
                     'status' => AccountStatus::Active,
                     'last_error' => null,
                     'failed_checks' => 0,

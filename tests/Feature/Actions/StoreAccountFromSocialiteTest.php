@@ -48,7 +48,7 @@ it('computes the credential renew_at from the connector lead time', function () 
     $credential = $account->credential;
 
     expect($credential->renew_at->timestamp)
-        ->toEqualWithDelta($credential->expires_at->copy()->subMinutes(10)->timestamp, 2);
+        ->toEqualWithDelta($credential->expires_at->copy()->subMinutes(25)->timestamp, 2);
 });
 
 it('reads refresh_expires_in onto the credential', function () {

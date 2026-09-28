@@ -65,7 +65,7 @@ class StoreLinkedInOrganizations
             throw new RuntimeException('Could not list LinkedIn organizations: '.$organizations->reason);
         }
 
-        $renewAt = $expiresAt?->copy()->sub($connector->leadTime());
+        $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
 
         // The shared renewable member credential every organization posts with.
         $credential = SocialToken::query()->updateOrCreate(

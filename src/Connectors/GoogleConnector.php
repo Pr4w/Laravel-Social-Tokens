@@ -32,8 +32,9 @@ class GoogleConnector extends AbstractConnector
 
     public function leadTime(): CarbonInterval
     {
-        // 1h token, renew a few minutes early.
-        return CarbonInterval::minutes(10);
+        // 1h token. The lead must exceed the dispatcher cadence (15 min) plus
+        // queue latency, or the token routinely expires before its renewal.
+        return CarbonInterval::minutes(25);
     }
 
     public function refreshCredential(SocialToken $token): RenewalResult

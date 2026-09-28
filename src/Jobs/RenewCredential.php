@@ -10,6 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
@@ -92,6 +93,17 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         // Handled since dispatch (renewed synchronously, or already warned):
         // nothing to do until the window opens again.
         if (! $token->isDueForRenewal() && ! $token->isAccessTokenExpired()) {
+            return;
+        }
+
+        // No connector configured (any more): a config problem. End quietly;
+        // throwing would let failed() flag an expired credential.
+        if (! $registry->has($token->provider)) {
+            Log::warning('[social-tokens] Renewal skipped: no connector configured', [
+                'provider' => $token->provider,
+                'token_id' => $token->getKey(),
+            ]);
+
             return;
         }
 

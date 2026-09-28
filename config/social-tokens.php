@@ -28,8 +28,8 @@ return [
     |
     | How often the dispatcher command scans for credentials whose renew_at has
     | passed. Each credential carries its own renew_at, computed from the connector
-    | lead time, so this only needs to run often enough to catch the shortest lead
-    | time you support (TikTok renews a couple of hours early).
+    | lead time, so it must run clearly more often than the shortest lead time
+    | you support, queue latency included: Google renews 25 minutes early.
     |
     | Set to null to disable (e.g. to schedule social-tokens:dispatch-renewals
     | yourself). Both scheduled commands run withoutOverlapping()->onOneServer(),

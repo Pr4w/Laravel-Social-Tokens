@@ -31,7 +31,9 @@ class StoreAccountFromSocialite
         ?Model $connectedBy = null,
         bool $longLived = true,
     ): SocialAccount {
-        $connector = $this->registry->has($provider) ? $this->registry->for($provider) : null;
+        // Throws for a provider without a connector, before anything is written:
+        // stored without one, the account would look static and break at expiry.
+        $connector = $this->registry->for($provider);
 
         $accessToken = $user->token;
         $refreshToken = $user->refreshToken ?: null;
@@ -45,7 +47,7 @@ class StoreAccountFromSocialite
         // Upgrade to a long-lived token where the provider needs a distinct
         // connect-time exchange (Threads). Providers whose connect token is
         // already durable return null and are stored as-is.
-        if ($longLived && $connector) {
+        if ($longLived) {
             $exchanged = $connector->exchangeForLongLived($accessToken);
 
             if ($exchanged !== null) {
@@ -62,14 +64,12 @@ class StoreAccountFromSocialite
             }
         }
 
-        $renewAt = ($expiresAt && $connector)
-            ? $expiresAt->copy()->sub($connector->leadTime())
-            : null;
+        $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
 
         // The credential (holder = the account's own id for a 1:1 provider).
         $token = SocialToken::query()->updateOrCreate(
             [
-                'provider' => $connector?->credentialProvider() ?? $provider,
+                'provider' => $connector->credentialProvider(),
                 'provider_holder_id' => $user->getId(),
             ],
             [
