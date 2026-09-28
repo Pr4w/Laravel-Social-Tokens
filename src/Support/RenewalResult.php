@@ -25,6 +25,7 @@ final class RenewalResult
         public readonly ?string $reason = null,
         public readonly bool $unknown = false,
         public readonly array $context = [],
+        public readonly bool $clientError = false,
     ) {}
 
     /**
@@ -73,6 +74,20 @@ final class RenewalResult
             unknown: true,
             context: $context,
         );
+    }
+
+    /**
+     * The provider rejected the APP's OAuth client (wrong or missing id/secret,
+     * deleted client, client not allowed the grant). The member can do nothing
+     * about it, and reconnecting would go through the same broken client: it is
+     * transient for control flow and never escalated to needs_reconnect. It is
+     * catalogued (not unknown); the operator is alerted by a critical log.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    public static function clientFailure(string $reason, array $context = []): self
+    {
+        return new self(outcome: RenewalOutcome::Transient, reason: $reason, context: $context, clientError: true);
     }
 
     public function succeeded(): bool

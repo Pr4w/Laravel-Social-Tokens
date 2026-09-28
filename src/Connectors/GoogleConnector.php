@@ -110,17 +110,16 @@ class GoogleConnector extends AbstractConnector
         $error = (string) ($body['error'] ?? 'unknown');
         $description = (string) ($body['error_description'] ?? '');
 
-        $terminal = [
-            'invalid_grant',     // refresh token revoked, expired, or password changed
-            'invalid_client',
-            'unauthorized_client',
-        ];
+        // Terminal: refresh token revoked, expired, or password changed.
+        if ($error === 'invalid_grant') {
+            return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
+        }
 
-        return in_array($error, $terminal, true)
-            ? RenewalResult::terminalFailure(trim("{$error}: {$description}"))
-            : RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
-                'error' => $error,
-                'error_description' => $description,
-            ]);
+        $context = ['error' => $error, 'error_description' => $description];
+
+        // The app's own OAuth client is wrong, deleted or not allowed the grant.
+        return in_array($error, ['invalid_client', 'unauthorized_client'], true)
+            ? RenewalResult::clientFailure(trim("{$error}: {$description}"), $context)
+            : RenewalResult::unknownFailure(trim("{$error}: {$description}"), $context);
     }
 }

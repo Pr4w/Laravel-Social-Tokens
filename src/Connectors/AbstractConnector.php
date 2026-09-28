@@ -53,6 +53,15 @@ abstract class AbstractConnector implements ProviderConnector
         return $this->config['credentials'] ?? $this->provider ?? '';
     }
 
+    /**
+     * Whether an OAuth error description is about the member's refresh token
+     * (terminal) rather than the app's client (a configuration problem).
+     */
+    protected function isAboutRefreshToken(string $description): bool
+    {
+        return (bool) preg_match('/refresh[\s_-]?token/i', $description);
+    }
+
     public function leadTime(): CarbonInterval
     {
         // Sensible default. Override per provider.

@@ -118,15 +118,19 @@ class TikTokConnector extends AbstractConnector
         $error = (string) ($body['error'] ?? 'unknown');
         $description = (string) ($body['error_description'] ?? '');
 
-        $terminal = [
-            'invalid_grant',          // refresh token revoked or expired
-            'invalid_request',        // malformed, will not fix itself
-            'access_denied',
-            'invalid_client',
-        ];
-
-        if (in_array($error, $terminal, true)) {
+        // Terminal: the member's grant is gone (refresh token revoked or expired,
+        // access withdrawn).
+        if (in_array($error, ['invalid_grant', 'access_denied'], true)
+            || ($error === 'invalid_request' && $this->isAboutRefreshToken($description))) {
             return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
+        }
+
+        // The app's own client key/secret is wrong or missing.
+        if (in_array($error, ['invalid_client', 'invalid_request'], true)) {
+            return RenewalResult::clientFailure(trim("{$error}: {$description}"), [
+                'error' => $error,
+                'error_description' => $description,
+            ]);
         }
 
         // Unrecognised: flagged as unknown so it gets logged and catalogued.

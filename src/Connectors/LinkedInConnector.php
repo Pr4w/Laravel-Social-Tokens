@@ -82,13 +82,20 @@ class LinkedInConnector extends AbstractConnector
             $error = (string) $body['error'];
             $description = (string) ($body['error_description'] ?? '');
 
-            // Known terminal cases: refresh token expired/revoked, the one year
-            // cap reached, bad client, or a refresh token issued to another
-            // LinkedIn app (after switching apps). The member must re-authorise.
-            $terminal = ['invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_request', 'refresh_token_client_mismatch'];
-
-            if (in_array($error, $terminal, true)) {
+            // Terminal: the member's grant is gone (refresh token expired or
+            // revoked, the one year cap reached, or issued to another LinkedIn
+            // app after switching apps). The member must re-authorise.
+            if (in_array($error, ['invalid_grant', 'refresh_token_client_mismatch'], true)
+                || ($error === 'invalid_request' && $this->isAboutRefreshToken($description))) {
                 return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
+            }
+
+            // The app's own client is misconfigured: not the member's problem.
+            if (in_array($error, ['invalid_client', 'unauthorized_client', 'invalid_request'], true)) {
+                return RenewalResult::clientFailure(trim("{$error}: {$description}"), [
+                    'error' => $error,
+                    'error_description' => $description,
+                ]);
             }
 
             return RenewalResult::unknownFailure(trim("{$error}: {$description}"), [

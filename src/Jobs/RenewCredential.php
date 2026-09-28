@@ -9,6 +9,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -109,9 +110,24 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // The provider just rejected the app's OAuth client: skip the call until
+        // the breaker lapses rather than send N doomed requests per tick.
+        if (Cache::has($this->clientRejectedKey($token))) {
+            return;
+        }
+
         // Locked + double-checked renewal. On success the result is already
         // applied to the credential inside renewCredential().
         $result = $tokens->renewCredential($token);
+
+        // A misconfigured app client is the operator's problem (already logged
+        // as critical), never the member's: no retry storm, no flag. renew_at
+        // stays in the past, so a later dispatcher run tries again.
+        if ($result->clientError) {
+            Cache::put($this->clientRejectedKey($token), true, now()->addMinutes(15));
+
+            return;
+        }
 
         // Transient: throw so the queue retries with backoff. Once retries are
         // exhausted, failed() backs renew_at off, or flags the credential if it
@@ -172,6 +188,11 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         $token->renew_at = $this->retryAt($token);
         $token->last_error = $reason;
         $token->save();
+    }
+
+    protected function clientRejectedKey(SocialToken $token): string
+    {
+        return "social-tokens:client-rejected:{$token->provider}";
     }
 
     protected function canStillRenew(SocialToken $token): bool

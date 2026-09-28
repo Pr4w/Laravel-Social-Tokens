@@ -21,9 +21,21 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   longer stack a second job for a credential that is still retrying.
 - A renewal job whose credential was deleted before it ran is dropped quietly
   instead of landing in `failed_jobs`.
+- **A misconfigured app no longer disconnects a whole network.**
+  `invalid_client` / `unauthorized_client` (LinkedIn, TikTok, Google) and
+  `invalid_request` (LinkedIn, TikTok — unless it is about the refresh token)
+  describe the app's own OAuth client, not the member's grant, yet flagged every
+  due credential of the provider `needs_reconnect` — and reconnecting could not
+  help, the OAuth flow uses the same broken client. They are now retried, never
+  escalated (not even by `failed()`), and logged once per provider every 15
+  minutes via `Log::critical`, whatever `log_unknown_errors` says. While the
+  client is rejected, renewal jobs for that provider skip the provider call for
+  15 minutes. `invalid_grant`, `refresh_token_client_mismatch` and an
+  `invalid_request` about the refresh token stay terminal.
 
 ### Added
 - `RenewalStrategy::requiresLiveAccessToken()`.
+- `RenewalResult::clientFailure()` and `RenewalResult::$clientError`.
 
 ### Upgrading
 - `CredentialNeedsReconnect` is no longer fired after a provider outage on a
@@ -31,6 +43,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `last_error` / `last_renewed_at` instead. A non-null `last_error` on an
   `active` credential now means "recent failures, still retrying": the status,
   not `last_error`, says whether a credential is broken.
+- If you relied on `CredentialNeedsReconnect` to detect a broken app config,
+  alert on the critical log instead. Credentials that 1.1.0 already flagged for
+  these errors stay flagged; once the config is fixed you can reactivate those
+  with `status = needs_reconnect` whose `last_error` starts with
+  `invalid_client:`, `unauthorized_client:` or `invalid_request:` and does not
+  mention the refresh token (a truly dead refresh token will be flagged again,
+  properly, by `invalid_grant`).
 
 ## [1.1.0]
 
