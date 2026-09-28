@@ -14,11 +14,15 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
 
 /**
- * Facebook publishing is per PAGE. The user token is used transiently to mint a
- * page token per page; each page token is stored as a STATIC credential (a
- * SocialToken with renew_at null — page tokens minted from a long-lived user
- * token do not expire and are not auto-refreshed). Each account posts with its
- * page token's credential.
+ * Facebook publishing is per PAGE. Each page token is stored as a STATIC
+ * credential (a SocialToken with renew_at null — page tokens minted from a
+ * long-lived user token do not expire and are not auto-refreshed), and each
+ * account posts with its page token's credential.
+ *
+ * The long-lived user token the pages were minted from is kept too, as the
+ * RENEWABLE Meta user credential (provider facebook, holder = Facebook user id)
+ * — the same row StoreInstagramAccounts uses, so a Facebook reconnect also
+ * refreshes the token that user's Instagram accounts post with.
  *
  * Call this from your OAuth callback for the "facebook" provider instead of
  * StoreAccountFromSocialite.
@@ -46,7 +50,9 @@ class StoreFacebookPages
             throw new RuntimeException('The "facebook" connector must be a FacebookConnector to seed pages.');
         }
 
-        // 1. A long lived user token to mint page tokens from (used transiently).
+        // 1. A long lived user token to mint page tokens from.
+        $expiresAt = null;
+
         if ($extend) {
             $extended = $connector->extendUserToken($userToken);
 
@@ -55,6 +61,7 @@ class StoreFacebookPages
             }
 
             $userToken = $extended['token'];
+            $expiresAt = $extended['expiresAt'];
         }
 
         // 2. Resolve the user id (recorded on each account for reconciliation).
@@ -81,6 +88,24 @@ class StoreFacebookPages
 
         if ($scopesByAccount instanceof RenewalResult) {
             $scopesByAccount = [];
+        }
+
+        // 4a. The renewable Meta user credential (shared with Instagram). Only
+        // when the user manages a Page, so no credential is left orphaned.
+        if ($pages !== []) {
+            SocialToken::query()->updateOrCreate(
+                ['provider' => 'facebook', 'provider_holder_id' => $userId],
+                [
+                    'access_token' => $userToken,
+                    'refresh_token' => null,
+                    'expires_at' => $expiresAt,
+                    'renew_at' => SocialToken::renewAtFor($expiresAt, $connector),
+                    'status' => AccountStatus::Active,
+                    'last_renewed_at' => now(), // the token was just issued
+                    'last_error' => null,
+                    'failed_checks' => 0,
+                ],
+            );
         }
 
         // 4. One static page-token credential + one account per page.

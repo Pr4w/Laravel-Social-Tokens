@@ -99,6 +99,18 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   background so its provider calls do not delay the app's tasks due the same
   minute. Their overlap mutexes expire after 10 and 120 minutes (Laravel's
   default is 24 hours: a killed process stopped every renewal for a day).
+- **A Facebook connection keeps the Meta user token.** `StoreFacebookPages` (and
+  `StoreConnection('facebook')`) extended the user token, minted the page tokens
+  from it and threw it away, so a Facebook reconnect never refreshed the shared
+  credential the user's Instagram accounts post with. It is now stored as the
+  renewable Meta user credential (`provider = facebook`, holder = Facebook user
+  id), the same row `StoreInstagramAccounts` uses, only when the user manages at
+  least one Page. Pages keep posting with their static page tokens.
+- The renewal dispatcher also renews a credential that its accounts reference by
+  `(provider, provider_holder_id)` rather than `social_token_id` — the Meta user
+  token behind a user's Pages kept dying after ~60 days once the Instagram
+  accounts were removed. It still skips credentials no active account depends
+  on, and now walks them by id.
 - README: `StoreConnection` stores the LinkedIn personal profile only (it never
   fans out to organizations), and the personal row does carry a
   `provider_holder_id`.
@@ -112,6 +124,7 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   credential health checks.
 - Migration `2025_01_01_000006`: `social_tokens.failed_checks`.
 - Config `check_static_breaker`.
+- `SocialToken::inUse()` scope and `SocialToken::renewAtFor()`.
 
 ### Upgrading
 - `CredentialNeedsReconnect` is no longer fired after a provider outage on a
@@ -137,6 +150,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `NeedsReconnectException` for an account deleted since it was loaded.
 - `check-static` runs in the background: its "Checked …" line no longer shows
   in `schedule:run` output.
+- Facebook connections now store the Meta user credential and the dispatcher
+  renews it (one `fb_exchange_token` about every 53 days per user): expect
+  `Credential*` events for a credential whose `accounts` is empty. Existing
+  Facebook-only connections get it at their next reconnect (the token was never
+  stored, so no migration can recreate it).
 - For Meta/Threads, `CredentialExpiringSoon` can now also follow a
   "successful" renewal that did not extend the token: the user must reconnect.
 - **Rotate your Meta and Threads app secrets** if logs, `failed_jobs` or an

@@ -45,7 +45,8 @@ that actually gets refreshed. **`social_accounts`** holds the postable identitie
 each pointing at the credential it posts with. One credential can back many
 accounts:
 
-- a Meta user token backs every Facebook Page and Instagram account for that user
+- a Meta user token backs every Instagram account for that user (and is kept,
+  renewable, for a Facebook-only connection too: the Pages are minted from it)
 - a LinkedIn member token backs every organization they administer
 - a TikTok / Google account is 1:1 with its own credential
 
@@ -144,7 +145,14 @@ more than one account. Most providers give exactly one, so use
   Page. A connect fans out to one account row per target, each pointing at a
   credential: Instagram accounts **share one renewable** Meta user credential
   (refresh it once, they all stay alive); each Facebook Page gets its own
-  **static** page-token credential. Every account records the Facebook user id, so
+  **static** page-token credential and keeps posting with it. A Facebook
+  connection stores that same renewable user credential too (holder = Facebook
+  user id), so a Facebook reconnect also refreshes the token the user's Instagram
+  accounts post with. Its `accounts` relation can be empty (Pages point at their
+  page tokens); find them by `provider_holder_id`. If you use distinct Facebook
+  Login for Business configurations for Facebook and Instagram, check the
+  Facebook flow's token also carries the `instagram_*` permissions, since it
+  replaces the shared credential. Every account records the Facebook user id, so
   a reconnect flags targets the user no longer manages — scoped to that user, so a
   co-owner's are never touched. (Instagram and Facebook authenticate via the
   Facebook driver.)

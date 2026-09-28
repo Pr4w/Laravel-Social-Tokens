@@ -98,6 +98,65 @@ class SocialToken extends Model
             ->where('renew_at', '<=', now());
     }
 
+    /**
+     * Credentials some active account still depends on: through social_token_id
+     * (the account posts with it), or as the holder of accounts of the same
+     * provider (the Meta user token behind a user's Facebook Pages, which post
+     * with their own page tokens but are re-derived from it).
+     *
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
+     */
+    public function scopeInUse(Builder $query): Builder
+    {
+        $tokens = $this->getTable();
+        $accounts = (new SocialAccount)->getTable();
+        $active = AccountStatus::Active->value;
+
+        return $query->where(fn (Builder $query) => $query
+            ->whereHas('accounts', fn (Builder $account) => $account->where('status', $active))
+            ->orWhereExists(fn ($sub) => $sub->selectRaw('1')->from($accounts)
+                ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
+                ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
+                ->where("{$accounts}.status", $active)));
+    }
+
+    // Scheduling --------------------------------------------------------------
+
+    /**
+     * When to renew a credential, the one rule used at connect time and after
+     * each renewal: one lead time before whichever comes first, the access
+     * token's expiry or the refresh token's (so the user is warned before the
+     * refresh token dies). An unknown expiry on a renewable credential is
+     * checked back after one lead time, never left static; a credential that
+     * cannot renew unattended with an unknown expiry stays unscheduled.
+     */
+    public static function renewAtFor(
+        ?CarbonInterface $expiresAt,
+        ?ProviderConnector $connector,
+        ?CarbonInterface $refreshExpiresAt = null,
+    ): ?CarbonInterface {
+        if ($connector === null) {
+            return null;
+        }
+
+        $lead = $connector->leadTime();
+
+        if ($expiresAt !== null) {
+            $renewAt = $expiresAt->copy()->sub($lead);
+        } elseif ($connector->renewalStrategy()->canRenewUnattended()) {
+            $renewAt = now()->add($lead);
+        } else {
+            return null;
+        }
+
+        if ($refreshExpiresAt !== null && $refreshExpiresAt->copy()->sub($lead)->lessThan($renewAt)) {
+            $renewAt = $refreshExpiresAt->copy()->sub($lead);
+        }
+
+        return $renewAt;
+    }
+
     // State -----------------------------------------------------------------
 
     public function isAccessTokenExpired(int $bufferSeconds = 30): bool
