@@ -22,6 +22,10 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * place (fb_exchange_token) — a single token, no refresh-token rotation, hence
  * ExtendLongLived. Page tokens are stored as static credentials and not
  * re-derived here (see StoreFacebookPages / StoreInstagramAccounts).
+ *
+ * revoke() is deliberately left a no-op: DELETE /me/permissions would
+ * deauthorise the app for the whole Facebook user, killing the static page
+ * credentials of every other Page they connected.
  */
 class FacebookConnector extends AbstractConnector implements ChecksCredential
 {

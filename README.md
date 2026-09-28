@@ -56,7 +56,7 @@ never auto-refreshed); everything else is renewable on its lead time.
 
 ## Install
 
-Requires PHP 8.2+, Laravel 12 / 13, and Laravel Socialite 5.5+.
+Requires PHP 8.2+ (8.3+ on Laravel 13), Laravel 12 / 13, and Laravel Socialite 5.5+.
 
 ```bash
 composer require pr4w/laravel-social-tokens
@@ -305,7 +305,7 @@ active ──(renew succeeds)─────────────────
        ├─(cannot renew unattended)──> active + CredentialExpiringSoon ──(expires)──> needs_reconnect
        └─(terminal failure)──────────> needs_reconnect ──(user reconnects)──> active
 
-revoked: terminal, set explicitly when you revoke an account; never retried.
+revoked: terminal, set by disconnect() (one account) or revoke() (a whole login); never retried.
 ```
 
 Status lives at two levels. A credential's status covers every account it backs
@@ -337,12 +337,24 @@ credential, so `check-static` fires one event per dead Page. Group those
 notifications yourself if you need to, e.g. by the accounts'
 `provider_holder_id` (the Facebook user) or by owner.
 
-To disconnect an account, revoke its credential — this tells the provider to
-invalidate it and marks the credential and its accounts revoked:
+To disconnect **one** account, call `disconnect()`. Accounts that share its
+credential (the other Instagram accounts of the same Facebook user, a LinkedIn
+member's personal profile and organizations) keep posting. The credential itself
+is revoked, at the provider too, only when its last connected account goes:
+
+```php
+app(SocialTokens::class)->disconnect($account);
+```
+
+To disconnect a whole login (the credential and every account it backs), revoke
+the credential:
 
 ```php
 app(SocialTokens::class)->revoke($account->credential);
 ```
+
+`$account->markRevoked()` only flags the account locally: no provider call, and
+the credential is left as is.
 
 ## Scopes
 
@@ -386,6 +398,13 @@ Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when t
 credential is refreshed under another provider's key (Instagram returns
 `facebook`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
+
+### Using a connector on its own
+
+`app(SocialTokens::class)->connector('tiktok')->refreshCredential(new SocialToken([...]))`
+returns a `RenewalResult` and writes nothing. The lock, the double-check, the jobs
+and `validAccessTokenFor()` need the package's tables; `renewCredential()` throws
+for a token that was never saved.
 
 ## License
 

@@ -38,6 +38,11 @@ class InstagramConnector extends AbstractConnector
         return RenewalStrategy::ExtendLongLived;
     }
 
+    /**
+     * Not used by the package: Instagram credentials are stored and renewed under
+     * the facebook connector (see credentialProvider()). Kept for custom setups
+     * that store provider 'instagram'.
+     */
     public function refreshCredential(SocialToken $token): RenewalResult
     {
         if (empty($token->access_token)) {

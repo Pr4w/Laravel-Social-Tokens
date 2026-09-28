@@ -6,16 +6,12 @@
     "keywords": ["laravel", "socialite", "oauth", "tokens", "social media"],
     "require": {
         "php": "^8.2",
-        "illuminate/contracts": "^12.0|^13.0",
-        "illuminate/database": "^12.0|^13.0",
-        "illuminate/bus": "^12.0|^13.0",
-        "illuminate/console": "^12.0|^13.0",
-        "illuminate/support": "^12.0|^13.0",
+        "laravel/framework": "^12.0|^13.0",
         "laravel/socialite": "^5.5"
     },
     "require-dev": {
-        "orchestra/testbench": "^10.0",
-        "pestphp/pest": "^3.0",
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0",
         "larastan/larastan": "^3.0",
         "laravel/pint": "^1.0"
     },

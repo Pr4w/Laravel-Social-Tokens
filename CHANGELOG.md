@@ -178,6 +178,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - Migration `2025_01_01_000006`: `social_tokens.failed_checks`.
 - Config `check_static_breaker`.
 - `SocialToken::inUse()` scope and `SocialToken::renewAtFor()`.
+- `SocialTokens::disconnect(SocialAccount)`: remove one account without
+  touching the accounts that share its credential; the credential is revoked
+  (at the provider too) only when its last connected account goes.
 - `SocialTokens::reportRejected($account, $reason, terminal: true, rejectedToken: null)`:
   report a token the provider rejected at publish time. Flags the credential
   once (returns whether this call did), never touches a revoked credential or
@@ -206,7 +209,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `LinkedInConnector::DEFAULT_POSTING_ROLES`; an empty or missing list falls
   back to the defaults, so a published v1.1 config keeps working).
 
+### Changed
+- `renewCredential()` throws `InvalidArgumentException` for a `SocialToken` that
+  was never saved (it used to insert it into `social_tokens`). To refresh a
+  token held elsewhere, call `connector($provider)->refreshCredential()`.
+- `revoke()` no longer throws for a provider without a connector (it skips the
+  provider call and still revokes locally).
+- Dependencies: the package now requires `laravel/framework` (its events and
+  job use `Illuminate\Foundation` traits, which no `illuminate/*` package
+  ships) instead of five `illuminate/*` packages; no change in a Laravel app.
+  Laravel 13 is tested in CI (with Testbench 11 and Pest 4, PHP 8.3+).
+- Docs: `StoreConnection`'s LinkedIn routing, the personal LinkedIn row's
+  `provider_holder_id`, the `LinkedInConnector` scopes note, the unused
+  `InstagramConnector::refreshCredential()` and a dead "Upgrading to 1.0" link
+  are corrected; a "Using a connector on its own" section is added.
+
 ### Upgrading
+- **If you followed the README and call `revoke($account->credential)` to remove
+  one account, switch to `disconnect($account)`**: `revoke()` revokes every
+  Instagram account of the same Facebook user, and every LinkedIn organization
+  plus the personal profile.
 - **Breaking:** `StoreConnection` and `StoreAccountFromSocialite` throw
   `InvalidArgumentException` for a provider without a connector (missing key or
   `driver => null`); they used to store the account as static, and it broke at
@@ -445,7 +467,8 @@ happens once per credential.
 - `social_accounts` token columns dropped; read the posting token via
   `$account->credential` or `validAccessTokenFor($account)`.
 
-See the README's "Upgrading to 1.0" for the migration and API details.
+Upgrading: run `php artisan migrate` — the backfill migration groups existing
+accounts into credentials before the old token columns are dropped.
 
 ## [0.6.0]
 - PHPStan (Larastan) at level 8, Laravel Pint, and a CI quality job. Fixed the

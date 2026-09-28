@@ -6,6 +6,7 @@ use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -46,9 +47,22 @@ class SocialTokens
      *
      * $minValiditySeconds (floor 30): a token that will not stay valid that long
      * is renewed even if another process just stored it.
+     *
+     * @throws InvalidArgumentException for a credential never saved in the
+     *                                  social_tokens table (use the connector
+     *                                  directly to refresh a token held elsewhere).
      */
     public function renewCredential(SocialToken $token, int $minValiditySeconds = 30): RenewalResult
     {
+        // The lock, the double-check and applyRenewal() all key on the stored
+        // row: an unsaved token would share one lock key and be INSERTed.
+        if (! $token->exists) {
+            throw new InvalidArgumentException(
+                'renewCredential() only renews a credential saved in the social_tokens table. '
+                .'To refresh a token held elsewhere, call connector($provider)->refreshCredential() and persist the result yourself.'
+            );
+        }
+
         $minValiditySeconds = max(30, $minValiditySeconds);
         $connector = $this->registry->for($token->provider);
 
@@ -213,11 +227,40 @@ class SocialTokens
      */
     public function revoke(SocialToken $token): void
     {
-        $this->registry->for($token->provider)->revoke($token);
+        if ($this->registry->has($token->provider)) {
+            $this->registry->for($token->provider)->revoke($token);
+        }
 
         $token->markRevoked();
 
         $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
+    }
+
+    /**
+     * Disconnect ONE account. Accounts sharing its credential (the other
+     * Instagram accounts of the same Facebook user, a LinkedIn member's profile
+     * and organizations) keep posting; the credential itself is revoked, at the
+     * provider too, only when its last connected account goes. "Connected" means
+     * not revoked: a sibling flagged needs_reconnect keeps the credential alive.
+     */
+    public function disconnect(SocialAccount $account): void
+    {
+        $account->markRevoked();
+
+        $token = $account->credential()->first();
+
+        if ($token === null || $token->status === AccountStatus::Revoked) {
+            return;
+        }
+
+        $stillConnected = $token->accounts()
+            ->whereKeyNot($account->getKey())
+            ->where('status', '!=', AccountStatus::Revoked->value)
+            ->exists();
+
+        if (! $stillConnected) {
+            $this->revoke($token); // account transitions are idempotent: no second AccountRevoked
+        }
     }
 
     /**
