@@ -3,6 +3,40 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
+  (Socialite's `x` driver, `services.x`). 2-hour access tokens renewed 30
+  minutes ahead; single-use rotating refresh tokens (`offline.access` required);
+  HTTP Basic client authentication on `api.x.com`; X's dead-refresh-token answer
+  (`invalid_request` "Value passed for the token was invalid.") is terminal,
+  while a request built wrong, a missing Authorization header or a suspended app
+  is an app-client failure (retried, alerted, never flagged); best-effort revoke
+  that logs a failure. OAuth 1.0a is not supported.
+- `OAuth2Connector`, the base for OAuth 2.0 refresh-token providers. TikTok,
+  Google, LinkedIn and X now share one refresh request, response parsing and
+  error-classification flow; a provider declares its endpoint, parameters and
+  error codes (`classifyError()`).
+
+### Fixed
+- An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
+  the TikTok, Google and LinkedIn connectors with "Array to string conversion";
+  it is now an unknown, retried failure.
+- TikTok `unauthorized_client` is an app-client failure, as the 1.2 changelog
+  already stated (it was retried as an unknown error).
+- Google `admin_policy_enforced` (a Workspace admin blocked the app for the
+  user) is terminal instead of being retried forever.
+- README: the Google redirect now asks for offline access
+  (`access_type=offline`, `prompt=consent`); without it Google issues no refresh
+  token and every Google credential was flagged within the hour.
+
+### Changed
+- The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
+  are known transient failures: still retried, no longer logged as uncatalogued.
+- OAuth token-endpoint failures carry the HTTP `status` in their context, and
+  terminal ones carry `error` / `error_description` too.
+
 ## [2.0.0]
 
 Identity is scoped to the owner. **Breaking:** see [UPGRADE.md](UPGRADE.md).

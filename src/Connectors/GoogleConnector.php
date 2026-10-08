@@ -5,7 +5,6 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
-use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
@@ -19,7 +18,7 @@ use Throwable;
  *    access_type=offline and prompt=consent (see the controller note)
  *  - a revoked or stale refresh_token returns invalid_grant: reconnect needed
  */
-class GoogleConnector extends AbstractConnector
+class GoogleConnector extends OAuth2Connector
 {
     protected const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -37,56 +36,28 @@ class GoogleConnector extends AbstractConnector
         return CarbonInterval::minutes(25);
     }
 
-    public function refreshCredential(SocialToken $token): RenewalResult
+    protected function tokenUrl(): string
     {
-        return $this->refreshWithToken($token->refresh_token);
+        return self::TOKEN_URL;
     }
 
-    private function refreshWithToken(?string $refreshToken): RenewalResult
+    protected function missingRefreshTokenReason(): string
     {
-        if (empty($refreshToken)) {
-            return RenewalResult::terminalFailure('Missing refresh token (was access_type=offline used?).');
-        }
+        return 'Missing refresh token (was access_type=offline used?).';
+    }
 
-        $response = $this->attempt(fn () => $this->http()->asForm()
-            ->acceptJson()
-            ->post(self::TOKEN_URL, [
-                'grant_type' => 'refresh_token',
-                'refresh_token' => $refreshToken,
-                'client_id' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-            ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return $this->mapError($body);
-        }
-
-        $accessToken = $body['access_token'] ?? null;
-
-        if ($accessToken === null) {
-            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $accessToken,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            // Stable strategy: Google does not return a refresh token here, so we
-            // pass null and keep the one we already stored.
-            refreshToken: null,
-            profile: array_filter([
-                'scope' => $body['scope'] ?? null,
-            ]),
-        );
+    /**
+     * Google answers invalid_request without saying why (e.g. "Could not
+     * determine client ID"): keep it unknown and retried. admin_policy_enforced:
+     * a Workspace admin blocked the app for this user, retrying cannot help.
+     */
+    protected function classifyError(string $error, string $description, int $status): ?string
+    {
+        return match ($error) {
+            'invalid_request' => null,
+            'admin_policy_enforced' => self::ERROR_TERMINAL,
+            default => parent::classifyError($error, $description, $status),
+        };
     }
 
     public function revoke(SocialToken $credential): void
@@ -102,26 +73,5 @@ class GoogleConnector extends AbstractConnector
         } catch (Throwable) {
             // Best effort.
         }
-    }
-
-    /**
-     * @param  array<string, mixed>  $body
-     */
-    protected function mapError(array $body): RenewalResult
-    {
-        $error = (string) ($body['error'] ?? 'unknown');
-        $description = (string) ($body['error_description'] ?? '');
-
-        // Terminal: refresh token revoked, expired, or password changed.
-        if ($error === 'invalid_grant') {
-            return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
-        }
-
-        $context = ['error' => $error, 'error_description' => $description];
-
-        // The app's own OAuth client is wrong, deleted or not allowed the grant.
-        return in_array($error, ['invalid_client', 'unauthorized_client'], true)
-            ? RenewalResult::clientFailure(trim("{$error}: {$description}"), $context)
-            : RenewalResult::unknownFailure(trim("{$error}: {$description}"), $context);
     }
 }

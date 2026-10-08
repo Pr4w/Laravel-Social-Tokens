@@ -41,7 +41,7 @@ abstract class TestCase extends Orchestra
         $app['config']->set('cache.default', 'array');
 
         // Credentials the connectors read from Socialite's services config.
-        foreach (['facebook', 'threads', 'tiktok', 'google', 'linkedin'] as $service) {
+        foreach (['facebook', 'threads', 'tiktok', 'google', 'linkedin', 'x'] as $service) {
             $app['config']->set("services.{$service}.client_id", "{$service}-id");
             $app['config']->set("services.{$service}.client_secret", "{$service}-secret");
             $app['config']->set("services.{$service}.redirect", "https://app.test/oauth/{$service}/callback");

@@ -6,6 +6,7 @@ use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
+use Pr4w\SocialTokens\Connectors\XConnector;
 
 return [
 
@@ -128,6 +129,7 @@ return [
     |   'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'), 'client_secret' => env('TIKTOK_CLIENT_SECRET')],
     |   'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'), 'client_secret' => env('GOOGLE_CLIENT_SECRET')],
     |   'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET')],
+    |   'x'        => ['client_id' => env('X_CLIENT_ID'), 'client_secret' => env('X_CLIENT_SECRET')],
     |
     */
     'connectors' => [
@@ -165,6 +167,12 @@ return [
             // the member holds only through other roles (ANALYST, CURATOR,
             // LEAD_GEN_FORMS_MANAGER...) are not stored, and are reconciled away.
             'posting_roles' => LinkedInConnector::DEFAULT_POSTING_ROLES,
+        ],
+
+        // X (Twitter) via OAuth 2.0: connect with Socialite's `x` driver and
+        // request offline.access (plus tweet.write, users.read, media.write).
+        'x' => [
+            'driver' => XConnector::class,
         ],
 
         // YouTube Shorts via Google OAuth2 (StableRefreshToken strategy).

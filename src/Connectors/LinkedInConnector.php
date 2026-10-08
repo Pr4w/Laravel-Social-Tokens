@@ -31,7 +31,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *    needs_reconnect only once it has actually expired
  *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
  */
-class LinkedInConnector extends AbstractConnector implements ChecksCredential
+class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
@@ -96,77 +96,30 @@ class LinkedInConnector extends AbstractConnector implements ChecksCredential
         };
     }
 
-    public function refreshCredential(SocialToken $token): RenewalResult
+    protected function tokenUrl(): string
     {
-        return $this->refreshWithToken($token->refresh_token);
+        return self::TOKEN_URL;
     }
 
-    private function refreshWithToken(?string $refreshToken): RenewalResult
+    protected function missingRefreshTokenReason(): string
     {
-        if (empty($refreshToken)) {
-            return RenewalResult::terminalFailure('No refresh token (re-authorisation required).');
-        }
+        return 'No refresh token (re-authorisation required).';
+    }
 
-        $response = $this->attempt(fn () => $this->http()->asForm()->acceptJson()->post(self::TOKEN_URL, [
-            'grant_type' => 'refresh_token',
-            'refresh_token' => $refreshToken,
-            'client_id' => $this->clientId(),
-            'client_secret' => $this->clientSecret(),
-        ]));
+    protected function refreshExpiresInKey(): ?string
+    {
+        return 'refresh_token_expires_in';
+    }
 
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            $error = (string) $body['error'];
-            $description = (string) ($body['error_description'] ?? '');
-
-            // Terminal: the member's grant is gone (refresh token expired or
-            // revoked, the one year cap reached, or issued to another LinkedIn
-            // app after switching apps). The member must re-authorise.
-            if (in_array($error, ['invalid_grant', 'refresh_token_client_mismatch'], true)
-                || ($error === 'invalid_request' && $this->isAboutRefreshToken($description))) {
-                return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
-            }
-
-            // The app's own client is misconfigured: not the member's problem.
-            if (in_array($error, ['invalid_client', 'unauthorized_client', 'invalid_request'], true)) {
-                return RenewalResult::clientFailure(trim("{$error}: {$description}"), [
-                    'error' => $error,
-                    'error_description' => $description,
-                ]);
-            }
-
-            return RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
-                'error' => $error,
-                'error_description' => $description,
-            ]);
-        }
-
-        $accessToken = $body['access_token'] ?? null;
-
-        if ($accessToken === null) {
-            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $accessToken,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            refreshToken: $body['refresh_token'] ?? null,
-            refreshExpiresAt: isset($body['refresh_token_expires_in'])
-                ? now()->addSeconds((int) $body['refresh_token_expires_in'])
-                : null,
-            profile: array_filter([
-                'scope' => $body['scope'] ?? null,
-            ]),
-        );
+    /**
+     * refresh_token_client_mismatch: the refresh token was issued to another
+     * LinkedIn app (e.g. after switching apps): the member must re-authorise.
+     */
+    protected function classifyError(string $error, string $description, int $status): ?string
+    {
+        return $error === 'refresh_token_client_mismatch'
+            ? self::ERROR_TERMINAL
+            : parent::classifyError($error, $description, $status);
     }
 
     /**

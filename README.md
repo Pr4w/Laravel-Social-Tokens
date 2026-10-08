@@ -22,13 +22,14 @@ accounts. Each works on its own; together they cover connect → publish → mea
 
 ## Why
 
-Six providers across four renewal strategies, and any naive "access token +
+Seven providers across four renewal strategies, and any naive "access token +
 refresh token + cron" design breaks on at least one of them:
 
 | Provider | Access token | Renewal model | Strategy |
 |---|---|---|---|
 | Google / YouTube | ~1h | refresh_token grant, refresh token reused | `StableRefreshToken` |
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
+| X (Twitter) | 2h | refresh_token grant, single-use refresh token rotates | `RotatingRefreshToken` |
 | Facebook | Page token, no expiry | page token stored static; the shared user token is extended | `ExtendLongLived` |
 | Instagram | 60 days | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
@@ -114,6 +115,7 @@ and Facebook share a single Meta app:
 'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'),  'client_secret' => env('TIKTOK_CLIENT_SECRET'),   'redirect' => env('TIKTOK_REDIRECT')],
 'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'),   'client_secret' => env('GOOGLE_CLIENT_SECRET'),   'redirect' => env('GOOGLE_REDIRECT')],
 'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET'), 'redirect' => env('LINKEDIN_REDIRECT')],
+'x'        => ['client_id' => env('X_CLIENT_ID'),        'client_secret' => env('X_CLIENT_SECRET'),        'redirect' => env('X_REDIRECT')],
 ```
 
 `config/social-tokens.php` then only enables connectors (their `driver`) and
@@ -130,11 +132,15 @@ drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 `Socialite::driver('tiktok')` resolves. Their credentials still go in the same
 `services.php` entries above.
 
+X uses Socialite's own `x` driver (laravel/socialite 5.16+), with the **OAuth 2.0**
+Client ID and Secret of a "Web App" (confidential client) whose User
+authentication settings allow Read and write. OAuth 1.0a is not supported.
+
 ## Connecting an account
 
 Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
-handles TikTok, Google, Instagram, Threads and Facebook, and the LinkedIn
+handles TikTok, Google, X, Instagram, Threads and Facebook, and the LinkedIn
 personal profile (for LinkedIn organizations, see below).
 
 Which scopes to request is your app's decision (they drive the consent screen
@@ -149,13 +155,20 @@ use Pr4w\SocialTokens\Actions\StoreConnection;
 $scopes = [
     'tiktok' => ['user.info.basic', 'video.publish'],
     'google' => ['openid', 'https://www.googleapis.com/auth/youtube.upload'],
+    'x' => ['tweet.read', 'tweet.write', 'users.read', 'media.write', 'offline.access'],
     // ...one entry per provider you support
 ];
 
 Route::get('/oauth/{provider}/redirect', function (string $provider) use ($scopes) {
-    return Socialite::driver($provider)
-        ->scopes($scopes[$provider] ?? [])
-        ->redirect();
+    $driver = Socialite::driver($provider)->scopes($scopes[$provider] ?? []);
+
+    // Google only issues a refresh token for offline access, and only on the
+    // consent screen: without these, the credential cannot be renewed.
+    if ($provider === 'google') {
+        $driver->with(['access_type' => 'offline', 'prompt' => 'consent']);
+    }
+
+    return $driver->redirect();
 });
 
 Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnection $store) {
@@ -174,6 +187,18 @@ Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnec
 `handle()` always returns a `Collection<SocialAccount>` — a connection can yield
 more than one account. Most providers give exactly one, so use
 `$accounts->sole()` if you want the single row; Facebook gives one per page.
+
+### X (Twitter)
+
+Request `offline.access`, or X issues no refresh token and the credential dies
+after two hours. Its refresh tokens are **single-use**: every renewal returns a
+new one, which the package stores under the renewal lock, so never refresh an X
+token outside the package. X also keeps **one live grant per app and X user**:
+if the same X account authorises your app again (another owner, another
+environment sharing the same X app), the previous tokens die, and that credential
+is flagged `needs_reconnect` at its next renewal. The package renews each X
+credential about every 90 minutes, which also keeps its ~6-month refresh token
+alive; with many X accounts, keep X's token-endpoint rate limits in mind.
 
 ### What `StoreConnection` handles for you
 
@@ -423,10 +448,13 @@ posting task on it) is not stored.
 
 ## Adding a provider
 
-Create one class extending `AbstractConnector`, implement `refreshCredential()`
-for that provider's exact refresh mechanism, declare its `renewalStrategy()` and
-`leadTime()`, and register it under its key in the config. See `TikTokConnector`
-for a complete reference. Nothing else in the package needs to change. Build
+For an OAuth 2.0 provider, extend `OAuth2Connector`: declare `tokenUrl()`, the
+`renewalStrategy()` and `leadTime()`, and override only what differs —
+`refreshParameters()`, `tokenRequest()` (client authentication), `classifyError()`
+(which error codes mean a dead grant, an app-side problem or a temporary one),
+`refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
+complete references. For anything else, extend `AbstractConnector` and implement
+`refreshCredential()`. Register the class under its key in the config. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
 configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx
 and 429 come back as transient failures.

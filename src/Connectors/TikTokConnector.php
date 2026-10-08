@@ -5,7 +5,6 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
-use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
@@ -17,10 +16,10 @@ use Throwable;
  *    every refresh returns a new refresh_token, the old one is dropped
  *  - refresh uses client_key (not client_id) and needs no user consent
  *
- * This is the reference implementation. A new provider is one new class like
- * this one, registered in config under its key.
+ * The refresh flow itself lives in OAuth2Connector; this class only declares
+ * TikTok's endpoint, parameter names and error codes.
  */
-class TikTokConnector extends AbstractConnector
+class TikTokConnector extends OAuth2Connector
 {
     protected const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
 
@@ -37,59 +36,39 @@ class TikTokConnector extends AbstractConnector
         return CarbonInterval::hours(2);
     }
 
-    public function refreshCredential(SocialToken $token): RenewalResult
+    protected function tokenUrl(): string
     {
-        return $this->refreshWithToken($token->refresh_token);
+        return self::TOKEN_URL;
     }
 
-    private function refreshWithToken(?string $refreshToken): RenewalResult
+    /** TikTok names the client id `client_key`. */
+    protected function refreshParameters(string $refreshToken): array
     {
-        if (empty($refreshToken)) {
-            return RenewalResult::terminalFailure('Missing refresh token.');
-        }
+        return [
+            'client_key' => $this->clientId(),
+            'client_secret' => $this->clientSecret(),
+            'grant_type' => 'refresh_token',
+            'refresh_token' => $refreshToken,
+        ];
+    }
 
-        $response = $this->attempt(fn () => $this->http()->asForm()
-            ->acceptJson()
-            ->post(self::TOKEN_URL, [
-                'client_key' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-                'grant_type' => 'refresh_token',
-                'refresh_token' => $refreshToken,
-            ]));
+    protected function refreshExpiresInKey(): ?string
+    {
+        return 'refresh_expires_in';
+    }
 
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
+    protected function profileFrom(array $body): array
+    {
+        return array_filter([
+            'open_id' => $body['open_id'] ?? null,
+            'scope' => $body['scope'] ?? null,
+        ]);
+    }
 
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return $this->mapError($body);
-        }
-
-        $accessToken = $body['access_token'] ?? null;
-
-        if ($accessToken === null) {
-            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $accessToken,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            // Rotating: persist the NEW refresh token.
-            refreshToken: $body['refresh_token'] ?? null,
-            refreshExpiresAt: isset($body['refresh_expires_in'])
-                ? now()->addSeconds((int) $body['refresh_expires_in'])
-                : null,
-            profile: array_filter([
-                'open_id' => $body['open_id'] ?? null,
-                'scope' => $body['scope'] ?? null,
-            ]),
-        );
+    /** access_denied: the user withdrew the app's access. */
+    protected function classifyError(string $error, string $description, int $status): ?string
+    {
+        return $error === 'access_denied' ? self::ERROR_TERMINAL : parent::classifyError($error, $description, $status);
     }
 
     public function revoke(SocialToken $token): void
@@ -107,38 +86,5 @@ class TikTokConnector extends AbstractConnector
         } catch (Throwable) {
             // Best effort. The local status is what matters for our flow.
         }
-    }
-
-    /**
-     * Map a TikTok OAuth error body to a transient or terminal failure.
-     *
-     * @param  array<string, mixed>  $body
-     */
-    protected function mapError(array $body): RenewalResult
-    {
-        $error = (string) ($body['error'] ?? 'unknown');
-        $description = (string) ($body['error_description'] ?? '');
-
-        // Terminal: the member's grant is gone (refresh token revoked or expired,
-        // access withdrawn).
-        if (in_array($error, ['invalid_grant', 'access_denied'], true)
-            || ($error === 'invalid_request' && $this->isAboutRefreshToken($description))) {
-            return RenewalResult::terminalFailure(trim("{$error}: {$description}"));
-        }
-
-        // The app's own client key/secret is wrong or missing.
-        if (in_array($error, ['invalid_client', 'invalid_request'], true)) {
-            return RenewalResult::clientFailure(trim("{$error}: {$description}"), [
-                'error' => $error,
-                'error_description' => $description,
-            ]);
-        }
-
-        // Unrecognised: flagged as unknown so it gets logged and catalogued.
-        // Behaves as transient so a provider hiccup does not burn the account.
-        return RenewalResult::unknownFailure(trim("{$error}: {$description}"), [
-            'error' => $error,
-            'error_description' => $description,
-        ]);
     }
 }

@@ -89,7 +89,7 @@ it('maps a refresh token issued to another LinkedIn app to terminal', function (
 });
 
 it('maps an unknown oauth error to transient', function () {
-    Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response(['error' => 'server_error'], 400)]);
+    Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response(['error' => 'something_new'], 400)]);
 
     $result = linkedin()->refreshCredential(linkedinCredential());
 

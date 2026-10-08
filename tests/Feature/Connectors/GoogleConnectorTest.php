@@ -61,12 +61,30 @@ it('maps invalid_grant to terminal', function () {
 });
 
 it('maps an unknown oauth error to unknown/transient', function () {
-    Http::fake(['oauth2.googleapis.com/token' => Http::response(['error' => 'temporarily_unavailable'], 400)]);
+    Http::fake(['oauth2.googleapis.com/token' => Http::response(['error' => 'something_new'], 400)]);
 
     $result = google()->refreshCredential(googleCredential());
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient)
         ->and($result->unknown)->toBeTrue();
+});
+
+it('retries the RFC 6749 temporary errors as known transient failures', function (string $error) {
+    // A 4xx, so the body reaches the error classification (a 5xx is retried
+    // before the body is read).
+    Http::fake(['oauth2.googleapis.com/token' => Http::response(['error' => $error], 400)]);
+
+    $result = google()->refreshCredential(googleCredential());
+
+    expect($result->outcome)->toBe(RenewalOutcome::Transient)
+        ->and($result->unknown)->toBeFalse()
+        ->and($result->context['status'] ?? null)->toBe(400);
+})->with(['temporarily_unavailable', 'server_error']);
+
+it('maps admin_policy_enforced to terminal: a Workspace admin blocked the app', function () {
+    Http::fake(['oauth2.googleapis.com/token' => Http::response(['error' => 'admin_policy_enforced', 'error_description' => 'Blocked by admin'], 400)]);
+
+    expect(google()->refreshCredential(googleCredential())->outcome)->toBe(RenewalOutcome::Terminal);
 });
 
 it('revokes using the refresh token when present', function () {
