@@ -159,6 +159,22 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `$token->access_token` is that token; flag it the same way if you call
   `renewCredential()` yourself
   ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
+- **A LinkedIn member's personal profile and organizations have separate
+  credentials.** A credential is unique per `(provider, provider_holder_id,
+  purpose, owner)`: `StoreLinkedInOrganizations` stores the member token on a
+  credential with `purpose = 'organizations'`
+  (`StoreLinkedInOrganizations::PURPOSE`), and the profile stored through
+  `StoreConnection` / `StoreAccountFromSocialite` keeps the default one
+  (`purpose = ''`). Migration `2025_01_01_000008_add_purpose_to_social_tokens`
+  adds the column, replaces the unique key `social_tokens_owner_identity_unique`
+  with `social_tokens_identity_purpose_unique`, and splits the LinkedIn
+  credentials 2.x shared between the two (see Fixed). A lookup of a credential
+  by `(provider, provider_holder_id, owner)` may now find two rows for a
+  LinkedIn member: name the purpose (`forPurpose()`). The two credentials
+  renew, warn (`CredentialExpiringSoon`), get flagged and are reconnected
+  separately; disconnecting the personal row revokes the profile's credential,
+  and revoking an organization's credential no longer revokes the personal row
+  ([UPGRADE](UPGRADE.md#linkedin-profiles-and-organizations-have-separate-credentials)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -397,6 +413,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `StoreLinkedInOrganizations` example, so the refresh token's expiry stayed
   unknown until the first renewal. Both actions take it explicitly now
   (`refreshExpiresAt:`, see Added), and the README example passes it.
+- **Connecting a LinkedIn profile no longer breaks posting as the member's
+  organizations, nor the reverse.** The profile (Socialite: OpenID scopes and
+  `w_member_social`) and the organizations (an app-side exchange with
+  `w_organization_social`) are two authorizations, stored on one shared
+  credential: whichever flow ran last replaced the other's access token,
+  refresh token, expiry and scopes. Posts as the organizations then failed
+  with a 403 while their rows still listed `w_organization_social` in
+  `hasScope()`, `usable()` still returned them, and LinkedIn introspection
+  answered `active`, so nothing was flagged. Each flow now has its own
+  credential (see Changed (breaking)), and the migration splits the shared
+  ones. A credential is kept alive by the accounts posting with it, no longer
+  by the member's accounts on the other one, so the organizations' token is
+  not renewed (nor warned about) for a member who only keeps the profile.
 - Re-syncing LinkedIn organizations with the member token already stored no
   longer erases or moves that token's expiry. `StoreLinkedInOrganizations`
   wrote `expires_at`, `renew_at` and `last_renewed_at` from the call: without
@@ -454,6 +483,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `refreshExpiresAt:` on `StoreConnection::handle()` and
   `StoreAccountFromSocialite::handle()`: the refresh token's expiry, which
   core Socialite's drivers do not expose (see Fixed).
+- `social_tokens.purpose`, `SocialToken::DEFAULT_PURPOSE` (`''`),
+  `StoreLinkedInOrganizations::PURPOSE` (`'organizations'`) and the
+  `SocialToken::forPurpose($purpose = '')` scope (see Changed (breaking)).
+  `persistCredential()` keys without a purpose name the default credential.
+- Migration `2025_01_01_000008_add_purpose_to_social_tokens`. On MySQL and
+  MariaDB it checks that the new unique key fits InnoDB's 3072-byte limit
+  before changing anything; it can be run again after a failure, splits in
+  chunks of 100 credentials, each in its own transaction, and its `down()`
+  refuses while a member has two credentials for one owner.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

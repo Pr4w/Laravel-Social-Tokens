@@ -77,12 +77,13 @@ class StoreAccountFromSocialite
             }
         }
 
-        // Never forget a known refresh token: storing a profile without one
-        // (e.g. the LinkedIn personal row next to the organizations, which share
-        // this credential) must not wipe it or its expiry.
+        // Never forget a known refresh token: a reconnect without one must not
+        // wipe it or its expiry. The default credential: the LinkedIn
+        // organizations have their own (StoreLinkedInOrganizations::PURPOSE).
         $existing = SocialToken::query()
             ->where('provider', $connector->credentialProvider())
             ->where('provider_holder_id', $user->getId())
+            ->forPurpose()
             ->ownedBy($owner)
             ->first();
 

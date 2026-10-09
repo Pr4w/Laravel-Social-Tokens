@@ -40,9 +40,23 @@ files (existing files are left alone).
   `social_accounts.social_token_id` on PostgreSQL and SQLite, which do not index
   a foreign key column. On MySQL the foreign key already has an index, and the
   migration adds nothing.
+- `2025_01_01_000008_add_purpose_to_social_tokens` adds
+  `social_tokens.purpose` (`varchar(32)`, not null, default `''`), replaces the
+  unique key on `(provider, provider_holder_id, ownable_type, ownable_id)`
+  (`social_tokens_owner_identity_unique`) with one on
+  `(provider, provider_holder_id, purpose, ownable_type, ownable_id)`
+  (`social_tokens_identity_purpose_unique`, prefixed like Laravel's own index
+  names when `prefix_indexes` is on), and moves the LinkedIn organizations to
+  credentials of their own (see
+  [LinkedIn profiles and organizations](#linkedin-profiles-and-organizations-have-separate-credentials)).
+  On MySQL and MariaDB it checks first that the new key fits InnoDB's
+  3072-byte limit, and refuses, changing nothing, if it does not. It can be
+  run again after a failure, and commits its data changes in chunks rather
+  than as one transaction.
 
-Both are named to run before `2025_01_01_000007_scope_identity_to_owner`, which
-needs them when you come from 1.x. On a 2.x install, which already ran 000007,
+The two 000006 migrations are named to run before
+`2025_01_01_000007_scope_identity_to_owner`, which needs them when you come
+from 1.x; 000008 runs after it. On a 2.x install, which already ran 000007,
 they simply run on their own.
 
 ### Transient renewal failures are no longer reported
@@ -426,6 +440,80 @@ yourself, pass it: `refreshExpiresAt:` on `StoreConnection::handle()` and
 `StoreLinkedInOrganizations::handle()` (the README example now does). Without
 it, the first renewal records it.
 
+### LinkedIn profiles and organizations have separate credentials
+
+A LinkedIn member's personal profile (stored through `StoreConnection` /
+`StoreAccountFromSocialite`) and their organizations (stored through
+`StoreLinkedInOrganizations`) come from two authorizations with two tokens and
+two scope sets. 2.x stored both on one `(linkedin, member id, owner)`
+credential, so whichever flow ran last replaced the other's access token,
+refresh token, expiry and scopes: after a member connected their profile,
+every post as their organizations failed with a 403, while the organization
+rows still listed `w_organization_social`. The organizations now post with a
+credential of their own, with `purpose = 'organizations'`
+(`StoreLinkedInOrganizations::PURPOSE`); the profile keeps the default one
+(`purpose = ''`).
+
+**What the migration does.** `2025_01_01_000008` splits every LinkedIn
+credential that backs both the member's personal row and organization rows:
+it copies the credential with purpose `organizations` (same tokens, expiry,
+schedule, scopes and owner) and points the organization rows at the copy.
+A credential that backs organization rows only takes the purpose in place.
+Nothing else changes. Right after the upgrade, both credentials of a member
+therefore hold the same token; they part as soon as the member goes through
+either flow again.
+
+**What to check in your code.**
+
+1. **Credential lookups by holder.** A LinkedIn member can now have two
+   credentials per owner. Name the one you mean:
+
+   ```php
+   // 2.x
+   SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)->first();
+
+   // 3.0: the organizations' credential...
+   SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
+       ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first();
+   // ...or the personal profile's
+   SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
+       ->forPurpose()->first();
+   ```
+
+   Better still, go through the account: `$account->credential`.
+2. **Credentials you write yourself.** Keys of `updateOrCreate()` /
+   `firstOrCreate()` on `social_tokens` by `(provider, provider_holder_id,
+   owner)` can now match either credential: add `'purpose' => ''` to them, or
+   use `SocialToken::persistCredential()`, whose keys default to the default
+   purpose.
+3. **Reconnect prompts.** The two credentials renew, warn and get flagged on
+   their own. A member who has both gets one `CredentialExpiringSoon` (and,
+   once it expires, one `CredentialNeedsReconnect`) per credential, and must
+   reconnect each through its own flow: send them to your organization
+   exchange when `$event->token->purpose === StoreLinkedInOrganizations::PURPOSE`,
+   and to the Socialite redirect otherwise. Reconnecting the profile no longer
+   refreshes the organizations' token, nor the reverse.
+4. **Disconnecting.** `disconnect()` on the personal row now revokes the
+   profile's credential (it was kept alive by the organizations sharing it),
+   and disconnecting the last organization revokes the organizations' one.
+   `revoke($organization->credential)` revokes the organization rows only, no
+   longer the personal row. To disconnect a member entirely, revoke both
+   credentials. The provider-side revocation is skipped while the member's
+   other credential is still active, as it is for another owner's.
+5. **Scopes.** LinkedIn documents that authorising the same LinkedIn app with
+   a different set of scopes invalidates the member's earlier access tokens.
+   If both flows use one LinkedIn app, request the same scopes in both (the
+   union), or use a separate app for each, or the first flow's token stops
+   working when the member goes through the second.
+6. **The unique key** on `social_tokens` is now
+   `social_tokens_identity_purpose_unique`. Code or migrations of your own that
+   name `social_tokens_owner_identity_unique` must use the new name.
+
+**Rolling back.** The migration's `down()` refuses while a member has two
+credentials for one owner, since 2.x keeps one and would pick either. To roll
+back, first point each such member's organization rows back at the default
+credential and delete the `organizations` one, then roll back.
+
 ### Re-syncing LinkedIn organizations
 
 If you call `StoreLinkedInOrganizations::handle()` again with the stored
@@ -592,12 +680,15 @@ SocialAccount::where('provider', 'facebook')->where('provider_user_id', $pageId)
 
 // after
 SocialAccount::ownedBy($owner)->where('provider', 'facebook')->where('provider_user_id', $pageId)->first();
-SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)->first();
+SocialToken::ownedBy($owner)->where('provider', 'tiktok')->where('provider_holder_id', $openId)->forPurpose()->first();
 SocialAccount::ownedBy(null); // owner-less rows
 ```
 
 Look especially for `->first()`, `->sole()` and `firstWhere()` on those columns,
-and for unique validation rules (`Rule::unique('social_accounts', …)`).
+and for unique validation rules (`Rule::unique('social_accounts', …)`). In 3.0
+a credential lookup also names its purpose (`forPurpose()`): a LinkedIn member
+has one credential for the personal profile and one for the organizations (see
+[From 2.x to 3.0](#linkedin-profiles-and-organizations-have-separate-credentials)).
 
 ### 4. Behaviour changes to know
 

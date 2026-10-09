@@ -22,14 +22,19 @@ use RuntimeException;
  *
  * Because LinkedIn's token exchange is app-side (Socialite's driver can't fetch
  * the profile with non-OIDC scopes), this action takes an already-obtained
- * member token and its metadata rather than a Socialite user. The personal
- * profile is a separate row (store it with StoreAccountFromSocialite). It also
- * carries provider_holder_id = member id and shares the (linkedin, member id)
- * credential with the organizations, so reconciliation excludes it explicitly
- * by its provider_user_id (the member id).
+ * member token and its metadata rather than a Socialite user. That token is
+ * stored on the member's organizations credential (purpose PURPOSE), apart
+ * from the default credential of the member's personal profile, which comes
+ * from another authorization with other scopes (StoreAccountFromSocialite):
+ * on one shared credential, each flow replaced the other's token. The personal
+ * row still carries provider_holder_id = member id, so reconciliation excludes
+ * it explicitly by its provider_user_id (the member id).
  */
 class StoreLinkedInOrganizations
 {
+    /** The purpose of the member credential the organizations post with. */
+    public const PURPOSE = 'organizations';
+
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
@@ -70,11 +75,12 @@ class StoreLinkedInOrganizations
             throw new RuntimeException('Could not list LinkedIn organizations: '.$organizations->reason);
         }
 
-        // Never forget a known refresh token: a re-sync without one (or the
-        // personal profile stored meanwhile) must not wipe it or its expiry.
+        // Never forget a known refresh token: a re-sync without one must not
+        // wipe it or its expiry.
         $existing = SocialToken::query()
             ->where('provider', 'linkedin')
             ->where('provider_holder_id', $memberId)
+            ->forPurpose(self::PURPOSE)
             ->ownedBy($owner)
             ->first();
 
@@ -110,9 +116,9 @@ class StoreLinkedInOrganizations
         $scopes = SocialToken::normaliseScopes($scopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
 
-        // The shared renewable member credential every organization posts with.
+        // The renewable member credential every organization posts with.
         $credential = SocialToken::persistCredential(
-            ['provider' => 'linkedin', 'provider_holder_id' => $memberId] + SocialAccount::ownerKey($owner),
+            ['provider' => 'linkedin', 'provider_holder_id' => $memberId, 'purpose' => self::PURPOSE] + SocialAccount::ownerKey($owner),
             $kept + [
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,
@@ -166,8 +172,8 @@ class StoreLinkedInOrganizations
 
         // Reconcile: organizations this member no longer administers (absent from
         // the response) are flagged. Scoped to provider_holder_id, so other
-        // members' orgs are never touched; the member's personal row shares that
-        // holder id and is excluded by its provider_user_id.
+        // members' orgs are never touched; the member's personal row carries
+        // that holder id too and is excluded by its provider_user_id.
         $managedIds = collect($organizations)->pluck('id')->filter()->values()->all();
 
         SocialAccount::query()

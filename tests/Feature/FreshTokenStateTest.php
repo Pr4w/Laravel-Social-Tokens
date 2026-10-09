@@ -138,6 +138,7 @@ it('clears the strike when LinkedIn organizations are stored again', function ()
     $credential = SocialToken::create([
         'provider' => 'linkedin',
         'provider_holder_id' => 'member-1',
+        'purpose' => StoreLinkedInOrganizations::PURPOSE,
         'access_token' => 'member-token-1',
         'status' => AccountStatus::Active,
         'failed_checks' => 1,

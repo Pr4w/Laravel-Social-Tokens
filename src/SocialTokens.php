@@ -352,8 +352,10 @@ class SocialTokens
     public function revoke(SocialToken $token): void
     {
         // Revoking at the provider can end the external user's whole consent for
-        // the app (Google, TikTok), so skip it while another owner still holds
-        // an active grant for the same user: revoke locally only.
+        // the app (Google, TikTok), so skip it while another credential still
+        // holds an active grant for the same user, under another owner or for
+        // another purpose (the LinkedIn organizations next to the member's
+        // personal profile): revoke locally only.
         $sharedGrant = SocialToken::query()
             ->whereKeyNot($token->getKey())
             ->where('provider', $token->provider)

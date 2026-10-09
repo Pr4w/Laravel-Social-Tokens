@@ -3,6 +3,8 @@
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
 
 /*
  * The owner-scoped unique keys of 2.0 carried hand-built names that ignored the
@@ -70,14 +72,15 @@ it('lets two prefixed installs share one database', function () {
     onConnection('acme', fn () => migratePackage());
     onConnection('beta', fn () => migratePackage());
 
-    expect(uniqueIndexNames('beta', 'social_tokens'))->toBe(['beta_social_tokens_owner_identity_unique'])
+    expect(uniqueIndexNames('beta', 'social_tokens'))->toBe(['beta_social_tokens_identity_purpose_unique'])
         ->and(uniqueIndexNames('beta', 'social_accounts'))->toBe(['beta_social_accounts_owner_identity_unique'])
-        ->and(uniqueIndexNames('acme', 'social_tokens'))->toBe(['acme_social_tokens_owner_identity_unique']);
+        ->and(uniqueIndexNames('acme', 'social_tokens'))->toBe(['acme_social_tokens_identity_purpose_unique']);
 });
 
 it('rolls back the unprefixed indexes 2.0 created', function () {
     onConnection('acme', function () {
         migratePackage();
+        (include __DIR__.'/../../../database/migrations/2025_01_01_000008_add_purpose_to_social_tokens.php')->down();
 
         // What 2.0.0 left on a prefixed install.
         foreach (['social_tokens' => 'provider_holder_id', 'social_accounts' => 'provider_user_id'] as $table => $external) {
@@ -107,3 +110,21 @@ it('names the owner keys the way Laravel names its own indexes', function (strin
 
     expect($ours)->toBe($laravel)->not->toContain('.');
 })->with(['social_tokens', 'social.tokens']);
+
+it('finds the credentials in use on a prefixed install', function () {
+    // inUse() aliases the credentials table in a subquery: the prefix must
+    // apply to the alias and to every column read through it.
+    $inUse = null;
+
+    onConnection('acme', function () use (&$inUse) {
+        migratePackage();
+
+        $user = SocialToken::create(['provider' => 'facebook', 'provider_holder_id' => 'fb-1', 'status' => 'active']);
+        $page = SocialToken::create(['provider' => 'facebook', 'provider_holder_id' => 'page-1', 'status' => 'active']);
+        SocialAccount::create(['provider' => 'facebook', 'provider_user_id' => 'page-1', 'provider_holder_id' => 'fb-1', 'social_token_id' => $page->getKey(), 'status' => 'active']);
+
+        $inUse = SocialToken::query()->inUse()->orderBy('id')->pluck('provider_holder_id')->all();
+    });
+
+    expect($inUse)->toBe(['fb-1', 'page-1']);
+});

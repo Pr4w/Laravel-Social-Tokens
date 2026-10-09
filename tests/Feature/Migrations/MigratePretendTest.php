@@ -44,6 +44,7 @@ function unreachableServer(string $driver): void
 }
 
 it('lists the owner migration on the 1.x schema without changing it', function () {
+    pretendedMigration('2025_01_01_000008_add_purpose_to_social_tokens')->down();
     pretendedMigration('2025_01_01_000007_scope_identity_to_owner')->down();
 
     expect(pretendedStatements('2025_01_01_000007_scope_identity_to_owner'))->toBe([
@@ -96,6 +97,34 @@ it('lists the owner columns with the app morph key type', function () {
     expect($statements)->toContain('alter table "social_tokens" add column "ownable_id" uuid null');
 });
 
+it('lists the purpose migration without changing the schema', function () {
+    pretendedMigration('2025_01_01_000008_add_purpose_to_social_tokens')->down();
+
+    expect(pretendedStatements('2025_01_01_000008_add_purpose_to_social_tokens'))->toBe([
+        'alter table "social_tokens" add column "purpose" varchar not null default \'\'',
+        'create unique index "social_tokens_identity_purpose_unique" on "social_tokens" ("provider", "provider_holder_id", "purpose", "ownable_type", "ownable_id")',
+        'drop index "social_tokens_owner_identity_unique"',
+    ])->and(Schema::hasColumn('social_tokens', 'purpose'))->toBeFalse();
+});
+
+it('lists the purpose migration rollback', function () {
+    expect(pretendedStatements('2025_01_01_000008_add_purpose_to_social_tokens', 'down'))->toBe([
+        'create unique index "social_tokens_owner_identity_unique" on "social_tokens" ("provider", "provider_holder_id", "ownable_type", "ownable_id")',
+        'drop index "social_tokens_identity_purpose_unique"',
+        'alter table "social_tokens" drop column "purpose"',
+    ])->and(Schema::hasColumn('social_tokens', 'purpose'))->toBeTrue();
+});
+
+it('lists the purpose migration on MySQL, whose key length check reads the columns', function () {
+    unreachableServer('mysql');
+
+    expect(pretendedStatements('2025_01_01_000008_add_purpose_to_social_tokens'))->toBe([
+        'alter table `social_tokens` add `purpose` varchar(32) not null default \'\' after `provider_holder_id`',
+        'alter table `social_tokens` add unique `social_tokens_identity_purpose_unique`(`provider`, `provider_holder_id`, `purpose`, `ownable_type`, `ownable_id`)',
+        'alter table `social_tokens` drop index `social_tokens_owner_identity_unique`',
+    ]);
+});
+
 it('lists the provider column change it cannot measure', function (string $driver, array $expected) {
     unreachableServer($driver);
 
@@ -126,5 +155,9 @@ it('lists every migration of a fresh install', function (string $driver) {
         ->toContain(match ($driver) {
             'mysql' => 'alter table `social_accounts` add unique `social_accounts_owner_identity_unique`(`provider`, `provider_user_id`, `ownable_type`, `ownable_id`)',
             'pgsql' => 'alter table "social_accounts" add constraint "social_accounts_owner_identity_unique" unique ("provider", "provider_user_id", "ownable_type", "ownable_id")',
+        })
+        ->toContain(match ($driver) {
+            'mysql' => 'alter table `social_tokens` add unique `social_tokens_identity_purpose_unique`(`provider`, `provider_holder_id`, `purpose`, `ownable_type`, `ownable_id`)',
+            'pgsql' => 'alter table "social_tokens" add constraint "social_tokens_identity_purpose_unique" unique ("provider", "provider_holder_id", "purpose", "ownable_type", "ownable_id")',
         });
 })->with(['mysql', 'pgsql']);

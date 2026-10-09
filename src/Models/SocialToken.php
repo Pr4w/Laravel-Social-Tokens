@@ -30,8 +30,16 @@ use Pr4w\SocialTokens\Support\Settings;
  * backs every organization). Renewal happens here, once, not per account. Each
  * Facebook Page posts with its own static page-token credential.
  *
+ * A credential is unique per (provider, holder, purpose, owner). The purpose
+ * keeps apart the grants one holder gives the same owner through different
+ * flows, so that one flow never replaces the other's token: '' for the
+ * default credential, StoreLinkedInOrganizations::PURPOSE for the LinkedIn
+ * member token behind the organizations (the member's personal profile has
+ * the default one).
+ *
  * @property string $provider
  * @property ?string $provider_holder_id
+ * @property string $purpose
  * @property ?string $access_token
  * @property ?string $refresh_token
  * @property ?CarbonInterface $expires_at
@@ -49,7 +57,13 @@ class SocialToken extends Model
 {
     use TransitionsStatus;
 
+    /** The purpose of a holder's default credential. */
+    public const DEFAULT_PURPOSE = '';
+
     protected $guarded = [];
+
+    /** @var array<string, mixed> */
+    protected $attributes = ['purpose' => self::DEFAULT_PURPOSE];
 
     /**
      * Never serialised (toArray/toJson, e.g. an account loaded with its
@@ -118,6 +132,17 @@ class SocialToken extends Model
     }
 
     /**
+     * Credentials of one purpose: the default ones unless told otherwise.
+     *
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
+     */
+    public function scopeForPurpose(Builder $query, string $purpose = self::DEFAULT_PURPOSE): Builder
+    {
+        return $query->where('purpose', $purpose);
+    }
+
+    /**
      * Credentials whose renewal window has opened.
      *
      * @param  Builder<SocialToken>  $query
@@ -136,6 +161,10 @@ class SocialToken extends Model
      * (the account posts with it), or as the holder of accounts of the same
      * provider (the Meta user token behind a user's Facebook Pages, which post
      * with their own page tokens but are re-derived from it).
+     *
+     * An account posting with another credential of the same holder keeps
+     * only that one alive: the LinkedIn organizations their own credential,
+     * not the member's personal one beside it, and the other way round.
      *
      * @param  Builder<SocialToken>  $query
      * @return Builder<SocialToken>
@@ -159,7 +188,11 @@ class SocialToken extends Model
                         ->whereColumn("{$accounts}.ownable_id", "{$tokens}.ownable_id"))
                     ->orWhere(fn ($none) => $none
                         ->whereNull("{$accounts}.ownable_type")
-                        ->whereNull("{$tokens}.ownable_type")))));
+                        ->whereNull("{$tokens}.ownable_type")))
+                ->whereNotExists(fn ($sibling) => $sibling->selectRaw('1')->from("{$tokens} as sibling_credential")
+                    ->whereColumn('sibling_credential.id', "{$accounts}.social_token_id")
+                    ->whereColumn('sibling_credential.provider', "{$tokens}.provider")
+                    ->whereColumn('sibling_credential.provider_holder_id', "{$tokens}.provider_holder_id"))));
     }
 
     // Persistence -------------------------------------------------------------
@@ -184,11 +217,14 @@ class SocialToken extends Model
      * stored (renewAtFor(), renewalStrategyWith()): what it holds can change
      * how it renews (a LinkedIn credential without a refresh token).
      *
+     * $keys without a purpose name the default credential.
+     *
      * @param  array<string, mixed>  $keys
      * @param  array<string, mixed>  $values
      */
     public static function persistCredential(array $keys, #[\SensitiveParameter] array $values, ?ProviderConnector $connector = null): static
     {
+        $keys += ['purpose' => static::DEFAULT_PURPOSE];
         $values += static::issuedState();
 
         $token = static::query()->firstOrNew($keys)->forceFill($values);

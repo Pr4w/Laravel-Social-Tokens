@@ -48,7 +48,8 @@ accounts:
 
 - a Meta user token backs every Instagram account for that user (and is kept,
   renewable, for a Facebook-only connection too: the Pages are minted from it)
-- a LinkedIn member token backs every organization they administer
+- a LinkedIn member token backs every organization they administer (the
+  member's personal profile has its own credential, from its own authorization)
 - a TikTok / Google account is 1:1 with its own credential
 
 Renewal happens on the credential, **once** — every account sharing it sees the
@@ -66,20 +67,32 @@ too.
 
 Identity is scoped to the **owner** you pass when connecting (`owner:` — a User,
 a Team, a Workspace…): an account is unique per *(provider, external id,
-owner)* and a credential per *(provider, external holder, owner)*. So two owners
-can connect the same Facebook Page, Instagram account, LinkedIn organization or
-TikTok account: each gets its own row, backed by its own credential — the grant
-its own user gave — and one owner's reconnect, revoke or disconnect never moves
-or overwrites the other's. Reconnecting for the same owner (or without an owner)
-updates the existing row in place.
+owner)* and a credential per *(provider, external holder, purpose, owner)*. So
+two owners can connect the same Facebook Page, Instagram account, LinkedIn
+organization or TikTok account: each gets its own row, backed by its own
+credential — the grant its own user gave — and one owner's reconnect, revoke or
+disconnect never moves or overwrites the other's. Reconnecting for the same
+owner (or without an owner) updates the existing row in place.
 
 Because one external account can now have several rows, scope lookups to the
 owner:
 
 ```php
 SocialAccount::ownedBy($workspace)->where('provider', 'facebook')->where('provider_user_id', $pageId)->first();
-SocialToken::ownedBy($workspace)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)->first();
+SocialToken::ownedBy($workspace)->where('provider', 'tiktok')->where('provider_holder_id', $openId)->forPurpose()->first();
 SocialAccount::ownedBy(null); // the owner-less rows
+```
+
+The **purpose** keeps apart the credentials one external holder grants the same
+owner through different flows, so that one flow never replaces another's token:
+`''` (`SocialToken::DEFAULT_PURPOSE`) for the default credential, and
+`StoreLinkedInOrganizations::PURPOSE` (`'organizations'`) for the LinkedIn member
+token behind the organizations, next to the member's personal profile. Name it
+when you look a credential up by its holder (`forPurpose()` is the default one):
+
+```php
+SocialToken::ownedBy($workspace)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
+    ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first(); // the organizations' credential
 ```
 
 What stays per **external user**, across owners, because that is how the
@@ -91,8 +104,9 @@ providers grant access:
   user, not per connection.
 - **Provider-side revocation.** Revoking a token at Google or TikTok can end
   that user's whole consent for your app, so `revoke()` / `disconnect()` only
-  call the provider once no other owner holds an active credential for the same
-  external user; until then the revoke is local.
+  call the provider once no other credential (another owner's, or another
+  purpose's) is active for the same external user; until then the revoke is
+  local.
 
 A connection with an owner never adopts an existing owner-less row: it creates
 its own. To attach an owner-less row, `associate()` it yourself.
@@ -331,11 +345,26 @@ the member holds a posting role are stored — by default `ADMINISTRATOR`,
 `CONTENT_ADMINISTRATOR`, `DIRECT_SPONSORED_CONTENT_POSTER` and
 `RECRUITING_POSTER`, configurable with `connectors.linkedin.posting_roles`; an
 organization the member now holds only as `ANALYST`, `CURATOR`, etc. is flagged
-at the next connect. If you also post as the
-member, store that as its own row with `StoreAccountFromSocialite`. It shares the
-member's credential and `provider_holder_id` with the organizations, and
-reconciliation excludes it by its `provider_user_id` (the member id), so it only
-ever touches the organization rows.
+at the next connect.
+
+The member token is stored on the member's **organizations credential**
+(purpose `StoreLinkedInOrganizations::PURPOSE`). If you also post as the
+member, store the personal profile with `StoreConnection` (or
+`StoreAccountFromSocialite`): it gets its own credential, the default one, from
+its own authorization. Neither flow ever replaces the other's token, refresh
+token or scopes, so connecting the profile after the Pages (or the other way
+round) leaves both posting. They also renew, warn (`CredentialExpiringSoon`) and
+get flagged separately, and each is reconnected through its own flow: read
+`$event->token->purpose` to send the member to the right one. The personal row
+still carries the member id as `provider_holder_id`, and reconciliation
+excludes it by its `provider_user_id` (the member id), so it only ever touches
+the organization rows.
+
+LinkedIn documents that authorising the same LinkedIn app again with a
+different set of scopes invalidates the member's earlier access tokens. If both
+flows go through one LinkedIn app, request the same scopes in both (the union),
+or use a separate app for each; otherwise the first flow's token stops working
+when the member goes through the second one.
 
 ## Renewing
 
@@ -610,9 +639,11 @@ connection inside your own transaction, make the listener
 `ShouldQueueAfterCommit`.
 
 To disconnect **one** account, call `disconnect()`. Accounts that share its
-credential (the other Instagram accounts of the same Facebook user, a LinkedIn
-member's personal profile and organizations) keep posting. The credential itself
-is revoked, at the provider too, only when its last connected account goes:
+credential (the other Instagram accounts of the same Facebook user, the other
+organizations of a LinkedIn member) keep posting. The credential itself is
+revoked, at the provider too, only when its last connected account goes. A
+LinkedIn member's personal profile and organizations have separate credentials:
+disconnecting the profile leaves the organizations posting, and the reverse:
 
 ```php
 app(SocialTokens::class)->disconnect($account);
@@ -624,6 +655,10 @@ the credential:
 ```php
 app(SocialTokens::class)->revoke($account->credential);
 ```
+
+For a LinkedIn member, that is one of two logins: revoke the personal
+profile's credential and the organizations' one to disconnect the member
+entirely.
 
 Both record the revocation locally first (the `Revoked` events fire then), and
 only then ask the provider to invalidate the token. That call is best effort:

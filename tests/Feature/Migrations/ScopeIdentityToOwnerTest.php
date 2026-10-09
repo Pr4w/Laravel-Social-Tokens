@@ -54,7 +54,9 @@ function v1Account(string $provider, string $userId, ?string $holder, ?int $toke
 }
 
 beforeEach(function () {
-    // Back to the 1.x schema (the TestCase ran every migration), to seed v1 data.
+    // Back to the 1.x schema (the TestCase ran every migration), to seed v1
+    // data: the later purpose migration first, as migrate:rollback would.
+    (include __DIR__.'/../../../database/migrations/2025_01_01_000008_add_purpose_to_social_tokens.php')->down();
     ownerMigration()->down();
 
     $this->alice = Owner::create(['name' => 'alice']);

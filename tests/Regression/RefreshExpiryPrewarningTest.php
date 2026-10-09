@@ -24,6 +24,10 @@
  *    StoreAccountFromSocialite reads only TikTok's refresh_expires_in, not
  *    LinkedIn's refresh_token_expires_in.
  *
+ * Since 3.0 the personal profile has its own credential, apart from the
+ * organizations' (purpose 'organizations'): storing it cannot touch the
+ * organizations' refresh token at all, which the tests below now check.
+ *
  * Desired: one CredentialExpiringSoon as soon as refresh_expires_at - lead <= now
  * (deduplicated over the credential's whole end of life, re-armed by a
  * reconnect), the credential keeps posting until its access token really dies,
@@ -294,18 +298,19 @@ it('keeps the known refresh token expiry when the personal LinkedIn profile is s
 
     // Same OAuth exchange, personal row: core Socialite exposes no token
     // response body, so the action has no refresh expiry to offer.
-    app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+    $personal = app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
         'id' => 'member-1',
         'token' => 'member-access',
         'refreshToken' => 'member-refresh',
         'expiresIn' => 60 * 86400,
     ]));
 
-    $credential = SocialToken::query()->sole();
+    $credential = SocialToken::query()->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
 
     expect($credential->refresh_expires_at)->not->toBeNull('a known refresh_expires_at must never be replaced by null')
         ->and($credential->refresh_expires_at->equalTo($refreshExpiresAt))->toBeTrue()
-        ->and($credential->refresh_token)->toBe('member-refresh');
+        ->and($credential->refresh_token)->toBe('member-refresh')
+        ->and($personal->social_token_id)->not->toBe($credential->getKey());
 });
 
 it('keeps the shared LinkedIn refresh token when the personal profile is stored without one', function () {
@@ -320,7 +325,7 @@ it('keeps the shared LinkedIn refresh token when the personal profile is stored 
         'expiresIn' => 60 * 86400,
     ]));
 
-    $credential = SocialToken::query()->sole();
+    $credential = SocialToken::query()->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
 
     expect($credential->refresh_token)->toBe('member-refresh', 'a known refresh_token must never be replaced by null')
         ->and($credential->refresh_expires_at?->equalTo($refreshExpiresAt))->toBeTrue();
@@ -369,7 +374,13 @@ it('reads the refresh token expiry LinkedIn returns as refresh_token_expires_in'
 it('replaces the refresh token and its expiry when a reconnect brings new ones', function () {
     refreshPrewarnFakeLinkedIn([]);
 
-    refreshPrewarnConnect('member-refresh', now()->addDays(60), now()->addDays(30));
+    app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+        'id' => 'member-1',
+        'token' => 'member-access',
+        'refreshToken' => 'member-refresh',
+        'expiresIn' => 60 * 86400,
+        'accessTokenResponseBody' => ['refresh_expires_in' => 30 * 86400],
+    ]));
 
     app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
         'id' => 'member-1',
