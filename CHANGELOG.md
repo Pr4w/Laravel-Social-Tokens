@@ -257,6 +257,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `last_renewed_at`.
 - A Facebook Page credential records when its token was issued
   (`last_renewed_at`), as every other credential has since 1.2.
+- LinkedIn token introspection (`check-static` with `check_renewable`,
+  `reportRejected(terminal: false)`) flags a credential only when LinkedIn says
+  the token was `revoked`, or `expired` when refresh tokens are off. LinkedIn
+  also answers `{"active": false}` for a valid token issued to another LinkedIn
+  app than the configured client (after switching apps, or with a separate
+  Community Management app), and every LinkedIn credential was flagged on the
+  first run ("LinkedIn token inactive."), then again after each reconnect. A
+  bare `active: false`, or a token the answer says belongs to another client,
+  is now an uncatalogued check error, logged with a hint and never flagged.
+  With refresh tokens on, an expired access token is left to the renewal.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

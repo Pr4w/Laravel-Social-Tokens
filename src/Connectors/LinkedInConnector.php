@@ -66,8 +66,13 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 
     /**
      * Ask LinkedIn whether the member token still works (token introspection),
-     * without renewing it. Only an explicit `active: false` is a verdict; any
-     * other answer (e.g. invalid_client) proves nothing about the member.
+     * without renewing it. LinkedIn answers `active: false` both for a token
+     * the member revoked and for a valid token issued to another LinkedIn app
+     * than the configured client, so only an answer that says why is a
+     * verdict: `revoked`, or `expired` when nothing can refresh the token
+     * (with refresh tokens, renewal does). Anything else (a bare
+     * `active: false`, a token of another client, invalid_client) proves
+     * nothing about the member and comes back unknown, to be logged.
      */
     public function checkCredential(SocialToken $token): RenewalResult
     {
@@ -89,10 +94,33 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 
         $active = $response->json('active');
 
-        return match ($active) {
-            true => RenewalResult::success(accessToken: $accessToken),
-            false => RenewalResult::terminalFailure('LinkedIn token '.($response->json('status') ?? 'inactive').'.', ['definitive' => true]),
-            default => RenewalResult::unknownFailure('Unexpected LinkedIn token introspection response.', ['status' => $response->status()]),
+        if ($active === true) {
+            return RenewalResult::success(accessToken: $accessToken);
+        }
+
+        if ($active !== false) {
+            return RenewalResult::unknownFailure('Unexpected LinkedIn token introspection response.', ['status' => $response->status()]);
+        }
+
+        $status = $response->json('status');
+        $status = is_string($status) ? $status : null;
+        $issuedTo = $response->json('client_id');
+
+        if (is_string($issuedTo) && $issuedTo !== '' && $issuedTo !== $this->clientId()) {
+            return RenewalResult::unknownFailure(
+                "LinkedIn token was issued to another LinkedIn app ({$issuedTo}): introspect it with that app's client (connectors.linkedin.client_id).",
+                ['client_id' => $issuedTo, 'token_status' => $status],
+            );
+        }
+
+        return match (true) {
+            $status === 'revoked' => RenewalResult::terminalFailure('LinkedIn token revoked.', ['definitive' => true]),
+            $status === 'expired' && ! $this->renewalStrategy()->canRenewUnattended() => RenewalResult::terminalFailure('LinkedIn token expired.', ['definitive' => true]),
+            $status === 'expired' => RenewalResult::transientFailure('LinkedIn access token expired; renewal refreshes it.'),
+            default => RenewalResult::unknownFailure(
+                'LinkedIn token introspection answered inactive without a reason; if every LinkedIn credential does, the tokens were issued to another LinkedIn app than the configured client (services.linkedin or connectors.linkedin.client_id).',
+                ['token_status' => $status],
+            ),
         };
     }
 

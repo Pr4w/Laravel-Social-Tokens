@@ -453,8 +453,16 @@ With `terminal: false` (an ambiguous 401), the package first asks the provider
 whether the token still works, and flags only if it confirms. To catch revoked
 tokens between two renewals without waiting for a failed post, set
 `SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
-checks renewable Meta, Threads and LinkedIn credentials (LinkedIn uses
-`services.linkedin` for token introspection).
+checks renewable Meta, Threads and LinkedIn credentials.
+
+LinkedIn's token introspection uses the configured client (`services.linkedin`,
+or `client_id` / `client_secret` on the `linkedin` connector), which must be the
+LinkedIn app that issued the member tokens. LinkedIn answers a bare "inactive"
+for a token of another app, so the package flags a LinkedIn credential only
+when the answer says the token was `revoked`, or `expired` without refresh
+tokens; anything else is logged as an uncatalogued check error. If you obtain
+member tokens from a separate app (a Community Management app next to your
+Sign In app), point the `linkedin` connector at that app.
 
 ## Account status
 

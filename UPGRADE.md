@@ -238,6 +238,19 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
 - Facebook Page credentials now get `last_renewed_at` (the token's issue
   date) at each connection; rows stored by 2.x keep `null` until the user
   reconnects.
+- LinkedIn token introspection flags a credential only when LinkedIn answers
+  `status: revoked`, or `expired` with refresh tokens off. A bare
+  `{"active": false}`, which LinkedIn also sends for a token issued to another
+  LinkedIn app than the configured client, is logged as
+  `Uncatalogued credential check error` and never flagged. If every LinkedIn
+  credential logs it, set `client_id` / `client_secret` on the `linkedin`
+  connector (or `services.linkedin`) to the app that issued the member tokens.
+  2.x flagged those credentials with the reason `LinkedIn token inactive.`;
+  once the client is right, you can reactivate the ones whose users have not
+  reconnected yet (no event fires, and their account rows need no change):
+  `SocialToken::query()->where('provider', 'linkedin')->where('status', 'needs_reconnect')->where('last_error', 'LinkedIn token inactive.')->update(['status' => 'active', 'last_error' => null]);`.
+  With `check_renewable` on, the next `check-static` run checks them again
+  and flags the ones LinkedIn reports revoked.
 
 ### If you wrote a connector
 
