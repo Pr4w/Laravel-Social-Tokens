@@ -36,6 +36,13 @@ class FakeConnector extends AbstractConnector
 
     public static int $revokeCalls = 0;
 
+    /**
+     * Runs inside revoke(), e.g. to throw or to look at the credential then.
+     *
+     * @var (Closure(SocialToken): void)|null
+     */
+    public static ?Closure $revokeUsing = null;
+
     public function renewalStrategy(): RenewalStrategy
     {
         return static::$strategy;
@@ -66,6 +73,10 @@ class FakeConnector extends AbstractConnector
     public function revoke(SocialToken $token): void
     {
         static::$revokeCalls++;
+
+        if (static::$revokeUsing !== null) {
+            (static::$revokeUsing)($token);
+        }
     }
 
     public static function reset(): void
@@ -77,5 +88,6 @@ class FakeConnector extends AbstractConnector
         static::$lead = null;
         static::$exchangeResult = null;
         static::$revokeCalls = 0;
+        static::$revokeUsing = null;
     }
 }

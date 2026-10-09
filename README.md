@@ -481,6 +481,11 @@ the credential:
 app(SocialTokens::class)->revoke($account->credential);
 ```
 
+Both record the revocation locally first (the `Revoked` events fire then), and
+only then ask the provider to invalidate the token. That call is best effort:
+when it fails (provider down, a token that no longer decrypts after an
+`APP_KEY` change), a warning is logged and the local revocation stands.
+
 `$account->markRevoked()` only flags the account locally: no provider call, and
 the credential is left as is.
 
@@ -532,6 +537,8 @@ Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when t
 credential is refreshed under another provider's key (Instagram returns
 `facebook`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
+`revoke()` must not throw: read the token and send the request inside a
+`try`, and log a failure with `$this->logRevokeFailure($token, $e)`.
 
 ### Using a connector on its own
 

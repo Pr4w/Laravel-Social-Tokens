@@ -71,20 +71,23 @@ class TikTokConnector extends OAuth2Connector
         return $error === 'access_denied' ? self::ERROR_TERMINAL : parent::classifyError($error, $description, $status);
     }
 
+    /** Best effort, never throws: the credential is already revoked locally. */
     public function revoke(SocialToken $token): void
     {
-        if (empty($token->access_token)) {
-            return;
-        }
-
         try {
+            $accessToken = $token->access_token;
+
+            if (empty($accessToken)) {
+                return;
+            }
+
             $this->http()->asForm()->post(self::REVOKE_URL, [
                 'client_key' => $this->clientId(),
                 'client_secret' => $this->clientSecret(),
-                'token' => $token->access_token,
+                'token' => $accessToken,
             ]);
-        } catch (Throwable) {
-            // Best effort. The local status is what matters for our flow.
+        } catch (Throwable $e) {
+            $this->logRevokeFailure($token, $e);
         }
     }
 }

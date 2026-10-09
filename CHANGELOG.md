@@ -187,6 +187,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   so reading `$account->connectedBy` queried again for every row, and the
   model `associate()` had just set was not reused either. A queued event's
   restore skipped it the same way.
+- `revoke()` and `disconnect()` record the revocation even when the
+  provider-side call fails. They called the provider first, unguarded, and the
+  TikTok, Google and X connectors decrypted the token outside their `try`: a
+  credential that no longer decrypted (an `APP_KEY` change without
+  `APP_PREVIOUS_KEYS`), or a custom connector that threw, made `revoke()` throw
+  `DecryptException` with the credential and every account still active, and
+  `disconnect()` throw with the credential still active. The credential and its
+  accounts are now revoked first; the provider call follows, and whatever it
+  throws is logged as a warning, never rethrown.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -226,6 +235,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ("Renewal failed after retries; retrying later") when it backs a credential
   off. Uncatalogued errors are still logged as they occur
   (`log_unknown_errors`).
+- `revoke()` fires `CredentialRevoked` and `AccountRevoked` before the
+  provider-side revocation instead of after it, and hands the connector the
+  credential as it was before those events (a listener that wipes the token
+  no longer affects the provider call). A provider revocation that throws is
+  logged (`[social-tokens] {provider} token revocation failed`, with
+  `provider`, `token_id`, `exception` and a redacted `message`); the X
+  connector's own failure log takes that form too.
+- `ProviderConnector::revoke()` is documented as best effort that must not
+  throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
+  override.
 
 ## [2.0.0]
 

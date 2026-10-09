@@ -98,15 +98,15 @@ class XConnector extends OAuth2Connector
      */
     public function revoke(SocialToken $token): void
     {
-        [$value, $hint] = ! empty($token->refresh_token)
-            ? [$token->refresh_token, 'refresh_token']
-            : [$token->access_token, 'access_token'];
-
-        if (empty($value)) {
-            return;
-        }
-
         try {
+            [$value, $hint] = ! empty($token->refresh_token)
+                ? [$token->refresh_token, 'refresh_token']
+                : [$token->access_token, 'access_token'];
+
+            if (empty($value)) {
+                return;
+            }
+
             $response = parent::tokenRequest()
                 ->withBasicAuth((string) $this->clientId(), (string) $this->clientSecret())
                 ->post(self::REVOKE_URL, [
@@ -122,10 +122,7 @@ class XConnector extends OAuth2Connector
                 ]);
             }
         } catch (Throwable $e) {
-            Log::warning('[social-tokens] X token revocation failed', [
-                'token_id' => $token->getKey(),
-                'message' => AbstractConnector::redactQueryStrings($e->getMessage()),
-            ]);
+            $this->logRevokeFailure($token, $e);
         }
     }
 }

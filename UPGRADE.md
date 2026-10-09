@@ -173,6 +173,16 @@ forms are now normalised instead of failing or being misread:
   inherited by your implementation. Without it, an exception thrown while the
   method is on the stack records the token in its trace, where an error
   tracker can collect it.
+- `revoke()` must not throw. The package now revokes the credential and its
+  accounts locally first, then calls your connector's `revoke()` and logs
+  anything that escapes, so a throwing connector no longer blocks a
+  disconnect, but it is still a bug. Read the token inside the `try` as well:
+  reading `$token->access_token` decrypts it, and throws after an `APP_KEY`
+  change. Log a failure with `$this->logRevokeFailure($token, $e)`.
+- Your connector's `revoke()` now runs after `CredentialRevoked` and
+  `AccountRevoked` have fired, on a copy of the credential taken before them,
+  and the stored status is already `revoked`. Do not rely on the status
+  being active there.
 
 ## From 1.x to 2.0
 

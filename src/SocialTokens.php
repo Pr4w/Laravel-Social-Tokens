@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
+use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -17,6 +18,7 @@ use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
+use Throwable;
 
 /**
  * The single door the publishing layer uses. It knows nothing about refresh
@@ -222,9 +224,14 @@ class SocialTokens
     }
 
     /**
-     * Revoke a credential: tell the provider to invalidate it (best effort), mark
-     * the credential Revoked, and cascade to every account it backs. A revoked
+     * Revoke a credential: mark it Revoked, cascade to every account it backs,
+     * then tell the provider to invalidate it (best effort). A revoked
      * credential is not usable and is never renewed again.
+     *
+     * The local revocation comes first and does not depend on the provider
+     * call: the user's decision stands even when that call cannot be made (a
+     * token that no longer decrypts after an APP_KEY change, a provider down,
+     * a connector that throws). A failed provider call is logged.
      */
     public function revoke(SocialToken $token): void
     {
@@ -238,13 +245,35 @@ class SocialTokens
             ->where('status', AccountStatus::Active->value)
             ->exists();
 
-        if (! $sharedGrant && $this->registry->has($token->provider)) {
-            $this->registry->for($token->provider)->revoke($token);
-        }
+        // The provider gets the token values as they are now: a CredentialRevoked
+        // listener may wipe them from the instance it receives, this one.
+        $atProvider = clone $token;
 
         $token->markRevoked();
 
         $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
+
+        if (! $sharedGrant && $this->registry->has($token->provider)) {
+            $this->revokeAtProvider($atProvider);
+        }
+    }
+
+    /**
+     * Best effort: ProviderConnector::revoke() must not throw, but a custom
+     * connector, or a token that cannot be decrypted, may. Never rethrown.
+     */
+    protected function revokeAtProvider(SocialToken $token): void
+    {
+        try {
+            $this->registry->for($token->provider)->revoke($token);
+        } catch (Throwable $e) {
+            Log::warning("[social-tokens] {$token->provider} token revocation failed; the credential is revoked locally", [
+                'provider' => $token->provider,
+                'token_id' => $token->getKey(),
+                'exception' => $e::class,
+                'message' => AbstractConnector::redactQueryStrings($e->getMessage()),
+            ]);
+        }
     }
 
     /**

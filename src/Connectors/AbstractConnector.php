@@ -7,6 +7,7 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -72,6 +73,22 @@ abstract class AbstractConnector implements ProviderConnector
     public function revoke(SocialToken $token): void
     {
         // No-op by default. Override where the provider exposes a revoke endpoint.
+    }
+
+    /**
+     * Log a provider-side revocation that threw. revoke() must never throw, so
+     * an override catches every Throwable and reports it here. Reading the
+     * token belongs inside that try too: it decrypts, and fails after an
+     * APP_KEY change.
+     */
+    protected function logRevokeFailure(SocialToken $token, Throwable $e): void
+    {
+        Log::warning("[social-tokens] {$token->provider} token revocation failed", [
+            'provider' => $token->provider,
+            'token_id' => $token->getKey(),
+            'exception' => $e::class,
+            'message' => static::redactQueryStrings($e->getMessage()),
+        ]);
     }
 
     public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
