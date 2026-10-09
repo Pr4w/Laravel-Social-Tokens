@@ -534,7 +534,7 @@ class SocialTokens
     /**
      * Rows of one owner, given by its columns (the owner-less ones for null).
      *
-     * @template TModel of Model
+     * @template TModel of SocialAccount|SocialToken
      *
      * @param  Builder<TModel>  $query
      * @return Builder<TModel>

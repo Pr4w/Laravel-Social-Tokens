@@ -852,6 +852,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `ThreadsConnector` extends `LongLivedTokenConnector`. Its requests and
   failure reasons are unchanged; `refreshWithToken()` is protected instead of
   private, and an `expires_in` that is not a number means an unknown expiry.
+- The models' `@property` blocks list every column (`id`, `created_at`,
+  `updated_at`, and `connected_by_type` / `connected_by_id` on
+  `SocialAccount`), and the package's own analysis checks every column name
+  it writes or filters on (Larastan's `checkModelProperties`).
+  `SocialToken::persistCredential()` declares `$keys` and `$values` as arrays
+  keyed by the model's columns: with `checkModelProperties` on in your own
+  PHPStan setup, pass it literal arrays or annotate yours accordingly. No
+  runtime change.
 
 ## [2.0.0]
 

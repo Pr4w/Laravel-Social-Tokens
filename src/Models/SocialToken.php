@@ -39,6 +39,7 @@ use Pr4w\SocialTokens\Support\Settings;
  * member token behind the organizations (the member's personal profile has
  * the default one).
  *
+ * @property int $id
  * @property string $provider
  * @property ?string $provider_holder_id
  * @property string $purpose
@@ -56,6 +57,8 @@ use Pr4w\SocialTokens\Support\Settings;
  * @property ?string $ownable_type
  * @property int|string|null $ownable_id
  * @property AccountStatus $status
+ * @property ?CarbonInterface $created_at
+ * @property ?CarbonInterface $updated_at
  */
 class SocialToken extends Model
 {
@@ -190,7 +193,7 @@ class SocialToken extends Model
             ->whereNotNull('data_access_expires_at')
             ->where('data_access_expires_at', '<=', $before)
             ->whereNull('data_access_warned_at')
-            ->whereHas('accounts', fn (Builder $account) => $account->where('status', AccountStatus::Active->value));
+            ->whereRelation('accounts', 'status', AccountStatus::Active->value);
     }
 
     /**
@@ -215,8 +218,8 @@ class SocialToken extends Model
         $accounts = (new SocialAccount)->getTable();
         $active = AccountStatus::Active->value;
 
-        return $query->where(fn (Builder $query) => $query
-            ->whereHas('accounts', fn (Builder $account) => $account->where('status', $active))
+        return $query->where(fn ($query) => $query
+            ->whereRelation('accounts', 'status', $active)
             ->orWhereExists(fn ($sub) => $sub->selectRaw('1')->from($accounts)
                 ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
                 ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
@@ -257,10 +260,10 @@ class SocialToken extends Model
 
         return $query
             ->where('updated_at', '<', $before)
-            ->where(fn (Builder $query) => $query
+            ->where(fn ($query) => $query
                 ->whereIn('status', [$revoked, AccountStatus::NeedsReconnect->value])
-                ->orWhere(fn (Builder $unused) => $unused
-                    ->whereDoesntHave('accounts', fn (Builder $account) => $account->where('status', '!=', $revoked))
+                ->orWhere(fn ($unused) => $unused
+                    ->whereDoesntHaveRelation('accounts', 'status', '!=', $revoked)
                     ->whereNotExists(fn ($sub) => $sub->selectRaw('1')->from($accounts)
                         ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
                         ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
@@ -300,8 +303,8 @@ class SocialToken extends Model
      *
      * $keys without a purpose name the default credential.
      *
-     * @param  array<string, mixed>  $keys
-     * @param  array<string, mixed>  $values
+     * @param  array<model-property<static>, mixed>  $keys
+     * @param  array<model-property<static>, mixed>  $values
      */
     public static function persistCredential(array $keys, #[\SensitiveParameter] array $values, ?ProviderConnector $connector = null): static
     {
@@ -339,7 +342,7 @@ class SocialToken extends Model
      * the previous token's would let the new one be flagged on its first
      * unconfirmed rejection.
      *
-     * @return array<string, mixed>
+     * @return array<model-property<static>, mixed>
      */
     protected static function issuedState(): array
     {
@@ -829,7 +832,7 @@ class SocialToken extends Model
     /**
      * What a revocation erases: the tokens, and the dates that describe them.
      *
-     * @return array<string, null>
+     * @return array<model-property<static>, null>
      */
     protected static function revokedState(): array
     {

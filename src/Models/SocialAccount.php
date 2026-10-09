@@ -19,6 +19,7 @@ use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
  * independently of the credential. A dead credential is not copied onto its
  * accounts: effectiveStatus() / usable() combine the two.
  *
+ * @property int $id
  * @property ?int $social_token_id
  * @property ?SocialToken $credential
  * @property string $provider
@@ -33,8 +34,12 @@ use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
  * @property ?string $last_error
  * @property ?string $ownable_type
  * @property int|string|null $ownable_id
+ * @property ?string $connected_by_type
+ * @property int|string|null $connected_by_id
  * @property ?CarbonInterface $disconnected_at
  * @property AccountStatus $status
+ * @property ?CarbonInterface $created_at
+ * @property ?CarbonInterface $updated_at
  */
 class SocialAccount extends Model
 {
@@ -210,7 +215,7 @@ class SocialAccount extends Model
     {
         return $query
             ->where('status', AccountStatus::Active->value)
-            ->whereHas('credential', fn (Builder $credential) => $credential->where('status', AccountStatus::Active->value));
+            ->whereRelation('credential', 'status', AccountStatus::Active->value);
     }
 
     /**
@@ -222,9 +227,9 @@ class SocialAccount extends Model
      */
     public function scopeUnusable(Builder $query): Builder
     {
-        return $query->where(fn (Builder $query) => $query
+        return $query->where(fn ($query) => $query
             ->where('status', '!=', AccountStatus::Active->value)
-            ->orWhereDoesntHave('credential', fn (Builder $credential) => $credential->where('status', AccountStatus::Active->value)));
+            ->orWhereDoesntHaveRelation('credential', 'status', AccountStatus::Active->value));
     }
 
     // State -----------------------------------------------------------------

@@ -15,7 +15,7 @@ trait TransitionsStatus
      * the in-memory status is brought up to date.
      *
      * @param  array<int, AccountStatus>  $from
-     * @param  array<string, mixed>  $attributes
+     * @param  array<model-property<static>, mixed>  $attributes
      */
     protected function transitionStatus(AccountStatus $to, array $from, array $attributes = []): bool
     {

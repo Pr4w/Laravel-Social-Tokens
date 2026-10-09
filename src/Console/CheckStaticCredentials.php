@@ -78,7 +78,7 @@ class CheckStaticCredentials extends Command
                         ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()->addMinute())));
                 }
             })
-            ->whereHas('accounts', fn ($query) => $query->where('status', AccountStatus::Active->value))
+            ->whereRelation('accounts', 'status', AccountStatus::Active->value)
             ->lazyById()
             ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind, &$checkedByProvider, &$clientRejected) {
                 $kind = $token->renew_at === null ? 'static' : 'renewable';

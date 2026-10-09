@@ -46,7 +46,7 @@ trait KeepsDisconnectedAccountsOut
      * so some account still posts with it or is re-derived from it, and a
      * reconnect that keeps none of its targets still refreshes it.
      *
-     * @param  array<string, mixed>  $keys
+     * @param  array<model-property<SocialToken>, mixed>  $keys
      */
     protected function credentialStillLive(array $keys): bool
     {
