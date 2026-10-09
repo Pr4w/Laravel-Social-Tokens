@@ -390,7 +390,8 @@ Static credentials (Facebook page tokens) are never renewed, but die when the
 user changes their password, removes the app or loses the Page's admin role. A
 daily `social-tokens:check-static` run asks Meta about each one that an active
 account still uses, and flags the dead ones `needs_reconnect` (set
-`check_static_schedule` to `null` to disable). A credential whose accounts are
+`check_static_schedule` to `null` to disable; rejection reports then wait for
+a run you start, see [Posting](#posting)). A credential whose accounts are
 all flagged or revoked, such as a Page the user no longer manages, is not
 checked. Because a verdict cuts the Page off, the run is cautious: a session
 error ("password changed", "app removed") flags at once, any other rejection
@@ -466,18 +467,27 @@ try {
   with no subcode, which Meta also sends to valid tokens during an incident.
   The package asks the provider whether the token still works and flags the
   credential only on a definitive answer (a session subcode, LinkedIn's
-  `revoked`). A plain rejection counts as one strike against the token, which
-  the next `check-static` run confirms if the provider still rejects it:
-  Facebook Page tokens are always checked, renewable credentials when
-  `SOCIAL_TOKENS_CHECK_RENEWABLE=true`. Repeated reports never confirm each
-  other: publish retries seconds apart would all see the same incident.
-- Google, TikTok, X, and LinkedIn with refresh tokens: do not report a 401
-  `invalid_token`. It usually means the access token expired while the refresh
-  token still works. Call `validAccessTokenFor()` again (it renews an expired
-  token, or tells you to reconnect) and retry; a dead refresh token is caught
-  by the renewal itself (`invalid_grant`), which flags the credential. These
-  connectors cannot check a token, so `terminal: false` does nothing for them
-  and returns `false`, and `terminal: true` would flag a healthy credential.
+  `revoked`). A plain rejection counts as one strike against the token, and
+  only `social-tokens:check-static` confirms it, flagging the credential if
+  the provider still rejects the token: Facebook Page tokens are always
+  checked, renewable credentials only when `SOCIAL_TOKENS_CHECK_RENEWABLE=true`.
+  If you set `check_static_schedule` to `null`, schedule or run the command
+  yourself, or such a report never flags the credential. Repeated reports
+  never confirm each other: publish retries seconds apart would all see the
+  same incident.
+- Google, TikTok and X: do not report a 401 `invalid_token`. It usually means
+  the access token expired while the refresh token still works. Call
+  `validAccessTokenFor()` again (it renews an expired token, or tells you to
+  reconnect) and retry; a dead refresh token is caught by the renewal itself
+  (`invalid_grant`), which flags the credential. These connectors cannot check
+  a token, so `terminal: false` does nothing for them and returns `false`, and
+  `terminal: true` would flag a healthy credential.
+- LinkedIn with refresh tokens: report a `REVOKED_ACCESS_TOKEN`, or any other
+  ambiguous 401, with `terminal: false`. The package introspects the token
+  and flags the credential only when LinkedIn answers `revoked`; an `expired`
+  access token is left to the renewal. On an `EXPIRED_ACCESS_TOKEN`, just
+  call `validAccessTokenFor()` again and retry. `terminal: true` would flag a
+  credential whose refresh token still works.
 
 To catch revoked tokens between two renewals without waiting for a failed post,
 set `SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also

@@ -105,8 +105,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   provider (a Meta session subcode, LinkedIn's `revoked`), the standard
   `check-static` has applied since 1.2. A bare Meta 190/102, which Meta also
   sends to valid tokens during an incident, is now one strike against the
-  token and the call returns `false`; the next `check-static` run flags the
-  credential if Meta still rejects it, and reports never confirm each other.
+  token and the call returns `false`. Only `social-tokens:check-static`
+  confirms it, flagging the credential if Meta still rejects the token
+  (renewable credentials only with `check_renewable`), and reports never
+  confirm each other: an app that set `check_static_schedule` to `null` must
+  schedule or run the command itself, or such a report never flags.
   It used to flag at once, with no breaker, so every credential that
   published during such an incident was flagged. A report naming a token the
   credential no longer holds now returns `false` without asking the provider
@@ -299,7 +302,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   so following the README flagged a healthy credential; apps should call
   `validAccessTokenFor()` again instead. They also now say that
   `terminal: false` does nothing for a connector that cannot check a token
-  (Google, TikTok, X).
+  (Google, TikTok, X), and that LinkedIn with refresh tokens should report a
+  `REVOKED_ACCESS_TOKEN` with `terminal: false`, which introspects the token.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

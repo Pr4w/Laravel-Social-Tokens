@@ -340,15 +340,18 @@ class SocialTokens
      * removed), or LinkedIn without refresh tokens saying the token was
      * revoked or expired. Not for an OAuth invalid_token from a provider with
      * refresh tokens (Google, TikTok, X): its access token merely expired, and
-     * validAccessTokenFor() renews it.
+     * validAccessTokenFor() renews it. LinkedIn with refresh tokens can check
+     * its token, so report its revoked token with $terminal false.
      *
      * Otherwise (an ambiguous 401, a bare Meta 190/102) the provider is asked,
      * when the connector implements ChecksCredential, and only a definitive
      * answer flags. A plain rejection is recorded as one check-static strike
-     * against the token: the next check-static run flags it if the provider
-     * still rejects it. Reports never confirm each other, since publish
-     * retries seconds apart would all see the same provider incident. Without
-     * ChecksCredential this does nothing. Pass a reason without secrets.
+     * against the token, and only a check-static run that still sees the
+     * rejection flags it: with check_static_schedule null, nothing does unless
+     * the app runs the command. Reports never confirm each other, since
+     * publish retries seconds apart would all see the same provider incident.
+     * Without ChecksCredential this does nothing. Pass a reason without
+     * secrets.
      */
     public function reportRejected(
         SocialAccount $account,
