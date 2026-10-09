@@ -3,7 +3,9 @@
 ## From 2.x to 3.0
 
 Coming from 1.x? Follow [From 1.x to 2.0](#from-1x-to-20) as well: one
-`php artisan migrate` runs both versions' migrations, in the right order.
+`php artisan migrate` runs both versions' migrations, in the right order. From
+1.0 or 1.1, start with [Coming from 1.0 or 1.1](#coming-from-10-or-11): 1.2's
+changes.
 
 ### Update the package
 
@@ -1025,6 +1027,157 @@ external holder, owner)*. In 1.x, when a second owner connected an account a fir
 owner already had, the single row and its credential silently moved to the
 second owner. The first owner lost it, with no event.
 
+### Coming from 1.0 or 1.1
+
+1.2.0 was a minor release, yet it changed behaviour your code may rely on, and
+its one-off steps were only in the changelog. Apply them with this guide. The
+reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
+
+**Before you deploy:**
+
+- **Rotate your Meta and Threads app secrets** if your logs, `failed_jobs` or
+  error tracker may hold `client_secret=`: up to 1.1, a connection failure put
+  the request URL, query string included, in the renewal reason, and from
+  there in exceptions and `last_error`. Then redact the stored reasons, in
+  `php artisan tinker`:
+
+  ```php
+  use Pr4w\SocialTokens\Connectors\AbstractConnector;
+  use Pr4w\SocialTokens\Models\SocialAccount;
+  use Pr4w\SocialTokens\Models\SocialToken;
+
+  foreach ([SocialToken::class, SocialAccount::class] as $model) {
+      $model::query()->whereNotNull('last_error')->each(fn ($row) => $row
+          ->forceFill(['last_error' => AbstractConnector::redactQueryStrings($row->last_error)])
+          ->saveQuietly());
+  }
+  ```
+
+- **Every provider you connect needs a connector** (breaking).
+  `StoreConnection` and `StoreAccountFromSocialite` throw
+  `InvalidArgumentException` for a provider without one (a missing key, or
+  `driver => null`), where 1.1 stored the account as static and it broke at
+  expiry. Configure one (`'youtube' => ['driver' => GoogleConnector::class]`
+  reads `services.youtube`), or stop routing that provider through the
+  package.
+- **To remove one account, call `disconnect($account)`**, not
+  `revoke($account->credential)` as 1.1's README suggested: `revoke()` revokes
+  the whole login, every Instagram account of the Facebook user, every
+  organization of the LinkedIn member.
+- **If you extend `SocialTokens`** and override `validAccessTokenFor()` or
+  `renewCredential()`, add the `int $minValiditySeconds = 30` parameter.
+
+**What changed under your code:**
+
+- `markNeedsReconnect()` and `markRevoked()` no longer `save()` the model:
+  save your other changes yourself. Both act only on a real change, so
+  `CredentialNeedsReconnect`, `CredentialRevoked`, `AccountNeedsReconnect` and
+  `AccountRevoked` fire once per change, and a revoked row is never flagged.
+- `renewCredential()` throws `InvalidArgumentException` for a token never
+  saved (it inserted it), and returns `terminalFailure('Credential is …')`
+  without calling the provider for one that is not active.
+  `validAccessTokenFor()` re-reads the account and its credential (one or two
+  queries more), and throws `NeedsReconnectException` for an account deleted
+  since it was loaded.
+- `SocialToken::toArray()` / `toJson()`, and an account serialised with its
+  credential, leave out `access_token` and `refresh_token`: read them as
+  attributes, or `makeVisible()`.
+- A provider outage no longer flags a refresh-token credential: an `active`
+  credential with a `last_error` is still retrying, and only the status says
+  it is broken. An app-side OAuth error (`invalid_client`…) is logged as
+  critical instead of flagging every credential.
+- `CredentialExpiringSoon` can come before a refresh token expires, and after
+  a Meta or Threads renewal that did not extend the token. `renew_at` can be
+  earlier than before, and the connect actions keep a stored refresh token.
+- `scopes` can be `null` (unknown) where it was `[]` or `[""]` (use
+  `scopesKnown()`); `profile` is merged, not replaced; `last_renewed_at` is the
+  issue date of the current token; Meta reasons read
+  `190/460 OAuthException: …` when Meta sends a subcode.
+- `check-static` flags a bare Meta 190/102 on the second consecutive run, and
+  no longer flags permission errors; a custom `ChecksCredential` connector
+  returns `terminalFailure($reason, ['definitive' => true])` to flag at once.
+  Each Facebook Page fires its own `CredentialNeedsReconnect`. The command
+  runs in the background.
+- A Facebook connection stores the Meta user credential, and the dispatcher
+  renews it: expect `Credential*` events for a credential whose `accounts` is
+  empty.
+- A LinkedIn organization the member holds only through a non-posting role
+  is flagged at the member's next connect (`connectors.linkedin.posting_roles`).
+
+**One-off data fixes, where they apply** (in `php artisan tinker`, before
+3.0's first `social-tokens:prune`, which deletes credentials flagged
+`needs_reconnect` for 30 days):
+
+- Meta user credentials stored without `expires_at` and `renew_at` (Meta
+  sent no `expires_in`, or `StoreInstagramAccounts` ran with `extend: false`)
+  are static: nothing renews them, and they die about 60 days after they were
+  issued. Schedule them once. The first renewal reads the token's lifetime: a
+  token Meta reports as never expiring goes back to static, watched by
+  `check-static`, for the cost of one call.
+
+  ```php
+  SocialToken::where('provider', 'facebook')->whereNull('expires_at')->whereNull('renew_at')
+      ->whereHas('accounts', fn ($q) => $q->where('provider', 'instagram')) // not the Page tokens
+      ->update(['renew_at' => now()]);
+  ```
+
+- Credentials 1.1 flagged for an app-side error can be reactivated once the
+  app's client id and secret are fixed; one whose refresh token is really dead
+  is flagged again by its next renewal:
+
+  ```php
+  use Pr4w\SocialTokens\Enums\AccountStatus;
+
+  SocialToken::query()->where('status', AccountStatus::NeedsReconnect->value)
+      ->where(fn ($query) => $query->where('last_error', 'like', 'invalid_client:%')
+          ->orWhere('last_error', 'like', 'unauthorized_client:%')
+          ->orWhere('last_error', 'like', 'invalid_request:%'))
+      ->each(function (SocialToken $token) {
+          if (! preg_match('/refresh[\s_-]?token/i', (string) $token->last_error)) {
+              $token->forceFill(['status' => AccountStatus::Active, 'last_error' => null, 'renew_at' => now()])->save();
+          }
+      });
+  ```
+
+- To warn about refresh tokens that expire before their next renewal now,
+  rather than after it (a credential with `refresh_expires_at`):
+
+  ```php
+  $registry = app(\Pr4w\SocialTokens\Support\ConnectorRegistry::class);
+
+  SocialToken::where('status', 'active')->whereNotNull('refresh_expires_at')->whereNotNull('renew_at')
+      ->each(function (SocialToken $token) use ($registry) {
+          if ($registry->has($token->provider)) {
+              $warnAt = $token->refresh_expires_at->copy()->sub($registry->for($token->provider)->leadTime());
+              $token->forceFill(['renew_at' => $token->renew_at->min($warnAt)])->save();
+          }
+      });
+  ```
+
+- Personal LinkedIn rows that 1.1 flagged as an organization the member no
+  longer administers: reconnect the profile, or, once you checked the linked
+  credential is active:
+
+  ```sql
+  UPDATE social_accounts SET status = 'active', last_error = NULL
+  WHERE provider = 'linkedin' AND provider_user_id = provider_holder_id
+    AND status = 'needs_reconnect'
+    AND last_error = 'Organization no longer administered by the connected LinkedIn member.';
+  ```
+
+- Optionally, normalise the scopes stored before 1.2 (leave Meta's `[]`
+  alone: it can be a real "none"):
+
+  ```php
+  foreach ([SocialAccount::class, SocialToken::class] as $model) {
+      $model::whereNotNull('scopes')->each(fn ($row) => $row
+          ->forceFill(['scopes' => SocialToken::normaliseScopes($row->scopes)])->saveQuietly());
+  }
+  ```
+
+The `social_tokens.failed_checks` column 1.2 added comes with the other
+migrations below.
+
 ### 1. Update the package, straight to 3.0
 
 ```bash
@@ -1171,4 +1324,6 @@ has one credential for the personal profile and one for the organizations (see
 - **`check-static` makes one call per credential**, so there are more calls when
   several owners share Pages.
 
-Events, the renewal flow and `validAccessTokenFor()` are unchanged.
+2.0 changes nothing else: events, the renewal flow and `validAccessTokenFor()`
+work as in 1.2 (see [Coming from 1.0 or 1.1](#coming-from-10-or-11) for what
+1.2 changed, and [From 2.x to 3.0](#from-2x-to-30) for 3.0).

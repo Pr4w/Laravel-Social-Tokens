@@ -308,6 +308,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 
 ### Fixed
+- UPGRADE.md's "From 1.x to 2.0", where the README sends every 1.x user,
+  skipped 1.2: its breaking changes (`StoreConnection` refusing a provider
+  without a connector, `markNeedsReconnect()` / `markRevoked()` no longer
+  saving, `toArray()` hiding the tokens, `renewCredential()` refusing an
+  unsaved token) and its one-off steps (rotating the Meta and Threads
+  secrets 1.1 leaked into logs, scheduling static Meta user credentials,
+  repairing flagged rows) were only in the changelog, which the package did
+  not ship. A 1.1 app following the guide kept static Meta credentials that
+  died about 60 days later. The guide now has a "Coming from 1.0 or 1.1"
+  section, with redaction and reactivation snippets of its own.
 - README: the OAuth routes used the connector key from the URL as the
   Socialite driver name, which broke two keys. `/oauth/instagram/redirect`
   threw "Driver [instagram] not supported" (Instagram through a Page logs in
@@ -874,6 +884,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   answer in their place.
 
 ### Changed
+- `CHANGELOG.md` ships in the package (it was export-ignored), next to
+  `README.md` and `UPGRADE.md`, which link to it.
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
   are known transient failures: still retried, no longer logged as uncatalogued.
 - OAuth token-endpoint failures carry the HTTP `status` in their context, and
@@ -947,6 +959,9 @@ Identity is scoped to the owner. **Breaking:** see [UPGRADE.md](UPGRADE.md).
   owner only.
 
 ## [1.2.0]
+
+A minor release with breaking changes: see Upgrading below, and
+[UPGRADE.md, Coming from 1.0 or 1.1](UPGRADE.md#coming-from-10-or-11).
 
 ### Security
 - **Secrets no longer leak through error messages.** Guzzle ends transport
