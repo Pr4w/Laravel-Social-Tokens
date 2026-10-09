@@ -5,6 +5,43 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 ## [Unreleased]
 
+### Fixed
+- An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
+  the TikTok, Google and LinkedIn connectors with "Array to string conversion";
+  it is now an unknown, retried failure.
+- TikTok `unauthorized_client` is an app-client failure, as the 1.2 changelog
+  already stated (it was retried as an unknown error).
+- Google `admin_policy_enforced` (a Workspace admin blocked the app for the
+  user) is terminal instead of being retried forever.
+- README: the Google redirect now asks for offline access
+  (`access_type=offline`, `prompt=consent`); without it Google issues no refresh
+  token and every Google credential was flagged within the hour.
+- Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade):
+  - It can be run again after failing partway. On MySQL and SQLite a failure (a
+    lost connection, a timeout, a rejected key) left the owner columns added and
+    the old unique keys dropped, and every later `migrate` stopped on a
+    duplicate `ownable_type` column. Every step is now guarded, and a
+    credential is split in one transaction or not at all.
+  - It checks before changing anything, and refuses with instructions: on
+    MySQL/MariaDB, that the new unique keys fit InnoDB's 3072-byte limit; and
+    that non-integer owner ids come with `Schema::morphUsingUuids()` /
+    `morphUsingUlids()`. The credentials' owner columns take the accounts' key
+    type, so a backfill can no longer fail halfway on a type mismatch.
+  - It no longer runs as a single transaction on PostgreSQL. That held an ACCESS
+    EXCLUSIVE lock on `social_tokens`, blocking every token read of the running
+    app, until the last credential was backfilled. Schema steps now commit one
+    by one, and the backfill commits every 100 credentials.
+  - Its unique keys are named the way Laravel names its own indexes: with the
+    table prefix (two prefixed installs sharing a PostgreSQL schema or an SQLite
+    file collided on the same name), and without the dot of a schema-qualified
+    table name (invalid SQL on PostgreSQL and MySQL). `down()` finds them by
+    their columns, so it also drops the names 2.0.0 created.
+- A fresh install on MySQL with uuid or ulid owner keys failed in migration
+  000007 with "Specified key was too long": three utf8mb4 `varchar(255)` columns
+  left no room for the owner id. `provider` is now `varchar(50)` (see Changed),
+  and the README Install section says to call `Schema::morphUsingUuids()` /
+  `morphUsingUlids()` before migrating.
+
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
   (Socialite's `x` driver, `services.x`). 2-hour access tokens renewed 30
@@ -18,24 +55,22 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   Google, LinkedIn and X now share one refresh request, response parsing and
   error-classification flow; a provider declares its endpoint, parameters and
   error codes (`classifyError()`).
-
-### Fixed
-- An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
-  the TikTok, Google and LinkedIn connectors with "Array to string conversion";
-  it is now an unknown, retried failure.
-- TikTok `unauthorized_client` is an app-client failure, as the 1.2 changelog
-  already stated (it was retried as an unknown error).
-- Google `admin_policy_enforced` (a Workspace admin blocked the app for the
-  user) is terminal instead of being retried forever.
-- README: the Google redirect now asks for offline access
-  (`access_type=offline`, `prompt=consent`); without it Google issues no refresh
-  token and every Google credential was flagged within the hour.
+- Migration `2025_01_01_000006_index_social_token_id_on_social_accounts`: an
+  index on `social_accounts.social_token_id`. PostgreSQL and SQLite do not index
+  a foreign key column, so finding a credential's accounts (the renewal
+  dispatcher, `revoke()`, `disconnect()`, deleting a credential, the 000007
+  backfill) scanned the whole table. On MySQL the foreign key's own index is
+  kept and nothing is added.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
   are known transient failures: still retried, no longer logged as uncatalogued.
 - OAuth token-endpoint failures carry the HTTP `status` in their context, and
   terminal ones carry `error` / `error_description` too.
+- `provider` is `varchar(50)` on `social_accounts` and `social_tokens`
+  (migration `2025_01_01_000006_shorten_provider_columns`; SQLite declares no
+  length and is left as is). A connector key must be at most 50 characters; the
+  migration refuses, changing nothing, while a longer one is stored.
 
 ## [2.0.0]
 

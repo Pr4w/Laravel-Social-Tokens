@@ -1,5 +1,47 @@
 # Upgrading
 
+## From 2.x to 3.0
+
+Coming from 1.x? Follow [From 1.x to 2.0](#from-1x-to-20) as well: one
+`php artisan migrate` runs both versions' migrations, in the right order.
+
+### Update the package
+
+```bash
+composer require pr4w/laravel-social-tokens:^3.0
+```
+
+### Run the new migrations
+
+```bash
+php artisan migrate
+```
+
+The package loads its migrations itself, so these run whether or not you
+published them. If you keep published copies, run
+`php artisan vendor:publish --tag=social-tokens-migrations` to add the new
+files (existing files are left alone).
+
+- `2025_01_01_000006_shorten_provider_columns` makes `provider` `varchar(50)` on
+  `social_accounts` and `social_tokens`, so the owner-scoped unique keys fit
+  InnoDB's 3072-byte limit with uuid and ulid owner ids too. **A connector key
+  must now be at most 50 characters.** The migration checks both tables first
+  and refuses, changing nothing, while a row holds a longer `provider`: rename
+  that connector's key in `config/social-tokens.php`, update its rows
+  (`UPDATE social_accounts SET provider = 'new-key' WHERE provider = 'old-key'`,
+  and the same on `social_tokens`), then migrate again. SQLite declares no
+  length, so the migration leaves it as is. On PostgreSQL and MySQL the change
+  rebuilds both tables and their indexes, locking each while it runs: short on
+  tables of this size.
+- `2025_01_01_000006_index_social_token_id_on_social_accounts` indexes
+  `social_accounts.social_token_id` on PostgreSQL and SQLite, which do not index
+  a foreign key column. On MySQL the foreign key already has an index, and the
+  migration adds nothing.
+
+Both are named to run before `2025_01_01_000007_scope_identity_to_owner`, which
+needs them when you come from 1.x. On a 2.x install, which already ran 000007,
+they simply run on their own.
+
 ## From 1.x to 2.0
 
 2.0 scopes identity to the **owner** you pass when connecting. An account is
@@ -20,8 +62,10 @@ composer require pr4w/laravel-social-tokens:^2.0
 php artisan migrate
 ```
 
-If you published the package migrations, publish or copy
-`2025_01_01_000007_scope_identity_to_owner.php` first. The migration:
+If you published the package migrations, publish them again first (see
+[From 2.x to 3.0](#from-2x-to-30)), and replace any copy of 2.0's
+`2025_01_01_000007_scope_identity_to_owner.php` you have not run yet with
+3.0's. The migration:
 
 - adds `ownable_type` / `ownable_id` to `social_tokens`;
 - gives every credential the owner of the accounts it backs. A Meta user
@@ -39,9 +83,23 @@ If you published the package migrations, publish or copy
 It can be rolled back only while no two owners share an external account. Once
 they do, `down()` refuses and says why.
 
-**MySQL:** the new unique keys fit InnoDB's 3072-byte index limit with the
-default bigint morph ids, but **not** with uuid/ulid morph ids. If your owners use
-uuid/ulid keys, shorten `provider` (e.g. `string(50)`) before migrating.
+**MySQL:** InnoDB caps an index key at 3072 bytes. With 3.0's
+`2025_01_01_000006_shorten_provider_columns`, which runs first, the new unique
+keys fit with bigint, uuid and ulid owner ids alike. Before changing anything,
+the migration checks that they fit, and that owners with non-integer ids come
+with `Schema::morphUsingUuids()` / `Schema::morphUsingUlids()` (the credentials'
+owner columns take the accounts' key type). If either check fails it says why
+and changes nothing.
+
+**If it fails partway** (a lost connection, a deploy timeout), fix the cause and
+run `php artisan migrate` again: every step is guarded and resumes where it
+stopped. The backfill commits in chunks of 100 credentials, and a credential is
+split in one transaction or not at all.
+
+**PostgreSQL:** the migration does not run as one transaction, so the running
+app is never locked out of `social_tokens` for the whole backfill. Each schema
+step commits on its own and takes its lock only briefly. The flip side: a
+failure no longer rolls everything back, so run it again as above.
 
 **Owner-less rows:** databases treat NULLs as distinct in a unique index, so rows
 without an owner are no longer deduplicated by the database, only by the

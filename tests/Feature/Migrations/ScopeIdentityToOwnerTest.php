@@ -1,8 +1,13 @@
 <?php
 
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Tests\Fixtures\Owner;
@@ -132,4 +137,133 @@ it('rolls back to the 1.x schema when no owner shares an account', function () {
     expect(fn () => v1Account('tiktok', 'tt-1', 'tt-1', null, $this->bob))->toThrow(QueryException::class);
 
     ownerMigration()->up(); // leave the schema as the TestCase expects
+});
+
+/** Unique indexes of a table, as name => columns. */
+function uniqueIndexes(string $table): array
+{
+    return collect(Schema::getIndexes($table))
+        ->filter(fn (array $index) => $index['unique'] && ! $index['primary'])
+        ->mapWithKeys(fn (array $index) => [$index['name'] => $index['columns']])
+        ->all();
+}
+
+it('runs outside one long transaction', function () {
+    // On PostgreSQL one transaction would hold the ALTER's ACCESS EXCLUSIVE
+    // lock on social_tokens for the whole backfill.
+    expect(ownerMigration()->withinTransaction)->toBeFalse();
+});
+
+it('commits the backfill in short chunks', function () {
+    foreach (range(1, 250) as $i) {
+        v1Credential('tiktok', "tt-{$i}", "access-{$i}");
+    }
+
+    $transactions = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactions) {
+        $transactions++;
+    });
+
+    ownerMigration()->up();
+
+    expect($transactions)->toBe(3);
+});
+
+it('completes when run again after failing partway through the backfill', function () {
+    $shared = v1Credential('facebook', 'fb-1', 'meta-user-token');
+    $aliceIg = v1Account('instagram', 'ig-1', 'fb-1', $shared, $this->alice);
+    $bobIg = v1Account('instagram', 'ig-2', 'fb-1', $shared, $this->bob);
+
+    // The connection drops while the shared credential is being copied.
+    $armed = true;
+    DB::connection()->beforeExecuting(function (string $query) use (&$armed) {
+        if ($armed && str_starts_with($query, 'insert into "social_tokens"')) {
+            $armed = false;
+
+            throw new RuntimeException('Lost connection');
+        }
+    });
+
+    expect(fn () => ownerMigration()->up())->toThrow(RuntimeException::class, 'Lost connection');
+
+    ownerMigration()->up();
+
+    $aliceToken = SocialAccount::find($aliceIg)->credential;
+    $bobToken = SocialAccount::find($bobIg)->credential;
+
+    expect($aliceToken->ownable->is($this->alice))->toBeTrue()
+        ->and($bobToken->ownable->is($this->bob))->toBeTrue()
+        ->and($bobToken->access_token)->toBe('meta-user-token')
+        ->and(SocialToken::where('provider_holder_id', 'fb-1')->count())->toBe(2)
+        ->and(uniqueIndexes('social_tokens'))->toBe(['social_tokens_owner_identity_unique' => ['provider', 'provider_holder_id', 'ownable_type', 'ownable_id']])
+        ->and(uniqueIndexes('social_accounts'))->toBe(['social_accounts_owner_identity_unique' => ['provider', 'provider_user_id', 'ownable_type', 'ownable_id']]);
+});
+
+it('changes nothing when run again on a migrated schema', function () {
+    // An owner-less Page keeps the Meta user credential; the owned Pages get copies.
+    $user = v1Credential('facebook', 'fb-1', 'meta-user-token');
+    foreach ([[null, 'page-1'], [$this->alice, 'page-2'], [$this->bob, 'page-3']] as [$owner, $page]) {
+        v1Account('facebook', $page, 'fb-1', v1Credential('facebook', $page, "{$page}-token"), $owner);
+    }
+    $member = v1Credential('linkedin', 'member-1', 'member-token');
+    v1Account('linkedin', 'member-1', 'member-1', $member, null);
+    v1Account('linkedin', '42', 'member-1', $member, $this->alice);
+
+    ownerMigration()->up();
+    $before = DB::table('social_tokens')->orderBy('id')->get(['id', 'provider', 'provider_holder_id', 'ownable_type', 'ownable_id']);
+    $accounts = DB::table('social_accounts')->orderBy('id')->pluck('social_token_id', 'id');
+
+    ownerMigration()->up();
+
+    expect(DB::table('social_tokens')->orderBy('id')->get(['id', 'provider', 'provider_holder_id', 'ownable_type', 'ownable_id']))->toEqual($before)
+        ->and(DB::table('social_accounts')->orderBy('id')->pluck('social_token_id', 'id'))->toEqual($accounts)
+        ->and(SocialToken::where('provider_holder_id', 'fb-1')->count())->toBe(3)
+        ->and(SocialToken::find($user)->ownable_type)->toBeNull();
+});
+
+it('refuses before changing anything when owner ids are not integers but morphs default to integers', function () {
+    Schema::table('social_accounts', function (Blueprint $table) {
+        $table->string('ownable_id')->nullable()->change();
+    });
+
+    expect(fn () => ownerMigration()->up())->toThrow(RuntimeException::class, 'Schema::morphUsingUuids()');
+
+    expect(Schema::hasColumn('social_tokens', 'ownable_type'))->toBeFalse()
+        ->and(uniqueIndexes('social_tokens'))->toBe(['social_tokens_provider_provider_holder_id_unique' => ['provider', 'provider_holder_id']]);
+});
+
+it('gives credentials the owner key type of the accounts they copy it from', function () {
+    // The app switched to uuid morphs after its accounts table was created.
+    Schema::morphUsingUuids();
+
+    try {
+        ownerMigration()->up();
+    } finally {
+        Schema::defaultMorphKeyType('int');
+    }
+
+    expect(Schema::getColumnType('social_tokens', 'ownable_id'))->toBe(Schema::getColumnType('social_accounts', 'ownable_id'));
+});
+
+it('backfills uuid owners', function () {
+    Schema::table('social_accounts', function (Blueprint $table) {
+        $table->string('ownable_id')->nullable()->change();
+    });
+    Schema::morphUsingUuids();
+
+    $workspace = (string) Str::uuid();
+    $token = v1Credential('tiktok', 'tt-1', 'tt-access');
+    DB::table('social_accounts')->insert([
+        'provider' => 'tiktok', 'provider_user_id' => 'tt-1', 'provider_holder_id' => 'tt-1',
+        'social_token_id' => $token, 'ownable_type' => 'workspace', 'ownable_id' => $workspace,
+        'status' => 'active', 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    try {
+        ownerMigration()->up();
+    } finally {
+        Schema::defaultMorphKeyType('int');
+    }
+
+    expect(DB::table('social_tokens')->where('id', $token)->value('ownable_id'))->toBe($workspace);
 });

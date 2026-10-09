@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Database\Schema\Builder as SchemaBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -19,35 +20,67 @@ use Illuminate\Support\Facades\Schema;
  * reconnect) is copied once per extra owner and those owners' accounts are
  * repointed to their copy. A credential backing no account stays owner-less.
  *
- * MySQL: the new unique keys fit InnoDB's 3072-byte limit with the default
- * bigint morphs, not with uuid/ulid morph ids.
+ * Safe to run again after a failure: MySQL commits every DDL statement on its
+ * own, so a failure partway used to leave a schema the next run choked on.
+ * Every step is guarded, the checks that can fail run before anything changes,
+ * and the new unique keys are built before the old ones are dropped.
+ *
+ * Not one transaction: on PostgreSQL that held the ALTER's ACCESS EXCLUSIVE lock
+ * on social_tokens, blocking every token read of the live app, until the last
+ * credential was backfilled. The backfill commits in short chunks instead.
  */
 return new class extends Migration
 {
+    public $withinTransaction = false;
+
+    /** InnoDB's index key limit (DYNAMIC/COMPRESSED rows, MySQL and MariaDB). */
+    private const MYSQL_MAX_KEY_BYTES = 3072;
+
+    private const CHUNK = 100;
+
     public function up(): void
     {
         $accounts = config('social-tokens.table', 'social_accounts');
         $tokens = config('social-tokens.tokens_table', 'social_tokens');
 
-        // The old global key goes first: splitting a shared credential inserts
-        // a second row with the same (provider, provider_holder_id).
-        Schema::table($tokens, function (Blueprint $table) {
-            $table->nullableMorphs('ownable');
-            $table->dropUnique(['provider', 'provider_holder_id']);
-        });
+        $morphType = Schema::hasColumn($tokens, 'ownable_type') ? null : $this->ownerMorphType($accounts);
+        $this->ensureOwnerKeysFit($accounts, $tokens);
 
-        foreach (DB::table($tokens)->orderBy('id')->pluck('id') as $tokenId) {
-            $this->assignOwners($accounts, $tokens, (int) $tokenId);
+        if ($morphType !== null) {
+            Schema::table($tokens, fn (Blueprint $table) => match ($morphType) {
+                'uuid' => $table->nullableUuidMorphs('ownable'),
+                'ulid' => $table->nullableUlidMorphs('ownable'),
+                default => $table->nullableNumericMorphs('ownable'),
+            });
+        } elseif (! Schema::hasIndex($tokens, ['ownable_type', 'ownable_id'])) {
+            Schema::table($tokens, fn (Blueprint $table) => $table->index(['ownable_type', 'ownable_id']));
         }
 
-        Schema::table($tokens, function (Blueprint $table) use ($tokens) {
-            $table->unique(['provider', 'provider_holder_id', 'ownable_type', 'ownable_id'], "{$tokens}_owner_identity_unique");
-        });
+        // The new keys first: each contains the old one, so the rows already
+        // satisfy it, and a key the database rejects stops the run here.
+        foreach ([[$tokens, 'provider_holder_id'], [$accounts, 'provider_user_id']] as [$table, $external]) {
+            if ($this->uniqueIndexOn($table, ['provider', $external, 'ownable_type', 'ownable_id']) === null) {
+                Schema::table($table, function (Blueprint $blueprint) use ($table, $external) {
+                    $blueprint->unique(['provider', $external, 'ownable_type', 'ownable_id'], $this->indexName($table, 'owner_identity_unique'));
+                });
+            }
 
-        Schema::table($accounts, function (Blueprint $table) use ($accounts) {
-            $table->dropUnique(['provider', 'provider_user_id']);
-            $table->unique(['provider', 'provider_user_id', 'ownable_type', 'ownable_id'], "{$accounts}_owner_identity_unique");
-        });
+            // Two owners may now hold the same external identity, and splitting
+            // a shared credential inserts a second row for the same holder.
+            if ($old = $this->uniqueIndexOn($table, ['provider', $external])) {
+                Schema::table($table, fn (Blueprint $blueprint) => $blueprint->dropUnique($old));
+            }
+        }
+
+        // Each chunk commits whole, so a credential is never left half split:
+        // one with an owner is done, and a run again picks up the others.
+        DB::table($tokens)->whereNull('ownable_type')->orderBy('id')->pluck('id')
+            ->chunk(self::CHUNK)
+            ->each(fn ($ids) => DB::transaction(function () use ($ids, $accounts, $tokens) {
+                foreach ($ids as $tokenId) {
+                    $this->assignOwners($accounts, $tokens, (int) $tokenId);
+                }
+            }));
     }
 
     public function down(): void
@@ -70,16 +103,20 @@ return new class extends Migration
             }
         }
 
-        Schema::table($accounts, function (Blueprint $table) use ($accounts) {
-            $table->dropUnique("{$accounts}_owner_identity_unique");
-            $table->unique(['provider', 'provider_user_id']);
-        });
+        foreach ([[$accounts, 'provider_user_id'], [$tokens, 'provider_holder_id']] as [$table, $external]) {
+            if ($this->uniqueIndexOn($table, ['provider', $external]) === null) {
+                Schema::table($table, fn (Blueprint $blueprint) => $blueprint->unique(['provider', $external]));
+            }
 
-        Schema::table($tokens, function (Blueprint $table) use ($tokens) {
-            $table->dropUnique("{$tokens}_owner_identity_unique");
-            $table->unique(['provider', 'provider_holder_id']);
-            $table->dropMorphs('ownable');
-        });
+            // Looked up by columns: 2.0.0 named it without the table prefix.
+            if ($new = $this->uniqueIndexOn($table, ['provider', $external, 'ownable_type', 'ownable_id'])) {
+                Schema::table($table, fn (Blueprint $blueprint) => $blueprint->dropUnique($new));
+            }
+        }
+
+        if (Schema::hasColumn($tokens, 'ownable_type')) {
+            Schema::table($tokens, fn (Blueprint $table) => $table->dropMorphs('ownable'));
+        }
     }
 
     /**
@@ -90,8 +127,8 @@ return new class extends Migration
     {
         $token = DB::table($tokens)->where('id', $tokenId)->first();
 
-        if ($token === null) {
-            return;
+        if ($token === null || $token->ownable_type !== null) {
+            return; // gone, or done by an earlier run
         }
 
         // Accounts posting with it; failing that, accounts naming it as their
@@ -104,6 +141,7 @@ return new class extends Migration
             : $byToken;
 
         $owners = $source->clone()
+            ->whereNotNull('ownable_type')
             ->select('ownable_type', 'ownable_id')
             ->distinct()
             ->orderBy('ownable_type')
@@ -111,25 +149,22 @@ return new class extends Migration
             ->get();
 
         if ($owners->isEmpty()) {
-            return; // backs no account: stays owner-less
+            return; // backs no owned account: stays owner-less
         }
 
-        foreach ($owners as $index => $owner) {
-            if ($index === 0) {
-                DB::table($tokens)->where('id', $tokenId)->update([
-                    'ownable_type' => $owner->ownable_type,
-                    'ownable_id' => $owner->ownable_id,
-                ]);
+        // Owner-less accounts keep the original row, which then stays
+        // owner-less (and is looked at again by a later run).
+        if (! $source->clone()->whereNull('ownable_type')->exists()) {
+            $first = $owners->shift();
 
-                continue;
-            }
+            DB::table($tokens)->where('id', $tokenId)->update([
+                'ownable_type' => $first->ownable_type,
+                'ownable_id' => $first->ownable_id,
+            ]);
+        }
 
-            $copy = (array) $token;
-            unset($copy['id']);
-            $copy['ownable_type'] = $owner->ownable_type;
-            $copy['ownable_id'] = $owner->ownable_id;
-
-            $copyId = DB::table($tokens)->insertGetId($copy);
+        foreach ($owners as $owner) {
+            $copyId = $this->copyFor($tokens, $token, $owner);
 
             if (! $viaHolder) {
                 $this->whereOwner(DB::table($accounts)->where('social_token_id', $tokenId), $owner)
@@ -138,10 +173,172 @@ return new class extends Migration
         }
     }
 
+    /**
+     * The owner's copy of a credential. The old unique key allowed no other row
+     * for this holder, so one that exists was copied by an earlier run.
+     */
+    private function copyFor(string $tokens, object $token, object $owner): int
+    {
+        $existing = $this->whereOwner(DB::table($tokens), $owner)
+            ->where('provider', $token->provider)
+            ->where('provider_holder_id', $token->provider_holder_id)
+            ->value('id');
+
+        if ($existing !== null) {
+            return (int) $existing;
+        }
+
+        $copy = (array) $token;
+        unset($copy['id']);
+        $copy['ownable_type'] = $owner->ownable_type;
+        $copy['ownable_id'] = $owner->ownable_id;
+
+        return (int) DB::table($tokens)->insertGetId($copy);
+    }
+
     private function whereOwner(Builder $query, object $owner): Builder
     {
         return $owner->ownable_type === null
             ? $query->whereNull('ownable_type')->whereNull('ownable_id')
             : $query->where('ownable_type', $owner->ownable_type)->where('ownable_id', $owner->ownable_id);
+    }
+
+    /**
+     * The key type of the credentials' owner: the accounts' own, since the
+     * backfill copies their owners. Non-integer ids need the app's morph key
+     * type, which also decides between uuid and ulid.
+     */
+    private function ownerMorphType(string $accounts): string
+    {
+        $type = strtolower(Schema::getColumnType($accounts, 'ownable_id'));
+
+        if (preg_match('/^(tiny|small|medium|big)?int(eger|[248])?$/', $type) === 1) {
+            return 'int';
+        }
+
+        if (SchemaBuilder::$defaultMorphKeyType !== 'int') {
+            return SchemaBuilder::$defaultMorphKeyType;
+        }
+
+        throw new RuntimeException(
+            "{$accounts}.ownable_id holds non-integer keys ({$type}), but morph keys default to integers here. "
+            .'Call Schema::morphUsingUuids() or Schema::morphUsingUlids(), matching your owner keys, in a service '
+            .'provider, then migrate again. Nothing was changed.'
+        );
+    }
+
+    /**
+     * MySQL/MariaDB reject an index key over 3072 bytes, and commit every DDL
+     * statement on its own: find out before changing anything.
+     */
+    private function ensureOwnerKeysFit(string $accounts, string $tokens): void
+    {
+        if (! in_array(Schema::getConnection()->getDriverName(), ['mysql', 'mariadb'], true)) {
+            return;
+        }
+
+        $accountColumns = collect(Schema::getColumns($accounts))->keyBy('name')->all();
+
+        // Until they exist, the credential's owner columns mirror the accounts'.
+        $tokenColumns = collect(Schema::getColumns($tokens))->keyBy('name')->all()
+            + ['ownable_type' => $accountColumns['ownable_type'], 'ownable_id' => $accountColumns['ownable_id']];
+
+        foreach ([[$tokens, $tokenColumns, 'provider_holder_id'], [$accounts, $accountColumns, 'provider_user_id']] as [$table, $columns, $external]) {
+            $this->ensureOwnerKeyFits($table, array_map(
+                fn (string $name) => $columns[$name],
+                ['provider', $external, 'ownable_type', 'ownable_id'],
+            ));
+        }
+    }
+
+    /**
+     * @param  list<array{type: string, collation: ?string}>  $columns  as Schema::getColumns() describes them
+     */
+    private function ensureOwnerKeyFits(string $table, array $columns): void
+    {
+        $bytes = 0;
+
+        foreach ($columns as $column) {
+            $size = $this->keyBytes($column['type'], $column['collation'] ?? null);
+
+            if ($size === null) {
+                return; // a type we cannot size: leave it to the database
+            }
+
+            $bytes += $size;
+        }
+
+        if ($bytes > self::MYSQL_MAX_KEY_BYTES) {
+            throw new RuntimeException(
+                "The owner-scoped unique key of {$table} would take {$bytes} bytes, over InnoDB's "
+                .self::MYSQL_MAX_KEY_BYTES.'-byte limit. Make provider varchar(50) (the '
+                .'2025_01_01_000006_shorten_provider_columns migration does it; publish it if you run published '
+                .'copies) or shorten the provider id columns, then migrate again. Nothing was changed.'
+            );
+        }
+    }
+
+    private function keyBytes(string $type, ?string $collation): ?int
+    {
+        $type = strtolower($type);
+
+        if (preg_match('/^(?:var)?char\((\d+)\)/', $type, $match) === 1) {
+            return (int) $match[1] * $this->bytesPerCharacter($collation);
+        }
+
+        if (preg_match('/^(?:var)?binary\((\d+)\)/', $type, $match) === 1) {
+            return (int) $match[1];
+        }
+
+        if (preg_match('/^(tiny|small|medium|big)?int\b/', $type, $match) === 1) {
+            return ['tiny' => 1, 'small' => 2, 'medium' => 3, 'big' => 8][$match[1] ?? ''] ?? 4;
+        }
+
+        return $type === 'uuid' ? 16 : null; // MariaDB's native uuid
+    }
+
+    /** The widest character of the collation's character set (MySQL's maxlen). */
+    private function bytesPerCharacter(?string $collation): int
+    {
+        if ($collation === null) {
+            return 4;
+        }
+
+        $charset = strstr($collation, '_', true) ?: $collation;
+
+        return [
+            'utf8mb4' => 4, 'utf16' => 4, 'utf16le' => 4, 'utf32' => 4, 'gb18030' => 4,
+            'utf8mb3' => 3, 'utf8' => 3, 'eucjpms' => 3, 'ujis' => 3,
+            'ucs2' => 2, 'big5' => 2, 'cp932' => 2, 'euckr' => 2, 'gb2312' => 2, 'gbk' => 2, 'sjis' => 2,
+        ][$charset] ?? 1;
+    }
+
+    /** @param  list<string>  $columns */
+    private function uniqueIndexOn(string $table, array $columns): ?string
+    {
+        foreach (Schema::getIndexes($table) as $index) {
+            if ($index['unique'] && ! $index['primary'] && $index['columns'] === $columns) {
+                return $index['name'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Named like Laravel names its own indexes (table prefix, no schema dot):
+     * the generated name would pass MySQL's 64 characters.
+     */
+    private function indexName(string $table, string $suffix): string
+    {
+        $connection = Schema::getConnection();
+
+        if ($connection->getConfig('prefix_indexes')) {
+            $prefix = $connection->getTablePrefix();
+            $dot = strrpos($table, '.');
+            $table = $dot === false ? $prefix.$table : substr_replace($table, '.'.$prefix, $dot, 1);
+        }
+
+        return str_replace(['-', '.'], '_', strtolower("{$table}_{$suffix}"));
     }
 };

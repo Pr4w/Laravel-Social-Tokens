@@ -90,10 +90,23 @@ providers grant access:
 A connection with an owner never adopts an existing owner-less row: it creates
 its own. To attach an owner-less row, `associate()` it yourself.
 
+The owner is a polymorphic relation (`ownable_type`, `ownable_id`), and both
+columns are part of the unique keys:
+
+- **Key type.** `ownable_id` follows Laravel's default morph key type when the
+  migrations run: integers, unless you call `Schema::morphUsingUuids()` or
+  `Schema::morphUsingUlids()` first (see [Install](#install)). A uuid owner
+  stored in an integer column fails on insert.
+- **Morph map.** Without one, `ownable_type` stores the owner's class name, so
+  renaming or moving that class orphans its rows. Register an alias with
+  `Relation::morphMap(['workspace' => Workspace::class])` before the first
+  connection: a row keeps the type it was written with, and `ownedBy()` looks
+  for the current one.
+
 ## Install
 
 Requires PHP 8.2+ (8.3+ on Laravel 13), Laravel 12 / 13, and Laravel Socialite 5.5+.
-Upgrading from 1.x? See [UPGRADE.md](UPGRADE.md).
+Upgrading? See [UPGRADE.md](UPGRADE.md).
 
 ```bash
 composer require pr4w/laravel-social-tokens
@@ -101,6 +114,19 @@ php artisan vendor:publish --tag=social-tokens-config
 php artisan vendor:publish --tag=social-tokens-migrations
 php artisan migrate
 ```
+
+**Owners with uuid or ulid keys:** declare it before the first `migrate`, in a
+service provider's `boot()`, so the owner columns are created to match:
+
+```php
+use Illuminate\Support\Facades\Schema;
+
+Schema::morphUsingUuids(); // or Schema::morphUsingUlids()
+```
+
+The migrations work on MySQL, PostgreSQL and SQLite, with integer, uuid or ulid
+owner keys. They load from the package whether or not you publish them; if you
+keep published copies, publish again after an upgrade to add the new files.
 
 ### Credentials
 
@@ -454,7 +480,8 @@ For an OAuth 2.0 provider, extend `OAuth2Connector`: declare `tokenUrl()`, the
 (which error codes mean a dead grant, an app-side problem or a temporary one),
 `refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
 complete references. For anything else, extend `AbstractConnector` and implement
-`refreshCredential()`. Register the class under its key in the config. Nothing else in the package needs to change. Build
+`refreshCredential()`. Register the class under its key in the config: at most 50
+characters, since it is stored in the `provider` columns. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
 configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx
 and 429 come back as transient failures.
