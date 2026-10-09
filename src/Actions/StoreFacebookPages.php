@@ -101,10 +101,6 @@ class StoreFacebookPages
                     'refresh_token' => null,
                     'expires_at' => $expiresAt,
                     'renew_at' => SocialToken::renewAtFor($expiresAt, $connector),
-                    'status' => AccountStatus::Active,
-                    'last_renewed_at' => now(), // the token was just issued
-                    'last_error' => null,
-                    'failed_checks' => 0,
                 ],
             );
         }
@@ -130,9 +126,6 @@ class StoreFacebookPages
                     'refresh_token' => null,
                     'expires_at' => null,   // page tokens from a long lived user token do not expire
                     'renew_at' => null,     // static: never auto-refreshed
-                    'status' => AccountStatus::Active,
-                    'last_error' => null,
-                    'failed_checks' => 0,
                 ] + $withScopes,
             );
 

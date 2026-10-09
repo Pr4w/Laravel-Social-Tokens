@@ -162,13 +162,16 @@ class SocialToken extends Model
     // Persistence -------------------------------------------------------------
 
     /**
-     * Store a credential's tokens on the row identified by $keys, created when
-     * missing: updateOrCreate() without handing Eloquent the plaintext. Its
-     * query frames (updateOrCreate, firstOrCreate, createOrFirst, create) would
-     * record the tokens in the trace of a failed write (connection lost,
-     * deadlock, disk error), where an error tracker collects them. Here the
-     * encrypted cast applies in forceFill(), which has returned before the
-     * write starts, so those frames only ever see ciphertext.
+     * Store a token the provider has just issued on the row identified by
+     * $keys, created when missing. Unless $values says otherwise, the row is
+     * left in its freshly issued state (see issuedState()).
+     *
+     * updateOrCreate() without handing Eloquent the plaintext: its query frames
+     * (updateOrCreate, firstOrCreate, createOrFirst, create) would record the
+     * tokens in the trace of a failed write (connection lost, deadlock, disk
+     * error), where an error tracker collects them. Here the encrypted cast
+     * applies in forceFill(), which has returned before the write starts, so
+     * those frames only ever see ciphertext.
      *
      * A row another request created under the same keys meanwhile is updated
      * instead, as createOrFirst() would.
@@ -178,6 +181,8 @@ class SocialToken extends Model
      */
     public static function persistCredential(array $keys, #[\SensitiveParameter] array $values): static
     {
+        $values += static::issuedState();
+
         $token = static::query()->firstOrNew($keys)->forceFill($values);
 
         try {
@@ -190,6 +195,26 @@ class SocialToken extends Model
         }
 
         return $token;
+    }
+
+    /**
+     * The state of a credential whose token the provider has just issued or
+     * accepted (a connection, a successful renewal), in one place so that no
+     * writer forgets a part: active, no error, the token's age counted from
+     * now, and no check-static strike. A strike judges one token; carried over,
+     * the previous token's would let the new one be flagged on its first
+     * unconfirmed rejection.
+     *
+     * @return array<string, mixed>
+     */
+    protected static function issuedState(): array
+    {
+        return [
+            'status' => AccountStatus::Active,
+            'last_error' => null,
+            'last_renewed_at' => now(),
+            'failed_checks' => 0,
+        ];
     }
 
     // Scopes ------------------------------------------------------------------
@@ -359,10 +384,7 @@ class SocialToken extends Model
             }
         }
 
-        $this->status = AccountStatus::Active;
-        $this->last_renewed_at = now();
-        $this->last_error = null;
-        $this->save();
+        $this->forceFill(static::issuedState())->save();
 
         event(new CredentialRenewed($this));
 

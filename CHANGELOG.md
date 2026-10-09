@@ -247,6 +247,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   those rejections counted towards the breaker every day, so a few lost Pages
   could keep it tripped and genuinely dead Pages were never flagged; otherwise
   the lost Page got a redundant `CredentialNeedsReconnect`.
+- A new token no longer inherits the previous token's `check-static` strike.
+  Reconnecting a Threads or LinkedIn account (`StoreConnection`,
+  `StoreAccountFromSocialite`, `StoreLinkedInOrganizations`) and every
+  successful renewal kept `failed_checks`, so after one unconfirmed rejection
+  of the old token, a single unconfirmed rejection of the new one flagged it
+  `needs_reconnect` at once. Every write of a freshly issued token now goes
+  through one place, which also resets the status, `last_error` and
+  `last_renewed_at`.
+- A Facebook Page credential records when its token was issued
+  (`last_renewed_at`), as every other credential has since 1.2.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -278,9 +288,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `Support\Settings::flag()`: reads a boolean config value the way the
   package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
 - `SocialToken::persistCredential($keys, $values)`: `updateOrCreate()` for a
-  credential's tokens, which encrypts them before the write so a failed write
-  leaves no plaintext token in the exception trace (see Security). The
-  `Store*` actions use it; use it too if you store credentials yourself.
+  token the provider has just issued, which encrypts it before the write so a
+  failed write leaves no plaintext token in the exception trace (see
+  Security). Unless `$values` says otherwise, the credential comes back
+  active, with no `last_error`, no `check-static` strike and `last_renewed_at`
+  set to now. The `Store*` actions use it; use it too if you store credentials
+  yourself.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

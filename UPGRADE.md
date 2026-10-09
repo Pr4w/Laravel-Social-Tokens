@@ -228,6 +228,16 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
   or revoked (a Facebook Page the user no longer manages, flagged at their last
   connect). It used to flag that Page's credential too, with a second
   `CredentialNeedsReconnect` for a Page your app had already been told about.
+- A reconnection or a successful renewal clears the credential's
+  `check-static` strike (`failed_checks`). In 2.x the new token inherited it,
+  and was flagged on its first unconfirmed rejection. Rows may still hold a
+  strike inherited that way; to clear them, run once
+  `SocialToken::query()->where('failed_checks', '>', 0)->update(['failed_checks' => 0]);`.
+  The cost is small: a token that really is dead takes one more daily run to
+  be flagged.
+- Facebook Page credentials now get `last_renewed_at` (the token's issue
+  date) at each connection; rows stored by 2.x keep `null` until the user
+  reconnects.
 
 ### If you wrote a connector
 
