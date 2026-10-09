@@ -38,7 +38,8 @@ class StoreLinkedInOrganizations
      * @param  Model|null  $owner  App-side entity that owns these connections.
      * @param  Model|null  $connectedBy  Who performed the connection (optional).
      * @param  string|null  $refreshToken  Member refresh token, if your app has MDP.
-     * @param  CarbonInterface|null  $expiresAt  Access token expiry.
+     * @param  CarbonInterface|null  $expiresAt  Access token expiry; null keeps the stored one when
+     *                                           $accessToken is the token already stored (a re-sync).
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
      * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's comma-separated `scope`, split
      *                                           or as one element); null means unknown and keeps the stored ones.
@@ -85,6 +86,26 @@ class StoreLinkedInOrganizations
             }
         }
 
+        // A re-sync with the member token already stored (to pick up new
+        // organizations) is not a new token, and tells nothing new about it.
+        // Its issue date stays. So does its expiry when none is given: erased,
+        // a ReauthOnly credential would turn static (never warned, handed out
+        // after it died). And so does renew_at while the expiries are the same:
+        // a warning already sent may have parked it on the expiry.
+        $kept = [];
+
+        if ($existing !== null && hash_equals((string) $existing->access_token, $accessToken)) {
+            $kept['last_renewed_at'] = $existing->last_renewed_at;
+
+            if ($expiresAt === null) {
+                $expiresAt = $existing->expires_at;
+
+                if ($refreshToken === $existing->refresh_token && self::sameMoment($refreshExpiresAt, $existing->refresh_expires_at)) {
+                    $kept['renew_at'] = $existing->renew_at;
+                }
+            }
+        }
+
         // Unknown scopes (null) never overwrite a known list.
         $scopes = SocialToken::normaliseScopes($scopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
@@ -92,13 +113,13 @@ class StoreLinkedInOrganizations
         // The shared renewable member credential every organization posts with.
         $credential = SocialToken::persistCredential(
             ['provider' => 'linkedin', 'provider_holder_id' => $memberId] + SocialAccount::ownerKey($owner),
-            [
+            $kept + [
                 'access_token' => $accessToken,
                 'refresh_token' => $refreshToken,
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
             ] + $withScopes,
-            $connector, // schedules renew_at
+            $connector, // schedules renew_at, unless kept
         );
 
         // One row per organization, keyed on the organization id.
@@ -161,5 +182,10 @@ class StoreLinkedInOrganizations
             ));
 
         return $accounts;
+    }
+
+    private static function sameMoment(?CarbonInterface $a, ?CarbonInterface $b): bool
+    {
+        return $a === null || $b === null ? $a === $b : $a->equalTo($b);
     }
 }

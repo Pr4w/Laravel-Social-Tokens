@@ -320,6 +320,11 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
 );
 ```
 
+To re-sync the list later (to pick up new Pages), call `handle()` again with the
+stored member token (`accessToken: $credential->access_token`) and no
+`expiresAt`: the token's expiry, its renewal schedule and its issue date are
+kept. Pass `expiresAt` whenever the token is new.
+
 Every organization posts with the same member token, so each row mirrors it (the
 organization URN is stored in `profile` for posting). Only organizations where
 the member holds a posting role are stored — by default `ADMINISTRATOR`,

@@ -426,6 +426,28 @@ yourself, pass it: `refreshExpiresAt:` on `StoreConnection::handle()` and
 `StoreLinkedInOrganizations::handle()` (the README example now does). Without
 it, the first renewal records it.
 
+### Re-syncing LinkedIn organizations
+
+If you call `StoreLinkedInOrganizations::handle()` again with the stored
+member token to pick up new Pages, leave `expiresAt` out (or pass the stored
+`$credential->expires_at`): the token's expiry, schedule and issue date are
+now kept. Do not pass a new `now()->addDays(60)` for a token you did not just
+receive: it moves the expiry warning past the token's real end.
+
+2.x erased the expiry of a credential re-synced without `expiresAt`. To find
+those rows (no expiry and no schedule, so only `check-static` notices them
+once they die):
+
+```php
+SocialToken::query()->where('provider', 'linkedin')->where('status', 'active')
+    ->whereNull('expires_at')->whereNull('renew_at')->get();
+```
+
+Their real expiry is lost. Ask those members to reconnect, or keep
+`check_static_schedule` on (the default): `check-static` checks such a row as
+a static credential, and flags it once LinkedIn reports its token expired or
+revoked, with no warning beforehand.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret
