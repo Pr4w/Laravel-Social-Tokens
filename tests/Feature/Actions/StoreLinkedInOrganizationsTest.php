@@ -142,6 +142,20 @@ it('does not warn again when re-synced after the expiry warning', function () {
     expect(resyncMemberCredential()->renew_at->equalTo(resyncMemberCredential()->expires_at))->toBeTrue();
 });
 
+it('does not warn again when re-synced with the stored expiry after the warning', function () {
+    Event::fake([CredentialExpiringSoon::class]);
+    fakeOrganizations([orgElement('111', 'Acme')]);
+    $this->store->handle(accessToken: 'member-token', memberId: 'member-1', expiresAt: now()->addDays(60));
+
+    $this->travelTo(resyncMemberCredential()->renew_at->copy()->addMinute());
+    (new RenewCredential(resyncMemberCredential()))->handle(app(SocialTokens::class), app(ConnectorRegistry::class));
+
+    $this->store->handle(accessToken: 'member-token', memberId: 'member-1', expiresAt: resyncMemberCredential()->expires_at);
+    (new RenewCredential(resyncMemberCredential()))->handle(app(SocialTokens::class), app(ConnectorRegistry::class));
+
+    Event::assertDispatchedTimes(CredentialExpiringSoon::class, 1);
+});
+
 it('still flags the stored token once it expires after a re-sync', function () {
     fakeOrganizations([orgElement('111', 'Acme')]);
     $this->store->handle(accessToken: 'member-token', memberId: 'member-1', expiresAt: now()->addDays(60));

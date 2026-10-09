@@ -433,7 +433,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   warned, and `validAccessTokenFor()` handed out its token after it died; with
   an invented one, the warning came after the real expiry. With the stored
   token, the issue date is kept, and so are the expiry and the schedule when
-  no `expiresAt` is given (a warning already sent is not sent again).
+  no `expiresAt` is given, or the stored one (a warning already sent is not
+  sent again).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

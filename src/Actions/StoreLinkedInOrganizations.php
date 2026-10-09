@@ -102,13 +102,12 @@ class StoreLinkedInOrganizations
 
         if ($existing !== null && hash_equals((string) $existing->access_token, $accessToken)) {
             $kept['last_renewed_at'] = $existing->last_renewed_at;
+            $expiresAt ??= $existing->expires_at;
 
-            if ($expiresAt === null) {
-                $expiresAt = $existing->expires_at;
-
-                if ($refreshToken === $existing->refresh_token && self::sameMoment($refreshExpiresAt, $existing->refresh_expires_at)) {
-                    $kept['renew_at'] = $existing->renew_at;
-                }
+            if (self::sameMoment($expiresAt, $existing->expires_at)
+                && $refreshToken === $existing->refresh_token
+                && self::sameMoment($refreshExpiresAt, $existing->refresh_expires_at)) {
+                $kept['renew_at'] = $existing->renew_at;
             }
         }
 

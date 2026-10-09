@@ -519,7 +519,7 @@ credential and delete the `organizations` one, then roll back.
 If you call `StoreLinkedInOrganizations::handle()` again with the stored
 member token to pick up new Pages, leave `expiresAt` out (or pass the stored
 `$credential->expires_at`): the token's expiry, schedule and issue date are
-now kept. Do not pass a new `now()->addDays(60)` for a token you did not just
+now kept, so a warning already sent is not sent again. Do not pass a new `now()->addDays(60)` for a token you did not just
 receive: it moves the expiry warning past the token's real end.
 
 2.x erased the expiry of a credential re-synced without `expiresAt`. To find
