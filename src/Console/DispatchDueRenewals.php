@@ -4,6 +4,8 @@ namespace Pr4w\SocialTokens\Console;
 
 use Illuminate\Console\Command;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Queue\SyncQueue;
 use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
@@ -13,11 +15,13 @@ use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
 
 /**
- * Dispatches one renewal job per credential whose renew_at has passed. Each
- * run then announces the Meta data access deadlines that came within their
- * lead time (CredentialDataAccessExpiring): a token that never expires has no
- * renewal to carry that warning. The warning comes second and cannot stop the
- * renewals: they keep every provider's tokens alive, it only informs.
+ * Dispatches one renewal job per credential whose renew_at has passed. A due
+ * credential no active account depends on is not renewed but unscheduled
+ * (renew_at null), so that later runs stop re-reading it; a reconnect
+ * schedules it again. Each run then announces the Meta data access deadlines
+ * that came within their lead time (CredentialDataAccessExpiring): a token
+ * that never expires has no renewal to carry that warning. Both come second
+ * and cannot stop the renewals: they keep every provider's tokens alive.
  */
 class DispatchDueRenewals extends Command
 {
@@ -78,9 +82,22 @@ class DispatchDueRenewals extends Command
             $this->warn("{$deferred} renewal(s) failed for now and will be retried later.");
         }
 
-        // After the renewals, and guarded: a failing scan (its columns do not
-        // exist until migration 000009 has run) must not cost any provider
-        // its renewals.
+        // After the renewals, and guarded: neither may cost a provider its
+        // renewals (the deadline scan's columns do not exist until migration
+        // 000009 has run).
+        try {
+            $unscheduled = $this->unscheduleUnused($configured);
+            $unusedChecked = true;
+
+            if ($unscheduled > 0) {
+                $this->info("Unscheduled {$unscheduled} credential(s) no active account uses.");
+            }
+        } catch (Throwable $e) {
+            report($e);
+            $unusedChecked = false;
+            $this->error('Could not unschedule the unused credentials; see the log.');
+        }
+
         try {
             $this->warnDataAccessExpiring();
             $deadlinesChecked = true;
@@ -102,7 +119,33 @@ class DispatchDueRenewals extends Command
             return self::FAILURE;
         }
 
-        return $deadlinesChecked ? self::SUCCESS : self::FAILURE;
+        return $deadlinesChecked && $unusedChecked ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * Take the due credentials no active account depends on out of the scan:
+     * left due, each run would read them again through inUse()'s subqueries,
+     * for good. renew_at null, checked again in the update, so a credential
+     * a reconnect rescheduled since the read keeps its date. A reconnect
+     * schedules it again (persistCredential()), and so does a renewal on
+     * demand (validAccessTokenFor() once its token expires).
+     *
+     * @param  array<int, string>  $configured
+     */
+    protected function unscheduleUnused(array $configured): int
+    {
+        $unscheduled = 0;
+
+        SocialToken::query()
+            ->dueForRenewal()
+            ->whereIn('provider', $configured)
+            ->whereNot(fn (Builder $query) => $query->inUse())
+            ->select('id')
+            ->chunkById(500, function (Collection $chunk) use (&$unscheduled) {
+                $unscheduled += SocialToken::query()->whereKey($chunk->modelKeys())->dueForRenewal()->update(['renew_at' => null]);
+            });
+
+        return $unscheduled;
     }
 
     /**

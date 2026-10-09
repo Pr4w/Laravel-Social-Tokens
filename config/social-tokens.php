@@ -80,6 +80,22 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Pruning
+    |--------------------------------------------------------------------------
+    |
+    | social-tokens:prune deletes the credentials nothing will use again once
+    | they have not changed for `prune_after_days` (at least 1): revoked ones,
+    | ones flagged needs_reconnect, and ones no connected account depends on
+    | (left behind by a reconnect, or by accounts you deleted). A reconnect
+    | stores a new credential. Accounts are never deleted. Same forms as
+    | dispatch_schedule; set prune_schedule to null to disable.
+    |
+    */
+    'prune_schedule' => 'daily',
+    'prune_after_days' => 30,
+
+    /*
+    |--------------------------------------------------------------------------
     | Meta data access
     |--------------------------------------------------------------------------
     |

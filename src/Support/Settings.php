@@ -70,6 +70,17 @@ final class Settings
     }
 
     /**
+     * How many days social-tokens:prune keeps a credential nothing will use
+     * again after its last change (`prune_after_days`): 30 unless set, at
+     * least 1, so that a credential a connection is still writing is never
+     * deleted under it.
+     */
+    public static function pruneAfterDays(): int
+    {
+        return max(1, self::int(config('social-tokens.prune_after_days'), 30));
+    }
+
+    /**
      * How long before a credential's data access lapses (Meta's
      * data_access_expires_at) CredentialDataAccessExpiring fires, or null when
      * `data_access_warning.enabled` is off. A negative lead counts as 0.

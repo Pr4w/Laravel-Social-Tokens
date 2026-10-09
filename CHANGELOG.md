@@ -284,6 +284,20 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   column, and throws a `QueryException` (unknown column `disconnected_at`),
   changing nothing, until it has run. Connections are not affected
   ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
+- The scheduler runs `social-tokens:prune` daily (see Added): credentials
+  revoked, flagged `needs_reconnect`, or used by no connected account are
+  deleted once they have not changed for 30 days. An account whose credential
+  is deleted keeps its row, without a credential (`social_token_id` null), so
+  `$account->credential` can be null; it already could after a data deletion
+  request. Set `prune_schedule` to `null` to keep every credential
+  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
+- `social-tokens:dispatch-renewals` unschedules a due credential no active
+  account depends on (`renew_at` null) instead of leaving it due, where every
+  run read it again through two correlated subqueries, for good. A reconnect
+  schedules it again. An account made active by hand (an `UPDATE`) leaves its
+  credential unscheduled until its token expires and `validAccessTokenFor()`
+  renews it: set the credential's `renew_at` to now as well
+  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -591,6 +605,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   of the same login: to refresh the token, to add a Page, or the ones Meta's
   90-day data access and LinkedIn's 60-day re-authorisation force (see
   Changed (breaking)).
+- Nothing ever removed a credential: revoked and flagged ones, those a
+  reconnect left behind, and those whose accounts the app deleted stayed in
+  `social_tokens` for good, a renewable one among them with a past `renew_at`
+  that every dispatcher run read again (see Added and Changed (breaking)).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -767,6 +785,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `revoke()` and `disconnect()` of the same TikTok or Google user from
   reaching the provider
   ([UPGRADE](UPGRADE.md#tear-down-the-owners-you-delete)).
+- `social-tokens:prune` deletes the credentials nothing will use again once
+  they have not changed for `prune_after_days` (30, at least 1; `--days`
+  overrides it): revoked ones, ones flagged `needs_reconnect`, and ones no
+  connected account depends on, by `social_token_id` or as the holder of its
+  accounts under the same owner (left behind by a reconnect, or by accounts
+  the app deleted). Scheduled daily by default (`prune_schedule`, any form
+  `dispatch_schedule` takes; `null` disables it), `withoutOverlapping()` and
+  `onOneServer()`. Accounts are never deleted. The query is
+  `SocialToken::prunable($before)`.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

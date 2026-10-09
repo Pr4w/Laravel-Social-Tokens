@@ -231,6 +231,44 @@ class SocialToken extends Model
                     ->whereColumn('sibling_credential.provider_holder_id', "{$tokens}.provider_holder_id"))));
     }
 
+    /**
+     * Credentials nothing will use again, unchanged since $before: revoked or
+     * flagged needs_reconnect ones (only a reconnect, which stores a token of
+     * its own, brings those back), and those no connected (not revoked)
+     * account depends on, by social_token_id or as its holder under the same
+     * owner (the Meta user token behind a user's Pages). The holder test is
+     * looser than inUse()'s: a credential is kept while any connected account
+     * of its provider, holder and owner exists.
+     *
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
+     */
+    public function scopePrunable(Builder $query, CarbonInterface $before): Builder
+    {
+        $tokens = $this->getTable();
+        $accounts = (new SocialAccount)->getTable();
+        $revoked = AccountStatus::Revoked->value;
+
+        return $query
+            ->where('updated_at', '<', $before)
+            ->where(fn (Builder $query) => $query
+                ->whereIn('status', [$revoked, AccountStatus::NeedsReconnect->value])
+                ->orWhere(fn (Builder $unused) => $unused
+                    ->whereDoesntHave('accounts', fn (Builder $account) => $account->where('status', '!=', $revoked))
+                    ->whereNotExists(fn ($sub) => $sub->selectRaw('1')->from($accounts)
+                        ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
+                        ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
+                        ->where("{$accounts}.status", '!=', $revoked)
+                        // Same owner (null-safe), as in inUse().
+                        ->where(fn ($owner) => $owner
+                            ->where(fn ($same) => $same
+                                ->whereColumn("{$accounts}.ownable_type", "{$tokens}.ownable_type")
+                                ->whereColumn("{$accounts}.ownable_id", "{$tokens}.ownable_id"))
+                            ->orWhere(fn ($none) => $none
+                                ->whereNull("{$accounts}.ownable_type")
+                                ->whereNull("{$tokens}.ownable_type"))))));
+    }
+
     // Persistence -------------------------------------------------------------
 
     /**

@@ -13,6 +13,7 @@ use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
+use Pr4w\SocialTokens\Console\PruneCredentials;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\Settings;
@@ -50,6 +51,7 @@ class SocialTokensServiceProvider extends ServiceProvider
             $this->commands([
                 DispatchDueRenewals::class,
                 CheckStaticCredentials::class,
+                PruneCredentials::class,
             ]);
         }
 
@@ -72,6 +74,12 @@ class SocialTokensServiceProvider extends ServiceProvider
                     ->withoutOverlapping(120)
                     ->onOneServer()
                     ->runInBackground(); // N sequential provider calls must not delay the app's own tasks
+            }
+
+            if ($pruneFrequency = $this->frequency('prune_schedule', 'daily')) {
+                $pruneFrequency($schedule->command('social-tokens:prune'))
+                    ->withoutOverlapping(60)
+                    ->onOneServer();
             }
         });
     }

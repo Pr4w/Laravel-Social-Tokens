@@ -529,6 +529,41 @@ holds without touching other owners' rows.
    Add `withTrashed()` to the subquery if soft-deleted workspaces should keep
    their connections.
 
+### Unused credentials are unscheduled, then pruned
+
+Two changes keep `social_tokens` to the credentials something uses.
+
+- `social-tokens:dispatch-renewals` sets `renew_at` to null on a credential
+  whose renewal is due but that no active account depends on, instead of
+  reading it again on every run. A reconnect schedules it again.
+- The new `social-tokens:prune` command, scheduled daily, deletes the
+  credentials that are revoked, flagged `needs_reconnect`, or used by no
+  connected account, once they have not changed for `prune_after_days` (30).
+  Accounts are never deleted: one whose credential goes keeps its row, with
+  `social_token_id` null.
+
+1. **Choose a retention, or turn it off.** Both keys default when your
+   published config lacks them; add them to set them:
+
+   ```php
+   'prune_schedule' => 'daily',   // null: never prune
+   'prune_after_days' => 30,      // at least 1
+   ```
+
+   The first run deletes every credential that already qualifies, for
+   instance all those revoked more than 30 days ago. Keep `prune_schedule` at
+   `null` if you report on revoked credentials or point at their ids from your
+   own tables; otherwise copy what you need first.
+2. **Read the credential null-safely.** `$account->credential` is null once
+   the credential is pruned (as after a data deletion request): use
+   `$account->credential?->last_error`, or `effectiveStatus()`, which already
+   reads a missing credential as `needs_reconnect`.
+3. **Reactivating an account by hand** (`UPDATE social_accounts SET status =
+   'active'`, as the 1.2 notes describe): set its credential's `renew_at` to
+   now as well. Otherwise the dispatcher may have unscheduled it, and it is
+   renewed only once its token expires and `validAccessTokenFor()` is asked
+   for it.
+
 ### Review your `reportRejected()` calls
 
 2.x's README told you to pass `terminal: true` for any Meta 190/102 and for an
