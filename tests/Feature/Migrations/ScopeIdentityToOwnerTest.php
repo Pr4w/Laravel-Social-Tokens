@@ -392,3 +392,103 @@ it('refuses before changing anything when owner ids do not fit the credentials c
     'not a uuid for a uuid column' => ['42', 'uuid', 'pgsql'],
     'a uuid in a ulid column' => [(string) Str::uuid(), 'ulid', 'mysql'],
 ])->throws(RuntimeException::class, 'Nothing was changed');
+
+/*
+ * 2.0.0's copy gave the credentials' owner columns the app's morph key type.
+ * On MySQL, with uuid owners declared per column and morph keys left to
+ * integers, that made a bigint column: its backfill failed on the first owned
+ * credential, having committed the columns and dropped the old credential key,
+ * and 3.0 resumed into the same failure every time.
+ */
+
+/** What 2.0.0's migration had committed when its backfill failed. */
+function failedV2Run(): void
+{
+    Schema::table('social_tokens', function (Blueprint $table) {
+        $table->nullableMorphs('ownable');
+        $table->dropUnique(['provider', 'provider_holder_id']);
+    });
+}
+
+/** An ownable_id column as Schema::getColumns() describes it on MySQL. */
+function mysqlOwnerId(string $type): array
+{
+    return ['type_name' => strtok($type, '( '), 'type' => $type];
+}
+
+/** The migration's call on owner columns an earlier run left, for MySQL-shaped ownable_id columns. */
+function remakesOwnerColumns(array $accountColumn, array $tokenColumn): bool
+{
+    $migration = ownerMigration();
+
+    return (function () use ($accountColumn, $tokenColumn) {
+        $morphType = $this->morphTypeOf('social_accounts', $accountColumn, 'mysql');
+
+        return $this->remakesOwnerColumns('social_accounts', 'social_tokens', $accountColumn, $tokenColumn, $morphType, 'mysql');
+    })->call($migration);
+}
+
+function accountOfWorkspace(string $workspace, ?int $tokenId): void
+{
+    DB::table('social_accounts')->insert([
+        'provider' => 'tiktok', 'provider_user_id' => "tt-{$workspace}", 'provider_holder_id' => "tt-{$workspace}",
+        'social_token_id' => $tokenId, 'ownable_type' => 'workspace', 'ownable_id' => $workspace,
+        'status' => 'active', 'created_at' => now(), 'updated_at' => now(),
+    ]);
+}
+
+it('makes again the empty owner columns of a failed 2.0.0 run when their type differs', function () {
+    failedV2Run();
+    accountOfWorkspace((string) Str::uuid(), v1Credential('tiktok', 'tt-1', 'tt-access'));
+
+    expect(remakesOwnerColumns(mysqlOwnerId('char(36)'), mysqlOwnerId('bigint unsigned')))->toBeTrue();
+});
+
+it('keeps owner columns an earlier run gave the accounts type', function (array $column) {
+    failedV2Run();
+
+    expect(remakesOwnerColumns($column, $column))->toBeFalse();
+})->with(['bigint' => [mysqlOwnerId('bigint unsigned')], 'uuid' => [mysqlOwnerId('char(36)')]]);
+
+it('keeps owner columns of another type that hold owners whose ids fit them', function () {
+    // The app switched to uuid morphs after its accounts table was created:
+    // 2.0.0 backfilled integer owner ids into char(36), then failed on a key.
+    failedV2Run();
+    $token = v1Credential('tiktok', 'tt-1', 'tt-access');
+    v1Account('tiktok', 'tt-1', 'tt-1', $token, $this->alice);
+    DB::table('social_tokens')->where('id', $token)->update(['ownable_type' => $this->alice->getMorphClass(), 'ownable_id' => $this->alice->getKey()]);
+
+    expect(remakesOwnerColumns(mysqlOwnerId('bigint unsigned'), mysqlOwnerId('char(36)')))->toBeFalse();
+});
+
+it('refuses owner columns that hold owners and cannot store the accounts ids', function () {
+    failedV2Run();
+    $token = v1Credential('tiktok', 'tt-1', 'tt-access');
+    accountOfWorkspace((string) Str::uuid(), $token);
+    DB::table('social_tokens')->where('id', $token)->update(['ownable_type' => 'workspace', 'ownable_id' => 7]);
+
+    expect(fn () => remakesOwnerColumns(mysqlOwnerId('char(36)'), mysqlOwnerId('bigint unsigned')))->toThrow(RuntimeException::class, 'MODIFY ownable_id char(36) NULL')
+        ->and(fn () => remakesOwnerColumns(mysqlOwnerId('char(36)'), mysqlOwnerId('bigint unsigned')))->toThrow(RuntimeException::class, 'Nothing was changed');
+});
+
+it('finishes a 2.0.0 run that failed on owners declared per column as uuid', function (bool $keysBuilt) {
+    Schema::table('social_accounts', fn (Blueprint $table) => $table->string('ownable_id')->nullable()->change());
+    failedV2Run();
+
+    if ($keysBuilt) {
+        // As a run that got past the key swap left it.
+        Schema::table('social_tokens', fn (Blueprint $table) => $table->unique(['provider', 'provider_holder_id', 'ownable_type', 'ownable_id'], 'social_tokens_owner_identity_unique'));
+    }
+
+    $workspace = (string) Str::uuid();
+    $token = v1Credential('tiktok', 'tt-1', 'tt-access');
+    accountOfWorkspace($workspace, $token);
+
+    ownerMigration()->up();
+
+    expect(Schema::getColumnType('social_tokens', 'ownable_id'))->toBe('varchar')
+        ->and(DB::table('social_tokens')->where('id', $token)->value('ownable_id'))->toBe($workspace)
+        ->and(Schema::hasIndex('social_tokens', ['ownable_type', 'ownable_id']))->toBeTrue()
+        ->and(uniqueIndexes('social_tokens'))->toBe(['social_tokens_owner_identity_unique' => ['provider', 'provider_holder_id', 'ownable_type', 'ownable_id']])
+        ->and(uniqueIndexes('social_accounts'))->toBe(['social_accounts_owner_identity_unique' => ['provider', 'provider_user_id', 'ownable_type', 'ownable_id']]);
+})->with(['as 2.0.0 left it' => [false], 'with the owner keys built' => [true]]);

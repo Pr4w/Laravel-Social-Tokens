@@ -63,7 +63,8 @@ Go straight to 3.0 and follow [From 2.x to 3.0](#from-2x-to-30) too. The
 safeguards below exist only in 3.0's copy of
 `2025_01_01_000007_scope_identity_to_owner`: 2.0.0's cannot be resumed after a
 failure, fails on MySQL with uuid or ulid owners after dropping the old keys,
-and runs as one long transaction on PostgreSQL.
+and runs as one long transaction on PostgreSQL. If 2.0.0's copy already failed
+on your database, 3.0's finishes it (see "If it fails partway" below).
 
 ### 2. Run the migration, on a copy of production first
 
@@ -124,6 +125,20 @@ itself. Adjust anything that refers to them by name.
 run `php artisan migrate` again: every step is guarded and resumes where it
 stopped. The backfill commits in chunks of 100 credentials, and a credential is
 split in one transaction or not at all.
+
+That includes resuming a failed 2.0.0 run. On MySQL/MariaDB, a 2.0.0 copy that
+stopped partway left `social_tokens.ownable_type` / `ownable_id` added and the
+old credential key dropped: update to 3.0 and run `php artisan migrate` again.
+2.0.0 gave those columns your default morph key type, not the type of
+`social_accounts.ownable_id`, so with uuid or ulid owners declared per column
+they were bigint and its backfill failed with "Data truncated". Columns of
+another type than the accounts' that are still empty (the usual case: that
+backfill stopped on the first owned credential) are dropped and made again with
+the right type. Columns that already hold owners are kept if every owner id
+fits them. If not, the migration refuses, changing nothing, and names the
+`ALTER TABLE` that gives `social_tokens.ownable_id` the type of
+`social_accounts.ownable_id`: run it, check the owners already stored there,
+then migrate again.
 
 **PostgreSQL:** the migration does not run as one transaction, so the running
 app is never locked out of `social_tokens` for the whole backfill. Each schema

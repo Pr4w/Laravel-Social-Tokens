@@ -49,6 +49,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     real columns and rows, so `migrate --pretend` skips them: it lists the
     statements, as 2.0.0 did, for a schema the package created, with the owner
     columns in the app's default morph key type.
+  - It finishes a run of 2.0.0's copy that failed on MySQL/MariaDB with owners
+    declared per column as uuid or ulid (`nullableUuidMorphs('ownable')` in a
+    published accounts migration) and morph keys left to integers. 2.0.0 gave
+    `social_tokens.ownable_id` the app's default type (bigint), its backfill
+    stopped on the first owned credential with "Data truncated", and every
+    later `migrate` failed the same way. Owner columns an earlier run left
+    empty, with another type than the accounts', are now made again. Columns
+    that already hold owners are kept when every owner id fits them; otherwise
+    the migration refuses, changing nothing, and names the `ALTER TABLE` to run.
   - The credentials' owner column takes the key type of the accounts' own
     column: a uuid column (native, or `char(36)`) gives uuid, a `char(26)`
     column ulid, whatever the app's default morph key type. Owners declared

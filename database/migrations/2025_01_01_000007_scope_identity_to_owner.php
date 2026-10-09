@@ -24,7 +24,9 @@ use Illuminate\Support\Str;
  * Safe to run again after a failure: MySQL commits every DDL statement on its
  * own, so a failure partway used to leave a schema the next run choked on.
  * Every step is guarded, the checks that can fail run before anything changes,
- * and the new unique keys are built before the old ones are dropped.
+ * and the new unique keys are built before the old ones are dropped. That
+ * includes a failed run of 2.0.0's copy, which could leave the credentials'
+ * owner columns with a type the owners do not fit.
  *
  * Not one transaction: on PostgreSQL that held the ALTER's ACCESS EXCLUSIVE lock
  * on social_tokens, blocking every token read of the live app, until the last
@@ -51,12 +53,26 @@ return new class extends Migration
         $tokens = config('social-tokens.tokens_table', 'social_tokens');
 
         $pretending = Schema::getConnection()->pretending();
+        $remake = false;
 
         if ($pretending) {
             $morphType = SchemaBuilder::$defaultMorphKeyType;
         } else {
-            $morphType = Schema::hasColumn($tokens, 'ownable_type') ? null : $this->ownerMorphType($accounts);
-            $this->ensureOwnerKeysFit($accounts, $tokens);
+            $driver = Schema::getConnection()->getDriverName();
+            $accountColumn = $this->ownerIdColumn($accounts);
+            $morphType = $this->ownerMorphType($accounts, $accountColumn, $driver);
+
+            // Left by an earlier run that failed: kept, or made again with the right type.
+            if (Schema::hasColumn($tokens, 'ownable_type')) {
+                $remake = $this->remakesOwnerColumns($accounts, $tokens, $accountColumn, $this->ownerIdColumn($tokens), $morphType, $driver);
+                $morphType = $remake ? $morphType : null;
+            }
+
+            $this->ensureOwnerKeysFit($accounts, $tokens, $morphType !== null);
+        }
+
+        if ($remake) {
+            $this->dropOwnerColumns($tokens);
         }
 
         if ($morphType !== null) {
@@ -235,17 +251,22 @@ return new class extends Migration
             : $query->where('ownable_type', $owner->ownable_type)->where('ownable_id', $owner->ownable_id);
     }
 
+    /** @return array{type_name: string, type: string} as Schema::getColumns() describes it */
+    private function ownerIdColumn(string $table): array
+    {
+        return collect(Schema::getColumns($table))->firstWhere('name', 'ownable_id')
+            ?? throw new RuntimeException("{$table} has no ownable_id column.");
+    }
+
     /**
      * The key type of the credentials' owner: the accounts' own, since the
      * backfill copies their owners. Checked before anything changes: a wrong
      * type fails the backfill after the column is added.
+     *
+     * @param  array{type_name: string, type: string}  $column  the accounts' ownable_id
      */
-    private function ownerMorphType(string $accounts): string
+    private function ownerMorphType(string $accounts, array $column, string $driver): string
     {
-        $driver = Schema::getConnection()->getDriverName();
-        $column = collect(Schema::getColumns($accounts))->firstWhere('name', 'ownable_id')
-            ?? throw new RuntimeException("{$accounts} has no ownable_id column.");
-
         $morphType = $this->morphTypeOf($accounts, $column, $driver);
 
         if ($morphType !== 'int') {
@@ -253,6 +274,70 @@ return new class extends Migration
         }
 
         return $morphType;
+    }
+
+    /**
+     * Whether the credentials' owner columns an earlier run left must be made
+     * again. 2.0.0 gave them the app's morph key type, not the accounts' column
+     * type: with uuid owners declared per column on MySQL it made a bigint
+     * column, its backfill failed on the first owned credential, and a run
+     * again would fail there every time. Still empty, the columns are made
+     * again with the type a first run gives them. Holding owners, they stay
+     * as long as every owner id of the accounts fits them.
+     *
+     * @param  array{type_name: string, type: string}  $accountColumn  the accounts' ownable_id
+     * @param  array{type_name: string, type: string}  $tokenColumn  the credentials' ownable_id
+     */
+    private function remakesOwnerColumns(string $accounts, string $tokens, array $accountColumn, array $tokenColumn, string $morphType, string $driver): bool
+    {
+        if ($this->declaredMorphType($tokenColumn) === $morphType) {
+            return false;
+        }
+
+        if (DB::table($tokens)->whereNotNull('ownable_type')->orWhereNotNull('ownable_id')->doesntExist()) {
+            return true;
+        }
+
+        $misfit = $this->firstMisfit($accounts, $this->columnTakes($tokenColumn, $driver));
+
+        if ($misfit === null) {
+            return false;
+        }
+
+        $table = Schema::getConnection()->getQueryGrammar()->wrapTable($tokens);
+        $type = $accountColumn['type'];
+
+        $alter = match ($driver) {
+            'pgsql' => "ALTER TABLE {$table} ALTER COLUMN ownable_id TYPE {$type} USING ownable_id::{$type}",
+            'sqlsrv' => "ALTER TABLE {$table} ALTER COLUMN ownable_id {$type} NULL",
+            default => "ALTER TABLE {$table} MODIFY ownable_id {$type} NULL",
+        };
+
+        throw new RuntimeException(
+            "{$tokens}.ownable_id ({$tokenColumn['type']}), left by an earlier run that failed, cannot store the "
+            ."owner id '{$misfit}' of {$accounts}, and already holds owners. Give it the type of "
+            ."{$accounts}.ownable_id ({$alter}), check the owners it holds, then migrate again. Nothing was changed."
+        );
+    }
+
+    /**
+     * Every index naming them goes first: SQLite refuses to drop an indexed
+     * column. Every owner is null here, and a unique key treats nulls as
+     * distinct, so one naming them constrained no row; up() makes it again.
+     */
+    private function dropOwnerColumns(string $tokens): void
+    {
+        $indexes = collect(Schema::getIndexes($tokens))->filter(
+            fn (array $index) => ! $index['primary'] && array_intersect($index['columns'], ['ownable_type', 'ownable_id']) !== [],
+        );
+
+        Schema::table($tokens, function (Blueprint $table) use ($indexes) {
+            foreach ($indexes as $index) {
+                $index['unique'] ? $table->dropUnique($index['name']) : $table->dropIndex($index['name']);
+            }
+
+            $table->dropColumn(['ownable_type', 'ownable_id']);
+        });
     }
 
     /**
@@ -264,6 +349,36 @@ return new class extends Migration
      * @param  array{type_name: string, type: string}  $column  as Schema::getColumns() describes it
      */
     private function morphTypeOf(string $accounts, array $column, string $driver): string
+    {
+        $declared = $this->declaredMorphType($column);
+
+        if ($declared !== null) {
+            return $declared;
+        }
+
+        if (SchemaBuilder::$defaultMorphKeyType !== 'int') {
+            return SchemaBuilder::$defaultMorphKeyType;
+        }
+
+        // SQLite declares uuid and ulid columns alike (varchar) and enforces neither.
+        if ($driver === 'sqlite') {
+            return 'uuid';
+        }
+
+        throw new RuntimeException(
+            "{$accounts}.ownable_id holds non-integer keys ({$column['type']}), but morph keys default to integers here. "
+            .'Call Schema::morphUsingUuids() or Schema::morphUsingUlids(), matching your owner keys, in a service '
+            .'provider, then migrate again. Nothing was changed.'
+        );
+    }
+
+    /**
+     * The morph key type Laravel declares a column with, or null for a string
+     * column its uuid and ulid types do not produce.
+     *
+     * @param  array{type_name: string, type: string}  $column  as Schema::getColumns() describes it
+     */
+    private function declaredMorphType(array $column): ?string
     {
         $typeName = strtolower($column['type_name']);
         $type = strtolower($column['type']);
@@ -281,20 +396,49 @@ return new class extends Migration
             return 'ulid';
         }
 
-        if (SchemaBuilder::$defaultMorphKeyType !== 'int') {
-            return SchemaBuilder::$defaultMorphKeyType;
-        }
+        return null;
+    }
 
-        // SQLite declares uuid and ulid columns alike (varchar) and enforces neither.
+    /**
+     * What an existing column stores: integers, uuids in a native uuid column,
+     * and up to the declared length in a string one.
+     *
+     * @param  array{type_name: string, type: string}  $column  as Schema::getColumns() describes it
+     * @return Closure(string): bool
+     */
+    private function columnTakes(array $column, string $driver): Closure
+    {
         if ($driver === 'sqlite') {
-            return 'uuid';
+            return fn (string $id) => true; // enforces no type or length
         }
 
-        throw new RuntimeException(
-            "{$accounts}.ownable_id holds non-integer keys ({$type}), but morph keys default to integers here. "
-            .'Call Schema::morphUsingUuids() or Schema::morphUsingUlids(), matching your owner keys, in a service '
-            .'provider, then migrate again. Nothing was changed.'
-        );
+        if ($this->declaredMorphType($column) === 'int') {
+            return fn (string $id) => preg_match('/^-?\d+$/', $id) === 1;
+        }
+
+        if (in_array(strtolower($column['type_name']), ['uuid', 'uniqueidentifier'], true)) {
+            return fn (string $id) => Str::isUuid($id);
+        }
+
+        if (preg_match('/\((\d+)\)/', $column['type'], $match) === 1) {
+            $length = (int) $match[1];
+
+            return fn (string $id) => mb_strlen($id) <= $length;
+        }
+
+        return fn (string $id) => true;
+    }
+
+    /**
+     * The first owner id of the accounts a column does not take.
+     *
+     * @param  Closure(string): bool  $takes
+     */
+    private function firstMisfit(string $accounts, Closure $takes): ?string
+    {
+        return DB::table($accounts)->whereNotNull('ownable_id')->distinct()->pluck('ownable_id')
+            ->map(fn (mixed $id) => (string) $id)
+            ->first(fn (string $id) => ! $takes($id));
     }
 
     /**
@@ -308,15 +452,11 @@ return new class extends Migration
             return; // enforces no type or length
         }
 
-        $fits = match (true) {
+        $misfit = $this->firstMisfit($accounts, match (true) {
             $morphType === 'ulid' => fn (string $id) => mb_strlen($id) <= 26,
             in_array($driver, ['pgsql', 'mariadb', 'sqlsrv'], true) => fn (string $id) => Str::isUuid($id),
             default => fn (string $id) => mb_strlen($id) <= 36,
-        };
-
-        $misfit = DB::table($accounts)->whereNotNull('ownable_id')->distinct()->pluck('ownable_id')
-            ->map(fn (mixed $id) => (string) $id)
-            ->first(fn (string $id) => ! $fits($id));
+        });
 
         if ($misfit !== null) {
             throw new RuntimeException(
@@ -332,17 +472,19 @@ return new class extends Migration
      * MySQL/MariaDB reject an index key over 3072 bytes, and commit every DDL
      * statement on its own: find out before changing anything.
      */
-    private function ensureOwnerKeysFit(string $accounts, string $tokens): void
+    private function ensureOwnerKeysFit(string $accounts, string $tokens, bool $makesOwnerColumns): void
     {
         if (! in_array(Schema::getConnection()->getDriverName(), ['mysql', 'mariadb'], true)) {
             return;
         }
 
         $accountColumns = collect(Schema::getColumns($accounts))->keyBy('name')->all();
+        $tokenColumns = collect(Schema::getColumns($tokens))->keyBy('name')->all();
 
-        // Until they exist, the credential's owner columns mirror the accounts'.
-        $tokenColumns = collect(Schema::getColumns($tokens))->keyBy('name')->all()
-            + ['ownable_type' => $accountColumns['ownable_type'], 'ownable_id' => $accountColumns['ownable_id']];
+        // Until this run makes them, the credential's owner columns mirror the accounts'.
+        if ($makesOwnerColumns) {
+            $tokenColumns = ['ownable_type' => $accountColumns['ownable_type'], 'ownable_id' => $accountColumns['ownable_id']] + $tokenColumns;
+        }
 
         foreach ([[$tokens, $tokenColumns, 'provider_holder_id'], [$accounts, $accountColumns, 'provider_user_id']] as [$table, $columns, $external]) {
             $this->ensureOwnerKeyFits($table, array_map(
