@@ -564,6 +564,13 @@ Two changes keep `social_tokens` to the credentials something uses.
    renewed only once its token expires and `validAccessTokenFor()` is asked
    for it.
 
+### Rotating `APP_KEY` (optional)
+
+If you rotated `APP_KEY` and still list the old key in `APP_PREVIOUS_KEYS`
+because some tokens were never written again (Google refresh tokens, Facebook
+Page tokens), run `php artisan social-tokens:reencrypt`, then drop the old
+key once it exits successfully. See the README, "Rotating APP_KEY".
+
 ### Review your `reportRejected()` calls
 
 2.x's README told you to pass `terminal: true` for any Meta 190/102 and for an

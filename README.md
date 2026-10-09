@@ -64,6 +64,15 @@ writes it makes, put a token in an exception trace. Set
 `zend.exception_ignore_args=On` in production to cover code outside the package
 too.
 
+**Rotating `APP_KEY`.** Put the old key in `APP_PREVIOUS_KEYS` when you set the
+new one: tokens still decrypt, and each is re-encrypted with the new key when
+it is written again. Some never are (a Google refresh token, a Facebook Page
+token), so run `php artisan social-tokens:reencrypt` before you drop the old
+key. It rewrites every token not under the current key, never over a token
+renewed meanwhile, and can be run again. It exits with a failure code, and
+logs the credentials, when some token decrypts with none of the keys: keep the
+previous key until those users reconnect.
+
 ### Owners
 
 Identity is scoped to the **owner** you pass when connecting (`owner:` — a User,

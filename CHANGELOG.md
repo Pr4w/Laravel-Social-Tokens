@@ -794,6 +794,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `dispatch_schedule` takes; `null` disables it), `withoutOverlapping()` and
   `onOneServer()`. Accounts are never deleted. The query is
   `SocialToken::prunable($before)`.
+- `social-tokens:reencrypt` re-encrypts every stored token with the current
+  `APP_KEY`, decrypting with `APP_PREVIOUS_KEYS`, so a previous key can be
+  retired. The `encrypted` cast only re-encrypts a value it writes, and a
+  Google refresh token or a Facebook Page token is never written again: once
+  the old key was dropped, those credentials no longer decrypted. Tokens
+  already under the current key are left as they are; a row is written only
+  while it holds the ciphertext that was read (a renewal meanwhile wins), and
+  its `updated_at` is kept. A token no key decrypts is logged and left, and
+  the command exits with a failure code.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

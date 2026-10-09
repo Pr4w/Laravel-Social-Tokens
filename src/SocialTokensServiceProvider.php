@@ -14,6 +14,7 @@ use InvalidArgumentException;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
 use Pr4w\SocialTokens\Console\PruneCredentials;
+use Pr4w\SocialTokens\Console\ReencryptTokens;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\Settings;
@@ -52,6 +53,7 @@ class SocialTokensServiceProvider extends ServiceProvider
                 DispatchDueRenewals::class,
                 CheckStaticCredentials::class,
                 PruneCredentials::class,
+                ReencryptTokens::class,
             ]);
         }
 
