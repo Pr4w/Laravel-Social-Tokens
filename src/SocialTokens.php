@@ -5,7 +5,9 @@ namespace Pr4w\SocialTokens;
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\DetectsConcurrencyErrors;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
@@ -335,9 +337,10 @@ class SocialTokens
     }
 
     /**
-     * Revoke a credential: mark it Revoked, cascade to every account it backs,
-     * then tell the provider to invalidate it (best effort). A revoked
-     * credential is not usable and is never renewed again.
+     * Revoke a credential: mark it Revoked, erasing its tokens, cascade to
+     * every account it backs, then tell the provider to invalidate it (best
+     * effort, with a copy of the tokens taken before). A revoked credential is
+     * not usable and is never renewed again.
      *
      * The local revocation comes first and does not depend on the provider
      * call: the user's decision stands even when that call cannot be made (a
@@ -365,8 +368,8 @@ class SocialTokens
             ->where('status', AccountStatus::Active->value)
             ->exists();
 
-        // The provider gets the token values as they are now: a CredentialRevoked
-        // listener may wipe them from the instance it receives, this one.
+        // The provider gets the token values as they are now: the revocation
+        // erases them from this instance and the row.
         $atProvider = clone $token;
 
         try {
@@ -407,14 +410,19 @@ class SocialTokens
     /**
      * Disconnect ONE account. Accounts sharing its credential (the other
      * Instagram accounts of the same Facebook user, the other organizations of
-     * a LinkedIn member) keep posting; the credential itself is revoked, at the
-     * provider too, only when its last connected account goes. "Connected" means
+     * a LinkedIn member) keep posting; the credential itself is revoked (see
+     * revoke()) only when its last connected account goes. "Connected" means
      * not revoked: a sibling flagged needs_reconnect keeps the credential alive.
      * A LinkedIn member's personal profile has its own credential, apart from
      * the organizations' (purpose 'organizations'), so disconnecting it revokes
      * that one at once, and the organizations keep theirs.
      *
-     * An AccountRevoked listener that throws does not stop the credential's
+     * The same goes for the credential the account's holder keeps under the
+     * same owner: the Meta user token behind a user's Facebook Pages, which
+     * post with their own Page tokens, is revoked once neither a Page nor an
+     * Instagram account of that user and owner is connected.
+     *
+     * An AccountRevoked listener that throws does not stop the credentials'
      * revocation: the account row is revoked by then, so a retried disconnect()
      * would find nothing to do on it. The exception reaches the caller after.
      */
@@ -424,31 +432,128 @@ class SocialTokens
             $account->markRevoked();
         } finally {
             if ($account->status === AccountStatus::Revoked) {
-                $this->revokeCredentialOnceUnused($account);
+                $this->revokeCredentialsOnceUnused($account);
             }
         }
     }
 
     /**
-     * Revoke a disconnected account's credential when no other connected
-     * account uses it.
+     * Revoke the credentials a disconnected account depended on (its own, then
+     * its holder's) that no other connected account uses. Each is tried even
+     * when a listener throws; the first exception is rethrown after.
      */
-    protected function revokeCredentialOnceUnused(SocialAccount $account): void
+    protected function revokeCredentialsOnceUnused(SocialAccount $account): void
     {
-        $token = $account->credential()->first();
+        $failure = null;
 
-        if ($token === null || $token->status === AccountStatus::Revoked) {
-            return;
+        foreach ($this->credentialsBehind($account) as $token) {
+            try {
+                if (! $this->stillConnected($token, $account)) {
+                    $this->revoke($token); // account transitions are idempotent: no second AccountRevoked
+                }
+            } catch (Throwable $e) {
+                $failure ??= $e;
+            }
         }
 
-        $stillConnected = $token->accounts()
-            ->whereKeyNot($account->getKey())
+        if ($failure !== null) {
+            throw $failure;
+        }
+    }
+
+    /**
+     * The unrevoked credentials an account depends on: the one it posts with,
+     * then those its holder keeps under the same owner, whatever their purpose
+     * (the Meta user token behind a Facebook Page).
+     *
+     * @return list<SocialToken>
+     */
+    protected function credentialsBehind(SocialAccount $account): array
+    {
+        $own = $account->credential()->first();
+        $credentials = $own === null ? [] : [$own];
+
+        if ($account->provider_holder_id !== null) {
+            $held = $this->whereOwner(SocialToken::query(), $account->ownable_type, $account->ownable_id)
+                ->where('provider', $this->credentialProviderOf($account->provider))
+                ->where('provider_holder_id', $account->provider_holder_id);
+
+            if ($own !== null) {
+                $held->whereKeyNot($own->getKey());
+            }
+
+            array_push($credentials, ...$held->orderBy('id')->get()->all());
+        }
+
+        return array_values(array_filter($credentials, fn (SocialToken $token) => $token->status !== AccountStatus::Revoked));
+    }
+
+    /**
+     * Whether a connected (not revoked) account other than $except still
+     * depends on the credential: one posting with it, or, as inUse() reads it,
+     * one of its holder and owner that does not post with a sibling credential
+     * (a Facebook Page, whose own Page token was minted from the Meta user
+     * token; not a LinkedIn organization, which posts with the organizations'
+     * credential beside the member's personal one).
+     */
+    protected function stillConnected(SocialToken $token, SocialAccount $except): bool
+    {
+        $postingWithIt = $token->accounts()
+            ->whereKeyNot($except->getKey())
             ->where('status', '!=', AccountStatus::Revoked->value)
             ->exists();
 
-        if (! $stillConnected) {
-            $this->revoke($token); // account transitions are idempotent: no second AccountRevoked
+        if ($postingWithIt || $token->provider_holder_id === null) {
+            return $postingWithIt;
         }
+
+        return $this->whereOwner(SocialAccount::query(), $token->ownable_type, $token->ownable_id)
+            ->with('credential')
+            ->whereKeyNot($except->getKey())
+            ->where('status', '!=', AccountStatus::Revoked->value)
+            ->whereIn('provider', $this->accountProvidersOf($token->provider))
+            ->where('provider_holder_id', $token->provider_holder_id)
+            ->get()
+            ->contains(fn (SocialAccount $account) => $account->credential === null
+                || $account->credential->provider !== $token->provider
+                || $account->credential->provider_holder_id !== $token->provider_holder_id);
+    }
+
+    /**
+     * Rows of one owner, given by its columns (the owner-less ones for null).
+     *
+     * @template TModel of Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    protected function whereOwner(Builder $query, ?string $type, int|string|null $id): Builder
+    {
+        return $type === null
+            ? $query->whereNull('ownable_type')->whereNull('ownable_id')
+            : $query->where('ownable_type', $type)->where('ownable_id', $id);
+    }
+
+    /** The provider key a provider's credentials are stored under (Instagram's are Facebook's). */
+    protected function credentialProviderOf(string $provider): string
+    {
+        return $this->registry->has($provider) ? $this->registry->for($provider)->credentialProvider() : $provider;
+    }
+
+    /**
+     * The account providers whose credentials live under $credentialProvider,
+     * itself included: 'facebook' covers the Instagram accounts.
+     *
+     * @return list<string>
+     */
+    protected function accountProvidersOf(string $credentialProvider): array
+    {
+        $providers = array_filter(
+            $this->registry->configured(),
+            fn (string $key) => $this->registry->for($key)->credentialProvider() === $credentialProvider,
+        );
+
+        return array_values(array_unique([...$providers, $credentialProvider]));
     }
 
     /**
@@ -534,16 +639,8 @@ class SocialTokens
      */
     protected function externalUserRows(string $provider, string $externalId): array
     {
-        $credentialProvider = $this->registry->has($provider)
-            ? $this->registry->for($provider)->credentialProvider()
-            : $provider;
-
-        $accountProviders = collect($this->registry->configured())
-            ->filter(fn (string $key) => $this->registry->for($key)->credentialProvider() === $credentialProvider)
-            ->merge([$provider, $credentialProvider])
-            ->unique()
-            ->values()
-            ->all();
+        $credentialProvider = $this->credentialProviderOf($provider);
+        $accountProviders = array_values(array_unique([...$this->accountProvidersOf($credentialProvider), $provider]));
 
         $held = SocialAccount::query()
             ->whereIn('provider', $accountProviders)

@@ -720,13 +720,39 @@ class SocialToken extends Model
         return $changed;
     }
 
-    /** One-way and idempotent: fires CredentialRevoked only on the actual change. */
+    /**
+     * One-way and idempotent: fires CredentialRevoked only on the actual change.
+     *
+     * The tokens and their schedule are erased in the same write as the
+     * status: nothing reads a revoked credential's tokens, and a reconnect
+     * writes new ones. Kept, they were a working token the user asked to
+     * remove (Meta, Threads and LinkedIn have no provider-side revocation,
+     * and Google and TikTok skip it while another owner holds a grant), one
+     * database leak plus APP_KEY away. Read the token before revoking if you
+     * need it: SocialTokens::revoke() hands the provider a copy taken before.
+     */
     public function markRevoked(): self
     {
-        if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect])) {
+        if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect], static::revokedState())) {
             event(new CredentialRevoked($this));
         }
 
         return $this;
+    }
+
+    /**
+     * What a revocation erases: the tokens, and the dates that describe them.
+     *
+     * @return array<string, null>
+     */
+    protected static function revokedState(): array
+    {
+        return [
+            'access_token' => null,
+            'refresh_token' => null,
+            'expires_at' => null,
+            'refresh_expires_at' => null,
+            'renew_at' => null,
+        ];
     }
 }

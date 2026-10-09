@@ -4,7 +4,6 @@ namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
 use Illuminate\Http\Client\PendingRequest;
-use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Throwable;
@@ -107,20 +106,13 @@ class XConnector extends OAuth2Connector
                 return;
             }
 
-            $response = parent::tokenRequest()
+            $this->logUnconfirmedRevoke($token, parent::tokenRequest()
                 ->withBasicAuth((string) $this->clientId(), (string) $this->clientSecret())
                 ->post(self::REVOKE_URL, [
                     'token' => $value,
                     'token_type_hint' => $hint,
                     'client_id' => $this->clientId(),
-                ]);
-
-            if (! $response->successful()) {
-                Log::warning('[social-tokens] X did not confirm the token revocation', [
-                    'token_id' => $token->getKey(),
-                    'status' => $response->status(),
-                ]);
-            }
+                ]));
         } catch (Throwable $e) {
             $this->logRevokeFailure($token, $e);
         }

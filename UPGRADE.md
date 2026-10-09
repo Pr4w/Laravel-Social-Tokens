@@ -73,6 +73,11 @@ files (existing files are left alone).
   The other providers, Instagram Login and Threads included, keep connecting
   and renewing.
 
+- `2025_01_01_000010_clear_tokens_of_revoked_credentials` erases the tokens
+  that credentials revoked before 3.0 still hold (see
+  [Revoked credentials keep no tokens](#revoked-credentials-keep-no-tokens)).
+  It changes no schema and cannot be rolled back.
+
 The two 000006 migrations are named to run before
 `2025_01_01_000007_scope_identity_to_owner`, which needs them when you come
 from 1.x; 000008 runs after it. On a 2.x install, which already ran 000007,
@@ -374,6 +379,42 @@ invalidate the token.
   of them throws still reaches the caller, but only after the provider call:
   the revocation has happened by then, so do not report the disconnect as
   failed or undo anything on the strength of it.
+
+### Revoked credentials keep no tokens
+
+Revoking a credential (`revoke()`, `disconnect()` when it removes the
+credential's last connected account, the deauthorize callbacks) now erases
+its `access_token`, `refresh_token`, `expires_at`, `refresh_expires_at` and
+`renew_at` in the same write that sets `status` to `revoked`. The provider's
+revocation endpoint still gets the tokens, from a copy taken before.
+
+1. **Run the migrations.**
+   `2025_01_01_000010_clear_tokens_of_revoked_credentials` erases the same
+   columns on every credential that is already `revoked`. It cannot be rolled
+   back: if you need those tokens for anything (you should not, nothing in the
+   package reads them), export them first.
+2. **Listeners.** In a `CredentialRevoked` listener, synchronous or queued,
+   `$event->token->access_token` and `refresh_token` are now null. If one
+   calls the provider with them (say Meta's `DELETE /{user-id}/permissions`,
+   which the package leaves to you because it removes the user's whole grant),
+   move that call into a connector of your own: extend the connector, override
+   `revoke(SocialToken $token)`, read the token there (it holds the values
+   from before the revocation), and register it as the provider's `driver`.
+   Or read the token yourself before calling `revoke()`.
+3. **Google reconnects.** A reconnect without a new refresh token used to fall
+   back on the one a revoked credential still held. Keep asking Google for
+   one on every connect (`access_type=offline` and `prompt=consent`, as the
+   README shows); otherwise the reconnected credential cannot be renewed.
+4. **One more `CredentialRevoked` for Facebook.** `disconnect()` of the last
+   Page (or Instagram account) of a Facebook user, under one owner, now also
+   revokes the Meta user credential (`provider` `facebook`,
+   `provider_holder_id` the Facebook user id): a listener that notifies the
+   user on `CredentialRevoked` gets one event for it. Disconnecting the last
+   Instagram account no longer revokes that credential while one of the user's
+   Pages is still connected under that owner.
+
+A provider answer that does not confirm a Google or TikTok revocation is now
+logged: `[social-tokens] {provider} did not confirm the token revocation`.
 
 ### Review your `reportRejected()` calls
 
@@ -731,8 +772,11 @@ revoked, with no warning beforehand.
   `$token->renewalStrategyWith($connector)` instead.
 - Your connector's `revoke()` now runs after `CredentialRevoked` and
   `AccountRevoked` have fired, on a copy of the credential taken before them,
-  and the stored status is already `revoked`. Do not rely on the status
-  being active there. It runs even when one of those listeners threw; the
+  and the stored status is already `revoked`, with the tokens erased. Do not
+  rely on the status being active there, and read the tokens from the
+  instance you are given, never from the database. Log an answer that does
+  not confirm the revocation with `$this->logUnconfirmedRevoke($token,
+  $response)`. It runs even when one of those listeners threw; the
   listener's exception then reaches the caller of `revoke()` or
   `disconnect()` after your connector returns.
 - If you extend `ThreadsConnector`: it now extends

@@ -36,6 +36,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   now uses `SerializesModels`: the payload holds the class and key, and the
   listener re-reads the row when it runs (see Changed (breaking), and
   [UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
+- **Revoking a credential erases its tokens.** `revoke()`, `disconnect()`
+  when it revokes a credential, and the deauthorize callbacks
+  (`revokeExternalUser()`) changed the status only: the access and refresh
+  tokens stayed in the row, decryptable with `APP_KEY`, and often still valid
+  at the provider, since Facebook, Instagram, Threads and LinkedIn have no
+  provider-side revocation and Google and TikTok skip it while another owner
+  holds a grant. A Facebook Page token never expires. The write that marks a
+  credential revoked now also sets `access_token`, `refresh_token`,
+  `expires_at`, `refresh_expires_at` and `renew_at` to null; the provider is
+  called with a copy taken before. Migration
+  `2025_01_01_000010_clear_tokens_of_revoked_credentials` erases the tokens of
+  the credentials revoked before (see Changed (breaking), and
+  [UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
+- **Disconnecting a user's last Facebook Page revokes the Meta user token
+  behind it.** `disconnect()` followed only the Page's own credential, so the
+  user credential (`provider` `facebook`, `provider_holder_id` the Facebook
+  user) stayed `active`, holding a 60-day token that can mint a Page token for
+  every Page the user manages, no longer renewed nor checked. It is now
+  revoked, and its tokens erased, once no Page and no Instagram account of that
+  user is connected under the same owner (see Changed (breaking)).
 
 ### Changed (breaking)
 - `provider` is `varchar(50)` on `social_accounts` and `social_tokens` on MySQL,
@@ -207,6 +227,24 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   token reads "Malformed token extension response." (it was "Malformed
   response, no access_token."; see Changed, and
   [UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
+- A revoked credential holds no tokens and no schedule: `access_token`,
+  `refresh_token`, `expires_at`, `refresh_expires_at` and `renew_at` are null
+  from the revocation on, in a `CredentialRevoked` listener too (see
+  Security). Code that read the token of a revoked credential (to call the
+  provider itself, for example Meta's `DELETE /{user-id}/permissions`) must
+  read it before revoking, or do it in a connector's `revoke()`, which still
+  receives a copy holding the tokens. A reconnect no longer finds a revoked
+  credential's refresh token to fall back on when the provider sends none: a
+  Google reconnect without `prompt=consent` then stores no refresh token
+  ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
+- `disconnect()` also revokes the credential the account's holder keeps under
+  the same owner once no account of that holder and owner is connected: the
+  last Facebook Page (or Instagram account) of a Facebook user revokes the
+  Meta user credential, firing one more `CredentialRevoked`. Disconnecting a
+  user's last Instagram account no longer revokes that credential while a
+  Page of the same user and owner is connected; 2.x revoked it then, although
+  the Pages kept it renewed
+  ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -637,6 +675,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     `make()`), `Exceptions\InvalidSignedRequestException`, and the
     `Contracts\VerifiesSignedRequests` connector capability, implemented by
     the Facebook, Instagram, Instagram Login and Threads connectors.
+- `GoogleConnector`, `TikTokConnector` and `XConnector` log a warning when the
+  provider answers a revocation without confirming it (an HTTP error, or an
+  `error` in the body, which TikTok may send with a 200):
+  `[social-tokens] {provider} did not confirm the token revocation`, with
+  `provider`, `token_id`, `status` and the `error` code, never the body.
+  2.x ignored Google's and TikTok's answer. `AbstractConnector::logUnconfirmedRevoke()`
+  does it for a connector of your own.
+- Migration `2025_01_01_000010_clear_tokens_of_revoked_credentials` (see
+  Security). It can be run again, and changes no `updated_at`.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

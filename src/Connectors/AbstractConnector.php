@@ -89,6 +89,28 @@ abstract class AbstractConnector implements ProviderConnector
     }
 
     /**
+     * Log a provider-side revocation the provider answered without confirming
+     * it (an HTTP error, or an `error` in the body), so a grant left alive at
+     * the provider does not go unnoticed. The status and the error code only:
+     * the body may echo the token.
+     */
+    protected function logUnconfirmedRevoke(SocialToken $token, Response $response): void
+    {
+        $error = $response->json('error');
+
+        if ($response->successful() && empty($error)) {
+            return;
+        }
+
+        Log::warning("[social-tokens] {$token->provider} did not confirm the token revocation", [
+            'provider' => $token->provider,
+            'token_id' => $token->getKey(),
+            'status' => $response->status(),
+            'error' => is_scalar($error) ? (string) $error : null,
+        ]);
+    }
+
+    /**
      * Log a provider-side revocation that threw. revoke() must never throw, so
      * an override catches every Throwable and reports it here. Reading the
      * token belongs inside that try too: it decrypts, and fails after an

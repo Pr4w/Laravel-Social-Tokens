@@ -30,6 +30,8 @@ use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
  * @property array<int, string>|null $scopes
  * @property array<string, mixed>|null $profile
  * @property ?string $last_error
+ * @property ?string $ownable_type
+ * @property int|string|null $ownable_id
  * @property AccountStatus $status
  */
 class SocialAccount extends Model

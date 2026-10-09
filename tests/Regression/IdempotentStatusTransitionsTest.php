@@ -138,9 +138,10 @@ it('does not call the provider for a credential revoked after it was loaded', fu
 
     $fresh = $token->fresh();
 
+    // The revoke erased the tokens (3.0), and no renewal wrote any back.
     expect($fresh->status)->toBe(AccountStatus::Revoked)
-        ->and($fresh->access_token)->toBe('old-access')
-        ->and($fresh->refresh_token)->toBe('r1');
+        ->and($fresh->access_token)->toBeNull()
+        ->and($fresh->refresh_token)->toBeNull();
 
     Event::assertNotDispatched(CredentialRenewed::class);
     Event::assertNotDispatched(CredentialNeedsReconnect::class);
@@ -309,9 +310,10 @@ it('does not renew a revoked credential for a posting call that loaded it before
 
     $fresh = $token->fresh();
 
+    // The revoke erased the tokens (3.0), and no renewal wrote any back.
     expect($fresh->status)->toBe(AccountStatus::Revoked)
-        ->and($fresh->access_token)->toBe('old-access')
-        ->and($fresh->refresh_token)->toBe('r1');
+        ->and($fresh->access_token)->toBeNull()
+        ->and($fresh->refresh_token)->toBeNull();
 
     Event::assertNotDispatched(CredentialRenewed::class);
     Event::assertNotDispatched(CredentialNeedsReconnect::class);
@@ -387,9 +389,10 @@ it('does not store or hand out a token renewed while the credential was being re
 
     $fresh = $token->fresh();
 
+    // The revoke erased the tokens (3.0), and no renewal wrote any back.
     expect($fresh->status)->toBe(AccountStatus::Revoked)
-        ->and($fresh->access_token)->toBe('old-access')
-        ->and($fresh->refresh_token)->toBe('r1');
+        ->and($fresh->access_token)->toBeNull()
+        ->and($fresh->refresh_token)->toBeNull();
 
     Event::assertNotDispatched(CredentialRenewed::class);
     Event::assertNotDispatched(CredentialNeedsReconnect::class);

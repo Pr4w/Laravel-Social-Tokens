@@ -724,9 +724,11 @@ connection inside your own transaction, make the listener
 To disconnect **one** account, call `disconnect()`. Accounts that share its
 credential (the other Instagram accounts of the same Facebook user, the other
 organizations of a LinkedIn member) keep posting. The credential itself is
-revoked, at the provider too, only when its last connected account goes. A
-LinkedIn member's personal profile and organizations have separate credentials:
-disconnecting the profile leaves the organizations posting, and the reverse:
+revoked only when its last connected account goes, and so is the Meta user
+token behind a user's Facebook Pages, once no Page and no Instagram account of
+that user is connected under the same owner. A LinkedIn member's personal
+profile and organizations have separate credentials: disconnecting the profile
+leaves the organizations posting, and the reverse:
 
 ```php
 app(SocialTokens::class)->disconnect($account);
@@ -744,11 +746,19 @@ profile's credential and the organizations' one to disconnect the member
 entirely.
 
 Both record the revocation locally first (the `Revoked` events fire then), and
-only then ask the provider to invalidate the token. That call is best effort:
-when it fails (provider down, a token that no longer decrypts after an
-`APP_KEY` change), a warning is logged and the local revocation stands. A
-revocation listener that throws does not prevent it either: the provider is
-still called, then the listener's exception reaches you.
+only then ask the provider to invalidate the token. A revoked credential keeps
+no tokens: the write that revokes it erases its access and refresh tokens and
+their dates, and the provider is called with a copy taken before. Google,
+TikTok and X have a revocation endpoint, called once no other credential is
+active for the same external user (see [Owners](#owners)); Facebook,
+Instagram, Threads and LinkedIn have none the package can use, so their
+revocation is local, and erasing the token is what removes it. The provider
+call is best effort: when it fails (provider down, a token that no longer
+decrypts after an `APP_KEY` change) or the provider does not confirm it, a
+warning is logged and the local revocation stands. A revocation listener that
+throws does not prevent it either: the provider is still called, then the
+listener's exception reaches you. Read a token before revoking it if you need
+it: from `CredentialRevoked` on, it is null.
 
 `$account->markRevoked()` only flags the account locally: no provider call, and
 the credential is left as is.
@@ -871,7 +881,11 @@ credential is refreshed under another provider's key (Instagram returns
 `ReauthOnly`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
 `revoke()` must not throw: read the token and send the request inside a
-`try`, and log a failure with `$this->logRevokeFailure($token, $e)`.
+`try`, and log a failure with `$this->logRevokeFailure($token, $e)`, and an
+answer that does not confirm the revocation with
+`$this->logUnconfirmedRevoke($token, $response)`. It receives a copy of the
+credential taken before the revocation: the stored row no longer holds the
+tokens.
 
 ### Using a connector on its own
 

@@ -60,7 +60,10 @@ class GoogleConnector extends OAuth2Connector
         };
     }
 
-    /** Best effort, never throws: the credential is already revoked locally. */
+    /**
+     * Best effort, never throws: the credential is already revoked locally.
+     * An answer that does not confirm it is logged.
+     */
     public function revoke(SocialToken $credential): void
     {
         try {
@@ -70,7 +73,7 @@ class GoogleConnector extends OAuth2Connector
                 return;
             }
 
-            $this->http()->asForm()->post(self::REVOKE_URL, ['token' => $token]);
+            $this->logUnconfirmedRevoke($credential, $this->http()->asForm()->post(self::REVOKE_URL, ['token' => $token]));
         } catch (Throwable $e) {
             $this->logRevokeFailure($credential, $e);
         }
