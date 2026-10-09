@@ -127,7 +127,8 @@ class DispatchDueRenewals extends Command
      * left due, each run would read them again through inUse()'s subqueries,
      * for good. renew_at null, checked again in the update, so a credential
      * a reconnect rescheduled since the read keeps its date. A reconnect
-     * schedules it again (persistCredential()), and so does a renewal on
+     * schedules it again (persistCredential()), and so does a re-sync of
+     * LinkedIn organizations with the stored member token, or a renewal on
      * demand (validAccessTokenFor() once its token expires).
      *
      * @param  array<int, string>  $configured

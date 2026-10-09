@@ -820,14 +820,16 @@ the credential is left as is.
 
 A credential nothing will use again is removed. When its renewal comes due
 and no active account depends on it, the dispatcher unschedules it
-(`renew_at` null) rather than renew it; a reconnect schedules it again. A
-daily `social-tokens:prune` then deletes the credentials that are revoked,
-flagged `needs_reconnect`, or used by no connected account (left behind by a
+(`renew_at` null) rather than renew it; a reconnect, or a re-sync of LinkedIn
+organizations with the stored member token, schedules it again. A daily
+`social-tokens:prune` then deletes the credentials that are revoked, flagged
+`needs_reconnect`, or used by no connected account (left behind by a
 reconnect, or by accounts you deleted), once they have not changed for
 `prune_after_days` (30). Accounts are never deleted: one whose credential is
 pruned keeps its row, without a credential (it reads as `needs_reconnect`
-unless it is revoked itself), so read `$account->credential` null-safely. Set `prune_schedule` to `null` to keep
-everything, or run `php artisan social-tokens:prune --days=7` yourself.
+unless it is revoked itself), so read `$account->credential` null-safely. Set
+`prune_schedule` to `null` to keep everything, or run
+`php artisan social-tokens:prune --days=7` yourself.
 
 ### When a user removes your app (Meta, Threads)
 

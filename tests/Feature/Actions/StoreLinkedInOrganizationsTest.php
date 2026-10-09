@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Pr4w\SocialTokens\Actions\StoreAccountFromSocialite;
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -176,4 +177,26 @@ it('takes the expiry and the issue date of a new member token', function () {
 
     expect(resyncMemberCredential()->expires_at->timestamp)->toBe(now()->addDays(60)->timestamp)
         ->and(resyncMemberCredential()->last_renewed_at->timestamp)->toBe(now()->timestamp);
+});
+
+it('schedules the stored member token again when a re-sync brings back organizations the dispatcher found unused', function () {
+    Queue::fake();
+    fakeOrganizations([orgElement('111', 'Acme')]);
+    $this->store->handle(accessToken: 'member-token', memberId: 'member-1', expiresAt: now()->addDays(60));
+    SocialAccount::where('provider_user_id', '111')->sole()->markNeedsReconnect('Organization no longer administered by the connected LinkedIn member.');
+
+    // Due with no active organization: the dispatcher unschedules it.
+    $this->travelTo(resyncMemberCredential()->renew_at->copy()->addMinute());
+    $this->artisan('social-tokens:dispatch-renewals')->assertSuccessful();
+    expect(resyncMemberCredential()->renew_at)->toBeNull();
+
+    // The member administers it again, and the app re-syncs with the stored token.
+    $this->store->handle(accessToken: 'member-token', memberId: 'member-1');
+    $credential = resyncMemberCredential();
+
+    expect(SocialAccount::where('provider_user_id', '111')->sole()->isUsable())->toBeTrue()
+        ->and($credential->renew_at?->equalTo($credential->expires_at->copy()->subDays(5)))->toBeTrue();
+
+    $this->artisan('social-tokens:dispatch-renewals')->assertSuccessful();
+    Queue::assertPushed(RenewCredential::class, 1); // the expiry warning goes out again
 });

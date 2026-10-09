@@ -535,7 +535,8 @@ Two changes keep `social_tokens` to the credentials something uses.
 
 - `social-tokens:dispatch-renewals` sets `renew_at` to null on a credential
   whose renewal is due but that no active account depends on, instead of
-  reading it again on every run. A reconnect schedules it again.
+  reading it again on every run. A reconnect schedules it again, and so does
+  a re-sync of LinkedIn organizations with the stored member token.
 - The new `social-tokens:prune` command, scheduled daily, deletes the
   credentials that are revoked, flagged `needs_reconnect`, or used by no
   connected account, once they have not changed for `prune_after_days` (30).

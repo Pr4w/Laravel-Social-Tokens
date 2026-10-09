@@ -294,9 +294,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `social-tokens:dispatch-renewals` unschedules a due credential no active
   account depends on (`renew_at` null) instead of leaving it due, where every
   run read it again through two correlated subqueries, for good. A reconnect
-  schedules it again. An account made active by hand (an `UPDATE`) leaves its
-  credential unscheduled until its token expires and `validAccessTokenFor()`
-  renews it: set the credential's `renew_at` to now as well
+  schedules it again, and so does a re-sync of LinkedIn organizations with
+  the stored member token. An account made active by hand (an `UPDATE`)
+  leaves its credential unscheduled until its token expires and
+  `validAccessTokenFor()` renews it: set the credential's `renew_at` to now
+  as well
   ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 
 ### Fixed

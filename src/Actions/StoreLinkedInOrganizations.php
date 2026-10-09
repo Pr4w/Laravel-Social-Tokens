@@ -103,14 +103,18 @@ class StoreLinkedInOrganizations
         // Its issue date stays. So does its expiry when none is given: erased,
         // a ReauthOnly credential would turn static (never warned, handed out
         // after it died). And so does renew_at while the expiries are the same:
-        // a warning already sent may have parked it on the expiry.
+        // a warning already sent may have parked it on the expiry. Not a null
+        // one: the dispatcher unscheduled the credential while no organization
+        // used it, and the organizations this re-sync brings back need it
+        // renewed (or warned about) again.
         $kept = [];
 
         if ($existing !== null && hash_equals((string) $existing->access_token, $accessToken)) {
             $kept['last_renewed_at'] = $existing->last_renewed_at;
             $expiresAt ??= $existing->expires_at;
 
-            if (self::sameMoment($expiresAt, $existing->expires_at)
+            if ($existing->renew_at !== null
+                && self::sameMoment($expiresAt, $existing->expires_at)
                 && $refreshToken === $existing->refresh_token
                 && self::sameMoment($refreshExpiresAt, $existing->refresh_expires_at)) {
                 $kept['renew_at'] = $existing->renew_at;
