@@ -200,7 +200,10 @@ class SocialToken extends Model
      *
      * An account posting with another credential of the same holder keeps
      * only that one alive: the LinkedIn organizations their own credential,
-     * not the member's personal one beside it, and the other way round.
+     * not the member's personal one beside it, and the other way round. An
+     * account without a credential (pruned, or erased by a data deletion
+     * request) keeps none alive: it posts again only after a reconnect, which
+     * stores credentials of its own.
      *
      * @param  Builder<SocialToken>  $query
      * @return Builder<SocialToken>
@@ -217,6 +220,7 @@ class SocialToken extends Model
                 ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
                 ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
                 ->where("{$accounts}.status", $active)
+                ->whereNotNull("{$accounts}.social_token_id")
                 // Same owner (null-safe): another owner's Pages keep their own credential alive.
                 ->where(fn ($owner) => $owner
                     ->where(fn ($same) => $same
@@ -238,7 +242,8 @@ class SocialToken extends Model
      * account depends on, by social_token_id or as its holder under the same
      * owner (the Meta user token behind a user's Pages). The holder test is
      * looser than inUse()'s: a credential is kept while any connected account
-     * of its provider, holder and owner exists.
+     * of its provider, holder and owner holds a credential, whichever. One
+     * without a credential keeps nothing, as in inUse().
      *
      * @param  Builder<SocialToken>  $query
      * @return Builder<SocialToken>
@@ -259,6 +264,7 @@ class SocialToken extends Model
                         ->whereColumn("{$accounts}.provider", "{$tokens}.provider")
                         ->whereColumn("{$accounts}.provider_holder_id", "{$tokens}.provider_holder_id")
                         ->where("{$accounts}.status", '!=', $revoked)
+                        ->whereNotNull("{$accounts}.social_token_id")
                         // Same owner (null-safe), as in inUse().
                         ->where(fn ($owner) => $owner
                             ->where(fn ($same) => $same

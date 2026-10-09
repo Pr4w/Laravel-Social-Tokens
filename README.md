@@ -771,9 +771,10 @@ credential (the other Instagram accounts of the same Facebook user, the other
 organizations of a LinkedIn member) keep posting. The credential itself is
 revoked only when its last connected account goes, and so is the Meta user
 token behind a user's Facebook Pages, once no Page and no Instagram account of
-that user is connected under the same owner. A LinkedIn member's personal
-profile and organizations have separate credentials: disconnecting the profile
-leaves the organizations posting, and the reverse:
+that user is connected under the same owner (one whose credential was pruned
+does not count). A LinkedIn member's personal profile and organizations have
+separate credentials: disconnecting the profile leaves the organizations
+posting, and the reverse:
 
 ```php
 app(SocialTokens::class)->disconnect($account);
@@ -837,7 +838,10 @@ organizations with the stored member token, schedules it again. A daily
 reconnect, or by accounts you deleted), once they have not changed for
 `prune_after_days` (30). Accounts are never deleted: one whose credential is
 pruned keeps its row, without a credential (it reads as `needs_reconnect`
-unless it is revoked itself), so read `$account->credential` null-safely. Set
+unless it is revoked itself), so read `$account->credential` null-safely. It
+keeps no other credential in use either: a Page whose Page token was pruned
+no longer keeps the Meta user token renewed, nor do LinkedIn organizations
+the member's personal credential, until a reconnect stores new ones. Set
 `prune_schedule` to `null` to keep everything, or run
 `php artisan social-tokens:prune --days=7` yourself.
 

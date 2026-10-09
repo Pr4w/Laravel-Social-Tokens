@@ -289,7 +289,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   deleted once they have not changed for 30 days. An account whose credential
   is deleted keeps its row, without a credential (`social_token_id` null), so
   `$account->credential` can be null; it already could after a data deletion
-  request. Set `prune_schedule` to `null` to keep every credential
+  request. Such an account keeps no other credential of its holder in use
+  either (`inUse()`, `prunable()`, `disconnect()`): a Facebook Page whose
+  Page token was pruned no longer keeps the Meta user token renewed, nor do
+  LinkedIn organizations whose credential was pruned keep the member's
+  personal one; disconnecting the profile revokes it. Set `prune_schedule` to
+  `null` to keep every credential
   ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 - `social-tokens:dispatch-renewals` unschedules a due credential no active
   account depends on (`renew_at` null) instead of leaving it due, where every

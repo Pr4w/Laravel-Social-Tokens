@@ -500,6 +500,12 @@ class SocialTokens
      * (a Facebook Page, whose own Page token was minted from the Meta user
      * token; not a LinkedIn organization, which posts with the organizations'
      * credential beside the member's personal one).
+     *
+     * An account without a credential (pruned, or erased by a data deletion
+     * request) depends on none: it posts again only after a reconnect, which
+     * stores credentials of its own. Counting it kept the member's personal
+     * credential, or the Meta user token, active and renewed after the user
+     * disconnected the last account that used it.
      */
     protected function stillConnected(SocialToken $token, SocialAccount $except): bool
     {
@@ -518,10 +524,11 @@ class SocialTokens
             ->where('status', '!=', AccountStatus::Revoked->value)
             ->whereIn('provider', $this->accountProvidersOf($token->provider))
             ->where('provider_holder_id', $token->provider_holder_id)
+            ->whereNotNull('social_token_id')
             ->get()
-            ->contains(fn (SocialAccount $account) => $account->credential === null
-                || $account->credential->provider !== $token->provider
-                || $account->credential->provider_holder_id !== $token->provider_holder_id);
+            ->contains(fn (SocialAccount $account) => $account->credential !== null
+                && ($account->credential->provider !== $token->provider
+                    || $account->credential->provider_holder_id !== $token->provider_holder_id));
     }
 
     /**

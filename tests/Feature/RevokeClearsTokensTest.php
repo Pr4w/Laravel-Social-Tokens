@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
@@ -201,6 +202,23 @@ it('keeps the Meta user credential while a Page of the user is only flagged, as 
     app(SocialTokens::class)->disconnect(clearedAccount('page-2'));
 
     expect($user->fresh()->status)->toBe(AccountStatus::Active);
+});
+
+it('revokes the Meta user credential behind the last Page that still has a credential', function () {
+    $user = clearedMetaLogin(null, ['page-1', 'page-2']);
+
+    // Page 1's token was flagged and nobody reconnected: prune deletes it.
+    clearedAccount('page-1')->credential->markNeedsReconnect('Page token rejected.');
+    $this->travel(31)->days();
+    Artisan::call('social-tokens:prune');
+
+    expect(clearedAccount('page-1')->social_token_id)->toBeNull()
+        ->and(SocialToken::query()->inUse()->whereKey($user->getKey())->exists())->toBeTrue();
+
+    app(SocialTokens::class)->disconnect(clearedAccount('page-2'));
+
+    expectTokensCleared($user);
+    expect(SocialToken::query()->inUse()->whereKey($user->getKey())->exists())->toBeFalse();
 });
 
 it('leaves another owner\'s Meta user credential alone when the last Page of one owner goes', function () {

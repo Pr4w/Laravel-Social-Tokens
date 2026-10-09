@@ -573,7 +573,13 @@ Two changes keep `social_tokens` to the credentials something uses.
 2. **Read the credential null-safely.** `$account->credential` is null once
    the credential is pruned (as after a data deletion request): use
    `$account->credential?->last_error`, or `effectiveStatus()`, which already
-   reads a missing credential as `needs_reconnect`.
+   reads a missing credential as `needs_reconnect`. Such an account no
+   longer keeps its holder's other credentials in use: a Facebook Page whose
+   Page token was pruned stops keeping the Meta user token renewed, and
+   `disconnect()` of a LinkedIn profile revokes the member's personal
+   credential even while organizations whose own credential was pruned stay
+   `active`. Ask the user to reconnect such an account; nothing else to
+   change.
 3. **Reactivating an account by hand** (`UPDATE social_accounts SET status =
    'active'`, as the 1.2 notes describe): set its credential's `renew_at` to
    now as well. Otherwise the dispatcher may have unscheduled it, and it is

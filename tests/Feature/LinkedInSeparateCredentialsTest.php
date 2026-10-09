@@ -114,6 +114,46 @@ it('revokes only the profile credential when the member disconnects their profil
         ->and(app(SocialTokens::class)->validAccessTokenFor($organization))->toBe('org-token');
 });
 
+it('revokes the profile credential once the organizations\' credential has been pruned', function () {
+    $organization = separateStoreOrganizations($this->owner);
+    $personal = separateStoreProfile($this->owner);
+
+    // The organizations' token died without a refresh token and nobody reconnected.
+    $organization->credential->markNeedsReconnect('Token expired.');
+    $this->travel(31)->days();
+    Artisan::call('social-tokens:prune');
+
+    expect($organization->fresh()->social_token_id)->toBeNull()
+        ->and($organization->fresh()->status)->toBe(AccountStatus::Active);
+
+    app(SocialTokens::class)->disconnect($personal);
+
+    $credential = $personal->credential->fresh();
+
+    expect($credential->status)->toBe(AccountStatus::Revoked)
+        ->and($credential->access_token)->toBeNull()
+        ->and(SocialToken::query()->inUse()->whereKey($credential->getKey())->exists())->toBeFalse();
+});
+
+it('neither renews nor keeps the member\'s credential for organizations that lost theirs', function () {
+    $organization = separateStoreOrganizations($this->owner);
+    $personal = separateStoreProfile($this->owner);
+
+    $organization->credential->markNeedsReconnect('Token expired.');
+    $this->travel(31)->days();
+    Artisan::call('social-tokens:prune');
+
+    // The app deleted the profile row; only the credential-less organizations remain.
+    $personal->delete();
+
+    expect(SocialToken::query()->inUse()->whereKey($personal->social_token_id)->exists())->toBeFalse();
+
+    $this->travel(31)->days();
+    Artisan::call('social-tokens:prune');
+
+    expect(SocialToken::query()->whereKey($personal->social_token_id)->exists())->toBeFalse();
+});
+
 it('does not revoke at the provider while another purpose of the same holder holds a grant', function () {
     FakeConnector::reset();
     $keys = ['provider' => 'fake', 'provider_holder_id' => 'holder-1', 'access_token' => 't', 'status' => AccountStatus::Active];
