@@ -147,6 +147,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   credentials were dispatched. On a real queue, a job the queue rejects (its
   backend or the cache lock store down) still ends the run, after a single
   report, since every credential would fail the same way.
+- The `log_unknown_errors` comment in the published config said uncatalogued
+  errors are logged with the "raw payload". Since 1.2 the logged context is
+  redacted (error codes, HTTP status, the response's keys) and never holds the
+  response body, which may carry tokens; the comment now says so.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

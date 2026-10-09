@@ -80,8 +80,10 @@ return [
     |--------------------------------------------------------------------------
     |
     | When true, renewal errors a connector does not recognise are logged via
-    | Log::error with full context (provider, credential, reason, raw payload), so
-    | you can catalogue them into explicit terminal/transient cases over time.
+    | Log::error with the provider, the credential id, the reason and a redacted
+    | context (error codes, HTTP status, the response's keys), so you can
+    | catalogue them into explicit terminal/transient cases over time. The
+    | response body is never logged: it may carry tokens.
     | Known errors (classified transient or terminal) are not logged here. A
     | provider rejecting the app's own OAuth client (wrong or missing client id
     | or secret) is always logged as critical, whatever this setting.

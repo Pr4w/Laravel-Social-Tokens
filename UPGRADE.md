@@ -124,6 +124,10 @@ forms are now normalised instead of failing or being misread:
   those days, and 3.0 logs the same error and keeps the default. Write a cron
   expression instead, such as `'*/15 * * * 1-5'` for every 15 minutes on
   weekdays. The same goes for `daysOfMonth` without its days.
+- The `log_unknown_errors` comment in a published copy says the "raw payload"
+  is logged. It is not, and has not been since 1.2: the context holds error
+  codes, the HTTP status and the response's keys, never the body. Correct the
+  comment in your copy so nobody adds the body back.
 
 ## From 1.x to 2.0
 
