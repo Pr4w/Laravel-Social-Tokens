@@ -137,9 +137,10 @@ have it, and Meta accepts a valid proof whether or not the setting is on.
 2. If your database still holds Facebook Page or user tokens issued by
    **another** Meta app than the one in `services.facebook` (you switched
    apps), their proof cannot match: `social-tokens:check-static` then logs
-   `Uncatalogued credential check error` ("Invalid appsecret_proof") for them
-   instead of checking them. Set `META_APPSECRET_PROOF=false` until those
-   users have reconnected.
+   one critical `facebook rejected the app's OAuth client during
+   check-static` per run ("Invalid appsecret_proof", with the number of
+   credentials) instead of checking them. Set `META_APPSECRET_PROOF=false`
+   until those users have reconnected.
 3. To turn on Require App Secret, first sign your own Graph calls made with
    these tokens (publishing, insights):
    `app(SocialTokens::class)->connector('facebook')->appSecretProof($token)`
@@ -251,6 +252,14 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
   `SocialToken::query()->where('provider', 'linkedin')->where('status', 'needs_reconnect')->where('last_error', 'LinkedIn token inactive.')->update(['status' => 'active', 'last_error' => null]);`.
   With `check_renewable` on, the next `check-static` run checks them again
   and flags the ones LinkedIn reports revoked.
+- A Meta answer about the app's own credentials (a wrong or rotated app
+  secret, a wrong app id, a refused `appsecret_proof`) no longer counts as a
+  transient renewal error: it logs the critical `facebook rejected the app's
+  OAuth client: check its client_id/client_secret` and pauses that
+  provider's renewals for 15 minutes, like
+  `invalid_client` on the other providers. Route that log line to whoever
+  holds the Meta app secrets. After rotating the secret, restart your queue
+  workers (`php artisan queue:restart`) so they read it.
 
 ### If you wrote a connector
 

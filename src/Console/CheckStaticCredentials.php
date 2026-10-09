@@ -58,6 +58,9 @@ class CheckStaticCredentials extends Command
         /** @var array<string, int> $checkedByProvider */
         $checkedByProvider = [];
 
+        /** @var array<string, array{credentials: int, reason: ?string, context: array<string, mixed>}> $clientRejected */
+        $clientRejected = [];
+
         /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int, kind: string, provider: string}> $terminal */
         $terminal = [];
 
@@ -77,7 +80,7 @@ class CheckStaticCredentials extends Command
             })
             ->whereHas('accounts', fn ($query) => $query->where('status', AccountStatus::Active->value))
             ->lazyById()
-            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind, &$checkedByProvider) {
+            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind, &$checkedByProvider, &$clientRejected) {
                 $kind = $token->renew_at === null ? 'static' : 'renewable';
 
                 if (! $registry->has($token->provider)) {
@@ -124,6 +127,9 @@ class CheckStaticCredentials extends Command
                         'kind' => $kind,
                         'provider' => $token->provider,
                     ];
+                } elseif ($result->clientError) {
+                    $clientRejected[$token->provider] ??= ['credentials' => 0, 'reason' => $result->reason, 'context' => $result->context];
+                    $clientRejected[$token->provider]['credentials']++;
                 } elseif ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
                         'provider' => $token->provider,
@@ -136,6 +142,18 @@ class CheckStaticCredentials extends Command
 
         if ($checked === 0 && $errors > 0) {
             Log::critical('[social-tokens] check-static could not check any credential', ['errors' => $errors]);
+        }
+
+        // The provider refused the app's own credentials (e.g. an
+        // appsecret_proof made with a rotated secret): no verdict on the
+        // member, one alert per provider.
+        foreach ($clientRejected as $provider => $rejection) {
+            Log::critical("[social-tokens] {$provider} rejected the app's OAuth client during check-static: check its client_id/client_secret. Credentials are kept.", [
+                'provider' => (string) $provider,
+                'credentials' => $rejection['credentials'],
+                'reason' => $rejection['reason'],
+                'context' => $rejection['context'],
+            ]);
         }
 
         // Phase 2: too many rejections at once is the provider's incident, not

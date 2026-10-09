@@ -13,6 +13,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *
  * Classification is by code, never by type: Meta sends plenty of errors that
  * have nothing to do with the token (rate limits above all) as "OAuthException".
+ * An error about the app's own credentials (its secret, its id, an
+ * appsecret_proof) is a client failure: retried and alerted, never terminal.
  * Every result carries code, error_subcode, type, message and fbtrace_id in its
  * context, and the reason names the subcode ("190/460 OAuthException: ...").
  */
@@ -28,6 +30,17 @@ final class MetaErrorMapper
     private const TRANSIENT_CODES = [1, 2, 4, 17, 32, 341, 368, 613];
 
     /**
+     * What Meta says when it rejects the app's own credentials: "Error
+     * validating client secret." (code 1), "Error validating application.
+     * Invalid application ID." or "Missing client_id parameter." (101),
+     * "Invalid appsecret_proof provided in the API argument" (100).
+     */
+    private const APP_CREDENTIAL_MESSAGE = '/client[\s_]?(secret|id)|app(lication)?[\s_]?(id|secret)|validating application|appsecret_proof/i';
+
+    /** OAuth-2-style string errors about the app's client. */
+    private const APP_CREDENTIAL_STRINGS = ['invalid_client', 'unauthorized_client'];
+
+    /**
      * @param  mixed  $error  The "error" value of the response; anything but an object is unexpected.
      */
     public static function map(mixed $error): RenewalResult
@@ -40,6 +53,14 @@ final class MetaErrorMapper
 
         if (in_array($code, self::INVALID_TOKEN_CODES, true) || in_array($subcode, self::SESSION_SUBCODES, true)) {
             return RenewalResult::terminalFailure($reason, $context);
+        }
+
+        // The app's own id, secret or proof was refused: every credential of
+        // the provider is stuck until the operator fixes the config, and a
+        // reconnect would go through the same app. Code 1 alone stays Meta's
+        // generic "unknown error, retry".
+        if ($code === 101 || (in_array($code, [1, 100], true) && preg_match(self::APP_CREDENTIAL_MESSAGE, (string) $context['message']))) {
+            return RenewalResult::clientFailure($reason, $context);
         }
 
         // The token lost a permission renewal needs: only re-consent fixes it.
@@ -112,6 +133,10 @@ final class MetaErrorMapper
     private static function unexpectedShape(mixed $error): RenewalResult
     {
         $raw = is_scalar($error) ? (string) $error : get_debug_type($error);
+
+        if (in_array($raw, self::APP_CREDENTIAL_STRINGS, true)) {
+            return RenewalResult::clientFailure("Meta rejected the app's client: {$raw}", ['error' => $raw]);
+        }
 
         return RenewalResult::unknownFailure('Unexpected Meta error shape: '.Str::limit($raw, 200), ['error' => $raw]);
     }

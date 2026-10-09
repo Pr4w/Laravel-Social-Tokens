@@ -267,6 +267,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   bare `active: false`, or a token the answer says belongs to another client,
   is now an uncatalogued check error, logged with a hint and never flagged.
   With refresh tokens on, an expired access token is left to the renewal.
+- Meta errors about the app's own credentials are app-client failures, as
+  `invalid_client` has been on LinkedIn, TikTok and Google since 1.2: "Error
+  validating client secret." (code 1), a wrong or missing app id (code 101),
+  and an `appsecret_proof` Meta refuses (code 100), plus an OAuth-style
+  `invalid_client` string. A wrong or rotated Meta app secret (a typo, or
+  workers that kept the old one) was retried as an ordinary transient error,
+  with no critical log and no 15-minute pause, until each Meta user token
+  reached its expiry and was flagged; `check-static` logged every Page as an
+  uncatalogued error. Now the critical log fires (`facebook rejected the app's
+  OAuth client`), renewals pause, and `check-static` and
+  `reportRejected(terminal: false)` alert instead of logging per credential.
+  A plain code 1 ("An unknown error has occurred.") is still a transient
+  error.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

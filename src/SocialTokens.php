@@ -91,16 +91,8 @@ class SocialTokens
 
                 $result = $connector->refreshCredential($token);
 
-                // The app's OAuth client was rejected: every credential of this
-                // provider is stuck until the operator fixes the config. Always
-                // alert (not gated by log_unknown_errors), once per 15 minutes.
-                if ($result->clientError && Cache::add("social-tokens:client-alert:{$token->provider}", true, now()->addMinutes(15))) {
-                    Log::critical("[social-tokens] {$token->provider} rejected the app's OAuth client: check its client_id/client_secret. Credentials are kept and retried.", [
-                        'provider' => $token->provider,
-                        'token_id' => $token->getKey(),
-                        'reason' => $result->reason,
-                        'context' => $result->context,
-                    ]);
+                if ($result->clientError) {
+                    $this->alertClientRejected($token, $result);
                 }
 
                 if ($result->unknown && Settings::logUnknownErrors()) {
@@ -375,6 +367,10 @@ class SocialTokens
             $checkedToken = $token->access_token;
             $result = $connector->checkCredential($token);
 
+            if ($result->clientError) {
+                $this->alertClientRejected($token, $result);
+            }
+
             if ($result->outcome !== RenewalOutcome::Terminal) {
                 if ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
@@ -394,6 +390,25 @@ class SocialTokens
         }
 
         return $token->markNeedsReconnectOnce($reason, $rejectedToken);
+    }
+
+    /**
+     * The app's OAuth client was rejected: every credential of this provider
+     * is stuck until the operator fixes the config. Always alert (not gated
+     * by log_unknown_errors), once per provider per 15 minutes.
+     */
+    protected function alertClientRejected(SocialToken $token, RenewalResult $result): void
+    {
+        if (! Cache::add("social-tokens:client-alert:{$token->provider}", true, now()->addMinutes(15))) {
+            return;
+        }
+
+        Log::critical("[social-tokens] {$token->provider} rejected the app's OAuth client: check its client_id/client_secret. Credentials are kept and retried.", [
+            'provider' => $token->provider,
+            'token_id' => $token->getKey(),
+            'reason' => $result->reason,
+            'context' => $result->context,
+        ]);
     }
 
     protected function lockKey(SocialToken $token): string

@@ -354,6 +354,12 @@ Renewal failures are classified:
   expiry window is still open
 - terminal (invalid_grant, revoked, refresh token expired): the credential moves
   to `needs_reconnect` and an event fires, no further attempts
+- the app's own client refused (a wrong, rotated or missing client id or
+  secret, on any provider, Meta's app secret and `appsecret_proof` included):
+  a critical log (`{provider} rejected the app's OAuth client`) at most every
+  15 minutes per provider, renewals of that provider pause for 15 minutes, and
+  the credentials stay active, since a reconnect would go through the same
+  broken app. `check-static` logs it once per run and flags nothing
 
 A transient failure throws `Exceptions\TransientRenewalException` so the queue
 retries the job. It implements `ShouldntReport`: your exception handler does not
