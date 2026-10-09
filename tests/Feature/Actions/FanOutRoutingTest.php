@@ -49,8 +49,9 @@ class FanOutRoutingAction implements StoresConnections
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection {
-        static::$calls[] = ['provider' => $provider, 'user' => $user->getId(), 'longLived' => $longLived];
+        static::$calls[] = ['provider' => $provider, 'user' => $user->getId(), 'longLived' => $longLived, 'restoreDisconnected' => $restoreDisconnected];
 
         return collect();
     }
@@ -109,10 +110,10 @@ it('still extends the Meta user token by default', function (string $provider) {
 })->with(['facebook', 'instagram']);
 
 it('routes a connector of your own to the action it names, with every option', function () {
-    $result = app(StoreConnection::class)->handle('fanout', socialiteUser(['id' => 'ext-9']), longLived: false);
+    $result = app(StoreConnection::class)->handle('fanout', socialiteUser(['id' => 'ext-9']), longLived: false, restoreDisconnected: true);
 
     expect($result)->toBeEmpty()
-        ->and(FanOutRoutingAction::$calls)->toBe([['provider' => 'fanout', 'user' => 'ext-9', 'longLived' => false]])
+        ->and(FanOutRoutingAction::$calls)->toBe([['provider' => 'fanout', 'user' => 'ext-9', 'longLived' => false, 'restoreDisconnected' => true]])
         ->and(SocialAccount::query()->count())->toBe(0);
 });
 

@@ -78,6 +78,13 @@ files (existing files are left alone).
   [Revoked credentials keep no tokens](#revoked-credentials-keep-no-tokens)).
   It changes no schema and cannot be rolled back.
 
+- `2025_01_01_000011_add_disconnected_at_to_social_accounts` adds a nullable
+  timestamp, `disconnected_at`, to `social_accounts` (see
+  [Disconnected accounts stay disconnected](#disconnected-accounts-stay-disconnected)).
+  It can be run again after a failure. **Run it before, or together with, the
+  code deploy:** until it has run, `disconnect()` throws a `QueryException`
+  (unknown column `disconnected_at`) and changes nothing.
+
 The two 000006 migrations are named to run before
 `2025_01_01_000007_scope_identity_to_owner`, which needs them when you come
 from 1.x; 000008 runs after it. On a 2.x install, which already ran 000007,
@@ -449,6 +456,40 @@ logged: `[social-tokens] {provider} did not confirm the token revocation`.
    connection) implements `FansOutConnections::connectionAction()`, returning
    the class of an action implementing `Contracts\StoresConnections`. A
    subclass of the Meta connectors inherits theirs; override it to change it.
+
+### Disconnected accounts stay disconnected
+
+`disconnect()` now records when the user removed an account
+(`social_accounts.disconnected_at`), and a fan-out reconnect of the same login
+(`StoreConnection` for Facebook and Instagram, `StoreFacebookPages`,
+`StoreInstagramAccounts`, `StoreLinkedInOrganizations`) leaves that account
+out: it stays revoked, is not returned, and fires no `AccountConnected`. 2.x
+made it active again at the next reconnect. A 1:1 account (TikTok, Google, X,
+Threads, Instagram Login, a LinkedIn profile) is still restored when the user
+reconnects it, and so is an account revoked any other way (a deauthorization
+callback, `revoke()`, `markRevoked()`).
+
+1. **Run `2025_01_01_000011_add_disconnected_at_to_social_accounts` before, or
+   together with, the code deploy.** Until it has run, `disconnect()` throws a
+   `QueryException` (unknown column `disconnected_at`) and changes nothing.
+   Connections keep working.
+2. **Accounts disconnected under 2.x have no date**, so a reconnect still
+   brings them back. If your app only ever revoked accounts through
+   `disconnect()` (not `revoke()`, nor the deauthorize callbacks), mark them
+   once:
+
+   ```php
+   SocialAccount::query()->where('status', 'revoked')->whereNull('disconnected_at')
+       ->update(['disconnected_at' => now()]);
+   ```
+
+   Otherwise pick the rows your own records say the user removed.
+3. **Decide which flows restore.** Pass `restoreDisconnected: true` where the
+   user means to bring removed targets back (a "Connect Facebook" button
+   after removing every Page, which otherwise returns an empty collection),
+   and leave it off where they refresh a login or add a Page. To bring back
+   one account only, forget its disconnection before the reconnect:
+   `$account->clearDisconnected()->save()`.
 
 ### Review your `reportRejected()` calls
 

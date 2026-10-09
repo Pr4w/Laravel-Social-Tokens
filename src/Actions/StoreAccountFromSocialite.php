@@ -32,7 +32,9 @@ class StoreAccountFromSocialite implements StoresConnections
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
-     * StoreConnection's entry point: the one account, in a collection.
+     * StoreConnection's entry point: the one account, in a collection. A
+     * disconnected account is always restored: the user reconnects that very
+     * account.
      *
      * @return Collection<int, SocialAccount>
      */
@@ -43,6 +45,7 @@ class StoreAccountFromSocialite implements StoresConnections
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection {
         return collect([$this->handle($provider, $user, $owner, $connectedBy, $longLived, $refreshExpiresAt)]);
     }
@@ -166,6 +169,9 @@ class StoreAccountFromSocialite implements StoresConnections
                 'last_error' => null,
             ] + $withScopes,
         );
+
+        // Reconnecting this very account undoes its disconnection.
+        $account->clearDisconnected();
 
         if ($owner) {
             $account->ownable()->associate($owner);

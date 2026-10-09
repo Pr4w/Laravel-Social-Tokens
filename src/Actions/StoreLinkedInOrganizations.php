@@ -5,6 +5,7 @@ namespace Pr4w\SocialTokens\Actions;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Pr4w\SocialTokens\Actions\Concerns\KeepsDisconnectedAccountsOut;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
@@ -32,6 +33,8 @@ use RuntimeException;
  */
 class StoreLinkedInOrganizations
 {
+    use KeepsDisconnectedAccountsOut;
+
     /** The purpose of the member credential the organizations post with. */
     public const PURPOSE = 'organizations';
 
@@ -48,6 +51,8 @@ class StoreLinkedInOrganizations
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
      * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's comma-separated `scope`, split
      *                                           or as one element); null means unknown and keeps the stored ones.
+     * @param  bool  $restoreDisconnected  Bring back the organizations the user disconnected
+     *                                     (SocialTokens::disconnect()); left out, revoked, otherwise.
      * @return Collection<int, SocialAccount> One row per administered organization.
      *
      * @throws RuntimeException when the organizations cannot be listed.
@@ -61,6 +66,7 @@ class StoreLinkedInOrganizations
         ?CarbonInterface $expiresAt = null,
         ?CarbonInterface $refreshExpiresAt = null,
         ?array $scopes = null,
+        bool $restoreDisconnected = false,
     ): Collection {
         $connector = $this->registry->for('linkedin');
 
@@ -115,20 +121,30 @@ class StoreLinkedInOrganizations
         $scopes = SocialToken::normaliseScopes($scopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
 
-        // The renewable member credential every organization posts with.
-        $credential = SocialToken::persistCredential(
-            ['provider' => 'linkedin', 'provider_holder_id' => $memberId, 'purpose' => self::PURPOSE] + SocialAccount::ownerKey($owner),
-            $kept + [
-                'access_token' => $accessToken,
-                'refresh_token' => $refreshToken,
-                'expires_at' => $expiresAt,
-                'refresh_expires_at' => $refreshExpiresAt,
-            ] + $withScopes,
-            $connector, // schedules renew_at, unless kept
-        );
+        // Organizations the user disconnected stay out of this re-sync.
+        $skipped = $restoreDisconnected
+            ? []
+            : $this->disconnectedAmong('linkedin', array_map(fn (array $org) => (string) $org['id'], $organizations), $owner);
+        $listed = array_values(array_filter($organizations, fn (array $org) => ! in_array((string) $org['id'], $skipped, true)));
+
+        // The renewable member credential every organization posts with: not
+        // stored again when every organization listed was disconnected and
+        // the stored one is revoked, so no credential is left orphaned.
+        $credential = $skipped !== [] && $listed === [] && ($existing === null || $existing->status === AccountStatus::Revoked)
+            ? null
+            : SocialToken::persistCredential(
+                ['provider' => 'linkedin', 'provider_holder_id' => $memberId, 'purpose' => self::PURPOSE] + SocialAccount::ownerKey($owner),
+                $kept + [
+                    'access_token' => $accessToken,
+                    'refresh_token' => $refreshToken,
+                    'expires_at' => $expiresAt,
+                    'refresh_expires_at' => $refreshExpiresAt,
+                ] + $withScopes,
+                $connector, // schedules renew_at, unless kept
+            );
 
         // One row per organization, keyed on the organization id.
-        $accounts = collect($organizations)->map(function (array $org) use (
+        $accounts = $credential === null ? collect() : collect($listed)->map(function (array $org) use (
             $memberId, $credential, $owner, $connectedBy, $withScopes
         ) {
             $attributes = [
@@ -150,6 +166,7 @@ class StoreLinkedInOrganizations
             $account = SocialAccount::query()
                 ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $org['id']] + SocialAccount::ownerKey($owner))
                 ->fill($attributes)
+                ->clearDisconnected()
                 ->mergeProfile(['organization_urn' => $org['urn'], 'role' => $org['role'] ?? null]);
 
             if ($owner) {

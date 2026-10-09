@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Actions\Concerns\KeepsDisconnectedAccountsOut;
 use Pr4w\SocialTokens\Actions\Concerns\PersistsMetaUserCredential;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
@@ -28,6 +29,7 @@ use RuntimeException;
  */
 class StoreInstagramAccounts implements StoresConnections
 {
+    use KeepsDisconnectedAccountsOut;
     use PersistsMetaUserCredential;
 
     private const PAGE_FIELDS = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
@@ -38,6 +40,10 @@ class StoreInstagramAccounts implements StoresConnections
      * $extend false: $userToken is already long-lived, a token the app holds
      * (a re-sync), so no fb_exchange_token call, and the stored data access
      * deadline is kept when debug_token does not give the new one.
+     *
+     * An Instagram account or a Page the user disconnected
+     * (SocialTokens::disconnect()) is left out, revoked, unless
+     * $restoreDisconnected.
      *
      * @return Collection<int, SocialAccount> Instagram accounts (plus linked pages).
      *
@@ -51,14 +57,16 @@ class StoreInstagramAccounts implements StoresConnections
         ?string $userId = null,
         bool $extend = true,
         bool $withLinkedPages = true,
+        bool $restoreDisconnected = false,
     ): Collection {
-        return $this->store($userToken, $owner, $connectedBy, $userId, $extend, $withLinkedPages, newLogin: $extend);
+        return $this->store($userToken, $owner, $connectedBy, $userId, $extend, $withLinkedPages, newLogin: $extend, restoreDisconnected: $restoreDisconnected);
     }
 
     /**
      * StoreConnection's entry point, for a login that just happened: with
      * $longLived false the token is stored as given (no fb_exchange_token
-     * call), and it is a new login all the same. The linked Pages are stored
+     * call), and it is a new login all the same. Disconnected targets are
+     * left out unless $restoreDisconnected. The linked Pages are stored
      * too.
      *
      * @return Collection<int, SocialAccount>
@@ -70,8 +78,9 @@ class StoreInstagramAccounts implements StoresConnections
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection {
-        return $this->store($user->token, $owner, $connectedBy, $user->getId(), extend: $longLived, withLinkedPages: true, newLogin: true);
+        return $this->store($user->token, $owner, $connectedBy, $user->getId(), extend: $longLived, withLinkedPages: true, newLogin: true, restoreDisconnected: $restoreDisconnected);
     }
 
     /**
@@ -85,6 +94,7 @@ class StoreInstagramAccounts implements StoresConnections
         bool $extend,
         bool $withLinkedPages,
         bool $newLogin,
+        bool $restoreDisconnected,
     ): Collection {
         $facebook = $this->registry->for('facebook');
 
@@ -146,14 +156,25 @@ class StoreInstagramAccounts implements StoresConnections
 
         $managedIgIds = collect($pages)->pluck('instagram_business_account.id')->filter()->values()->all();
 
+        // Instagram accounts and Pages the user disconnected stay out of this
+        // reconnect.
+        $igIds = array_map(strval(...), $managedIgIds);
+        $skippedIg = $restoreDisconnected ? [] : $this->disconnectedAmong('instagram', $igIds, $owner);
+        $skippedPages = $restoreDisconnected || ! $withLinkedPages ? [] : $this->disconnectedAmong('facebook', $accountIds, $owner);
+        $userKeys = ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner);
+
         // 4. The shared renewable Meta user credential (backs every IG account).
-        // Only created when the user actually has a linked Instagram account, so a
+        // Only created when the user actually has a linked Instagram account this
+        // connection keeps (or the stored one still backs other accounts), so a
         // page-only connection leaves no orphaned credential behind.
-        $credential = $managedIgIds === []
+        $keepsCredential = $igIds !== []
+            && ($skippedIg === [] || array_diff($igIds, $skippedIg) !== [] || $this->credentialStillLive($userKeys));
+
+        $credential = ! $keepsCredential
             ? null
             : $this->persistUserCredential(
                 $facebook,
-                ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
+                $userKeys,
                 $userToken,
                 $expiresAt,
                 $debug,
@@ -169,24 +190,26 @@ class StoreInstagramAccounts implements StoresConnections
                 continue; // Page without a linked Instagram account.
             }
 
-            $accounts->push($this->persistAccount(
-                ['provider' => 'instagram', 'provider_user_id' => $ig['id']] + SocialAccount::ownerKey($owner),
-                [
-                    'social_token_id' => $credential->getKey(), // posts with the shared user token
-                    'provider_holder_id' => $userId,
-                    'name' => $ig['username'] ?? ($page['name'] ?? null),
-                    'nickname' => $ig['username'] ?? null,
-                    'avatar' => $ig['profile_picture_url'] ?? null,
-                    'status' => AccountStatus::Active,
-                    'last_error' => null,
-                    'profile' => ['fb_page_id' => $page['id'] ?? null],
-                ] + $scopesFor((string) $ig['id']),
-                $owner,
-                $connectedBy,
-            ));
+            if (! in_array((string) $ig['id'], $skippedIg, true)) {
+                $accounts->push($this->persistAccount(
+                    ['provider' => 'instagram', 'provider_user_id' => $ig['id']] + SocialAccount::ownerKey($owner),
+                    [
+                        'social_token_id' => $credential->getKey(), // posts with the shared user token
+                        'provider_holder_id' => $userId,
+                        'name' => $ig['username'] ?? ($page['name'] ?? null),
+                        'nickname' => $ig['username'] ?? null,
+                        'avatar' => $ig['profile_picture_url'] ?? null,
+                        'status' => AccountStatus::Active,
+                        'last_error' => null,
+                        'profile' => ['fb_page_id' => $page['id'] ?? null],
+                    ] + $scopesFor((string) $ig['id']),
+                    $owner,
+                    $connectedBy,
+                ));
+            }
 
             // Companion Facebook Page: a static page-token credential + account.
-            if ($withLinkedPages && ! empty($page['id']) && ! empty($page['access_token'])) {
+            if ($withLinkedPages && ! empty($page['id']) && ! empty($page['access_token']) && ! in_array((string) $page['id'], $skippedPages, true)) {
                 $pageToken = SocialToken::persistCredential(
                     ['provider' => 'facebook', 'provider_holder_id' => $page['id']] + SocialAccount::ownerKey($owner),
                     [
@@ -237,7 +260,7 @@ class StoreInstagramAccounts implements StoresConnections
         $profile = $attributes['profile'] ?? null;
         unset($attributes['profile']);
 
-        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes);
+        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes)->clearDisconnected();
 
         if (is_array($profile)) {
             $account->mergeProfile($profile);

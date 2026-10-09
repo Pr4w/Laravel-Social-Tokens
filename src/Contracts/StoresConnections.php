@@ -27,5 +27,6 @@ interface StoresConnections
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection;
 }

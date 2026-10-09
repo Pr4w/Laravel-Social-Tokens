@@ -265,6 +265,25 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   inherits its action. Its constructor takes the `ConnectorRegistry`, the
   container and `StoreAccountFromSocialite`, no longer the two Meta actions:
   resolve it from the container.
+- **A reconnect no longer brings back an account the user disconnected.**
+  `disconnect()` records when (`social_accounts.disconnected_at`, migration
+  `2025_01_01_000011_add_disconnected_at_to_social_accounts`), and the
+  fan-out actions (`StoreFacebookPages`, `StoreInstagramAccounts`,
+  `StoreLinkedInOrganizations`, and `StoreConnection` for Facebook and
+  Instagram) leave such an account out: it stays revoked, with its revoked
+  credential, is not returned, and fires no `AccountConnected`. Pass
+  `restoreDisconnected: true` to bring it back. Reconnecting a 1:1 account
+  (TikTok, Google, X, Threads, Instagram Login, a LinkedIn profile) still
+  restores it, and so does any reconnect of an account revoked otherwise (a
+  deauthorization, `revoke()`, `markRevoked()`). A connection that lists only
+  disconnected targets returns an empty collection, and stores no shared
+  credential unless the stored one still backs another account (see Fixed,
+  and [UPGRADE](UPGRADE.md#disconnected-accounts-stay-disconnected)).
+- Migration `2025_01_01_000011_add_disconnected_at_to_social_accounts` must
+  run before, or together with, the code deploy: `disconnect()` writes its
+  column, and throws a `QueryException` (unknown column `disconnected_at`),
+  changing nothing, until it has run. Connections are not affected
+  ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -565,6 +584,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `StoreAccountFromSocialite` accepted the `facebook` and `instagram`
   providers and stored rows nothing could post with, which the next fan-out
   connection flagged as no longer managed (see Changed (breaking)).
+- A reconnect undid `disconnect()`. The fan-out actions store every target the
+  provider lists and wrote `active` over each row and its credential, so the
+  Page, Instagram account or LinkedIn organization a user removed came back,
+  usable, returned and announced by `AccountConnected`, at the next reconnect
+  of the same login: to refresh the token, to add a Page, or the ones Meta's
+  90-day data access and LinkedIn's 60-day re-authorisation force (see
+  Changed (breaking)).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -721,6 +747,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   $refreshExpiresAt)`, implemented by `StoreAccountFromSocialite`,
   `StoreFacebookPages` and `StoreInstagramAccounts`. Every option reaches the
   action.
+- `social_accounts.disconnected_at` (migration
+  `2025_01_01_000011_add_disconnected_at_to_social_accounts`, nullable, no
+  index), set by `disconnect()` through `SocialAccount::markDisconnected()`
+  (also on an account already revoked, without a second `AccountRevoked`).
+  `SocialAccount::wasDisconnected()` tells, and
+  `SocialAccount::clearDisconnected()` forgets it (unsaved), so that the next
+  reconnect restores that account.
+- A `restoreDisconnected` option on `StoreConnection::handle()`,
+  `StoreFacebookPages::handle()`, `StoreInstagramAccounts::handle()` and
+  `StoreLinkedInOrganizations::handle()` (see Changed (breaking)).
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

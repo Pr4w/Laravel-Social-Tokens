@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Actions\Concerns\KeepsDisconnectedAccountsOut;
 use Pr4w\SocialTokens\Actions\Concerns\PersistsMetaUserCredential;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
@@ -33,6 +34,7 @@ use RuntimeException;
  */
 class StoreFacebookPages implements StoresConnections
 {
+    use KeepsDisconnectedAccountsOut;
     use PersistsMetaUserCredential;
 
     public function __construct(protected ConnectorRegistry $registry) {}
@@ -41,6 +43,9 @@ class StoreFacebookPages implements StoresConnections
      * $extend false: $userToken is already long-lived, a token the app holds
      * (a re-sync), so no fb_exchange_token call, and the stored data access
      * deadline is kept when debug_token does not give the new one.
+     *
+     * A Page the user disconnected (SocialTokens::disconnect()) is left out,
+     * revoked, unless $restoreDisconnected.
      *
      * @return Collection<int, SocialAccount> One row per managed page (may be empty).
      *
@@ -53,14 +58,16 @@ class StoreFacebookPages implements StoresConnections
         ?Model $connectedBy = null,
         ?string $userId = null,
         bool $extend = true,
+        bool $restoreDisconnected = false,
     ): Collection {
-        return $this->store($userToken, $owner, $connectedBy, $userId, $extend, newLogin: $extend);
+        return $this->store($userToken, $owner, $connectedBy, $userId, $extend, newLogin: $extend, restoreDisconnected: $restoreDisconnected);
     }
 
     /**
      * StoreConnection's entry point, for a login that just happened: with
      * $longLived false the token is stored as given (no fb_exchange_token
-     * call), and it is a new login all the same.
+     * call), and it is a new login all the same. Disconnected targets are
+     * left out unless $restoreDisconnected.
      *
      * @return Collection<int, SocialAccount>
      */
@@ -71,8 +78,9 @@ class StoreFacebookPages implements StoresConnections
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection {
-        return $this->store($user->token, $owner, $connectedBy, $user->getId(), extend: $longLived, newLogin: true);
+        return $this->store($user->token, $owner, $connectedBy, $user->getId(), extend: $longLived, newLogin: true, restoreDisconnected: $restoreDisconnected);
     }
 
     /**
@@ -85,6 +93,7 @@ class StoreFacebookPages implements StoresConnections
         ?string $userId,
         bool $extend,
         bool $newLogin,
+        bool $restoreDisconnected,
     ): Collection {
         $connector = $this->registry->for('facebook');
 
@@ -131,12 +140,17 @@ class StoreFacebookPages implements StoresConnections
         $debug = $this->debugUserToken($connector, $userToken);
         $scopesByAccount = $debug === null ? null : $connector::grantedScopesFrom($debug, $pageIds);
 
+        // Pages the user disconnected stay out of this reconnect.
+        $skipped = $restoreDisconnected ? [] : $this->disconnectedAmong('facebook', $pageIds, $owner);
+        $userKeys = ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner);
+
         // 4a. The Meta user credential (shared with Instagram). Only when the
-        // user manages a Page, so no credential is left orphaned.
-        if ($pages !== []) {
+        // user manages a Page this connection keeps, or the stored one still
+        // backs other accounts, so no credential is left orphaned.
+        if ($pages !== [] && ($skipped === [] || array_diff($pageIds, $skipped) !== [] || $this->credentialStillLive($userKeys))) {
             $this->persistUserCredential(
                 $connector,
-                ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
+                $userKeys,
                 $userToken,
                 $expiresAt,
                 $debug,
@@ -152,7 +166,7 @@ class StoreFacebookPages implements StoresConnections
         $accounts = collect();
 
         foreach ($pages as $page) {
-            if (empty($page['id']) || empty($page['access_token'])) {
+            if (empty($page['id']) || empty($page['access_token']) || in_array((string) $page['id'], $skipped, true)) {
                 continue;
             }
 
@@ -211,7 +225,7 @@ class StoreFacebookPages implements StoresConnections
         $profile = $attributes['profile'] ?? null;
         unset($attributes['profile']);
 
-        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes);
+        $account = SocialAccount::query()->firstOrNew($keys)->fill($attributes)->clearDisconnected();
 
         if (is_array($profile)) {
             $account->mergeProfile($profile);

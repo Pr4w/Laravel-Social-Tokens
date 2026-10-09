@@ -687,8 +687,12 @@ active ──(renew succeeds)─────────────────
        ├─(cannot renew unattended)──> active + CredentialExpiringSoon ──(expires)──> needs_reconnect
        └─(terminal failure)──────────> needs_reconnect ──(user reconnects)──> active
 
-revoked: terminal, set by disconnect() (one account) or revoke() (a whole login); never retried.
+revoked: set by disconnect() (one account) or revoke() (a whole login); never retried.
 ```
+
+A reconnect makes a revoked account active again, except one the user
+disconnected when the connection fans out (Facebook Pages, Instagram accounts,
+LinkedIn organizations; see below).
 
 Status lives at two levels. A credential's status covers every account it backs
 (its shared token died or was revoked); an account's own `status` column only
@@ -738,6 +742,24 @@ leaves the organizations posting, and the reverse:
 ```php
 app(SocialTokens::class)->disconnect($account);
 ```
+
+A disconnected account stays disconnected. A reconnect of the same Facebook,
+Instagram or LinkedIn organizations login lists every Page, account or
+organization the user still manages, the removed one included: it is left
+out, revoked, not returned, and fires no `AccountConnected`. Pass
+`restoreDisconnected: true` (to `StoreConnection`, or the fan-out action) when
+the user means to bring removed targets back; a connection that lists only
+disconnected ones returns an empty collection. To bring back one account
+only, forget its disconnection first:
+
+```php
+$account->clearDisconnected()->save(); // the next reconnect restores it
+$account->wasDisconnected();           // true while it stays out
+```
+
+Reconnecting a single account (TikTok, Google, X, Threads, Instagram Login, a
+LinkedIn profile) always restores it, and an account revoked any other way
+(`revoke()`, a deauthorization) comes back with the next reconnect.
 
 To disconnect a whole login (the credential and every account it backs), revoke
 the credential:

@@ -422,6 +422,11 @@ class SocialTokens
      * post with their own Page tokens, is revoked once neither a Page nor an
      * Instagram account of that user and owner is connected.
      *
+     * The account is marked disconnected (disconnected_at), already revoked
+     * or not: a fan-out reconnect of its login (StoreFacebookPages,
+     * StoreInstagramAccounts, StoreLinkedInOrganizations) leaves it out
+     * unless asked to restore it. Reconnecting a 1:1 account restores it.
+     *
      * An AccountRevoked listener that throws does not stop the credentials'
      * revocation: the account row is revoked by then, so a retried disconnect()
      * would find nothing to do on it. The exception reaches the caller after.
@@ -429,7 +434,7 @@ class SocialTokens
     public function disconnect(SocialAccount $account): void
     {
         try {
-            $account->markRevoked();
+            $account->markDisconnected();
         } finally {
             if ($account->status === AccountStatus::Revoked) {
                 $this->revokeCredentialsOnceUnused($account);

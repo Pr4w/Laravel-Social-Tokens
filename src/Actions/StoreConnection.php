@@ -43,6 +43,9 @@ class StoreConnection
      * @param  CarbonInterface|null  $refreshExpiresAt  The refresh token's expiry, when you know it
      *                                                  (see StoreAccountFromSocialite). Not used by the
      *                                                  Facebook and Instagram fan-outs.
+     * @param  bool  $restoreDisconnected  A fan-out connection leaves out the Pages and Instagram
+     *                                     accounts the user disconnected (SocialTokens::disconnect());
+     *                                     true brings them back. A single account is always restored.
      * @return Collection<int, SocialAccount>
      *
      * @throws LogicException when a fan-out connector names an action that cannot store connections.
@@ -54,6 +57,7 @@ class StoreConnection
         ?Model $connectedBy = null,
         bool $longLived = true,
         ?CarbonInterface $refreshExpiresAt = null,
+        bool $restoreDisconnected = false,
     ): Collection {
         // Throws InvalidArgumentException for a provider without a connector.
         $connector = $this->registry->for($provider);
@@ -65,6 +69,7 @@ class StoreConnection
             connectedBy: $connectedBy,
             longLived: $longLived,
             refreshExpiresAt: $refreshExpiresAt,
+            restoreDisconnected: $restoreDisconnected,
         );
     }
 

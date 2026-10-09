@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Models;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -32,6 +33,7 @@ use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
  * @property ?string $last_error
  * @property ?string $ownable_type
  * @property int|string|null $ownable_id
+ * @property ?CarbonInterface $disconnected_at
  * @property AccountStatus $status
  */
 class SocialAccount extends Model
@@ -48,6 +50,7 @@ class SocialAccount extends Model
         return [
             'scopes' => 'array',
             'profile' => 'array',
+            'disconnected_at' => 'datetime',
             'status' => AccountStatus::class,
         ];
     }
@@ -245,6 +248,54 @@ class SocialAccount extends Model
     {
         if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect])) {
             event(new AccountRevoked($this));
+        }
+
+        return $this;
+    }
+
+    /**
+     * markRevoked(), recording that the user removed the account
+     * (disconnected_at), so that a fan-out reconnect of its login, which
+     * lists every target the provider grants, leaves it out. An account
+     * already revoked (by a deauthorization, say) is marked too, without a
+     * second AccountRevoked; the first date is kept.
+     */
+    public function markDisconnected(): self
+    {
+        $now = now();
+
+        if ($this->transitionStatus(AccountStatus::Revoked, [AccountStatus::Active, AccountStatus::NeedsReconnect], ['disconnected_at' => $now])) {
+            event(new AccountRevoked($this));
+
+            return $this;
+        }
+
+        if ($this->status === AccountStatus::Revoked && $this->newQuery()->whereKey($this->getKey())->whereNull('disconnected_at')->update(['disconnected_at' => $now]) > 0) {
+            $this->forceFill(['disconnected_at' => $now])->syncOriginalAttribute('disconnected_at');
+        }
+
+        return $this;
+    }
+
+    /**
+     * The user disconnected the account (markDisconnected()) and nothing
+     * restored it since: a fan-out reconnect leaves it out unless asked to
+     * restore it. Read from the loaded row, so a row loaded before migration
+     * 000011 has run reads as not disconnected.
+     */
+    public function wasDisconnected(): bool
+    {
+        return $this->status === AccountStatus::Revoked && ($this->attributes['disconnected_at'] ?? null) !== null;
+    }
+
+    /**
+     * Forget a disconnection, unsaved: for a connection that restores the
+     * account. Leaves a row without the column untouched.
+     */
+    public function clearDisconnected(): static
+    {
+        if (($this->attributes['disconnected_at'] ?? null) !== null) {
+            $this->disconnected_at = null;
         }
 
         return $this;
