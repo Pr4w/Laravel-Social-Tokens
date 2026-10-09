@@ -2,12 +2,8 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
-use Carbon\CarbonInterval;
-use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
-use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
-use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -28,47 +24,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * deauthorise the app for the whole Facebook user, killing the static page
  * credentials of every other Page they connected.
  *
- * Calls made with a user or Page token carry appsecret_proof (see
- * SignsGraphRequests), so the Meta app can require it.
+ * The exchange call, the Graph version and appsecret_proof signing are
+ * shared with Instagram (MetaGraphConnector).
  */
-class FacebookConnector extends AbstractConnector implements ChecksCredential
+class FacebookConnector extends MetaGraphConnector implements ChecksCredential
 {
-    use SignsGraphRequests;
-
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
-
-    public function renewalStrategy(): RenewalStrategy
-    {
-        return RenewalStrategy::ExtendLongLived;
-    }
-
-    public function leadTime(): CarbonInterval
-    {
-        return CarbonInterval::days(7);
-    }
-
-    /**
-     * Refresh the Meta user credential: extend the stored user token in place.
-     * Single-phase — Facebook page tokens are static and are not re-derived here.
-     */
-    public function refreshCredential(SocialToken $token): RenewalResult
-    {
-        if (empty($token->access_token)) {
-            return RenewalResult::terminalFailure('Missing user token.');
-        }
-
-        $extended = $this->extendUserToken($token->access_token);
-
-        if ($extended instanceof RenewalResult) {
-            return $extended;
-        }
-
-        return RenewalResult::success(
-            accessToken: $extended['token'],
-            expiresAt: $extended['expiresAt'],
-        );
-    }
 
     /**
      * Page tokens never expire, but die when the user changes their password,
@@ -98,48 +60,22 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     }
 
     /**
-     * Exchange a user token for a fresh long-lived one via the fb_exchange_token
-     * grant. Safe to call on a token that is already long lived, but whether
-     * Meta then pushes the expiry further is not documented: renewals log the
-     * expires_in they get, and a non-extending one is handled by applyRenewal().
-     * Shared by renewal and the connect-time actions.
+     * exchangeUserToken() in the array shape 2.x returned. A failure is the
+     * RenewalResult itself.
      *
      * @return array{token: string, expiresAt: ?Carbon}|RenewalResult
      */
     public function extendUserToken(#[\SensitiveParameter] string $userToken): array|RenewalResult
     {
-        $version = $this->config['graph_version'] ?? 'v23.0';
+        $result = $this->exchangeUserToken($userToken);
 
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get("https://graph.facebook.com/{$version}/oauth/access_token", [
-            'grant_type' => 'fb_exchange_token',
-            'client_id' => $this->clientId(),
-            'client_secret' => $this->clientSecret(),
-            'fb_exchange_token' => $userToken,
-        ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        $token = $body['access_token'] ?? null;
-
-        if ($token === null) {
-            return RenewalResult::unknownFailure('Malformed token extension response.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
+        if (! $result->succeeded()) {
+            return $result;
         }
 
         return [
-            'token' => $token,
-            'expiresAt' => isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
+            'token' => (string) $result->accessToken,
+            'expiresAt' => $result->expiresAt === null ? null : Carbon::instance($result->expiresAt),
         ];
     }
 
@@ -161,9 +97,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
             return $appToken;
         }
 
-        $version = $this->config['graph_version'] ?? 'v23.0';
-
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get("https://graph.facebook.com/{$version}/debug_token", [
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($this->graphUrl('debug_token'), [
             'input_token' => $userToken,
             'access_token' => $appToken,
         ]));
@@ -217,23 +151,6 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     }
 
     /**
-     * App access token for calling debug_token. Meta accepts the literal string
-     * "{app-id}|{app-secret}" as the app token, so there is no endpoint to call
-     * and nothing to cache.
-     */
-    protected function appAccessToken(): string|RenewalResult
-    {
-        $clientId = $this->clientId();
-        $clientSecret = $this->clientSecret();
-
-        if ($clientId === null || $clientSecret === null) {
-            return RenewalResult::terminalFailure('Missing Facebook client credentials for the app access token.');
-        }
-
-        return "{$clientId}|{$clientSecret}";
-    }
-
-    /**
      * The Facebook user id behind a token (the credential holder). Used to key a
      * user's page rows so a reconnect can reconcile the ones they no longer manage.
      */
@@ -265,18 +182,6 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     }
 
     /**
-     * GET /me?fields=id with the given token, transport outcomes normalised.
-     */
-    protected function fetchMe(#[\SensitiveParameter] string $token): Response|RenewalResult
-    {
-        $version = $this->config['graph_version'] ?? 'v23.0';
-
-        return $this->attempt(fn () => $this->http()->withToken($token)
-            ->acceptJson()
-            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id'] + $this->appSecretProofQuery($token)));
-    }
-
-    /**
      * List the Pages a user token can manage, each carrying its own page access
      * token. Shared by the page-seeding action (all pages) and the Instagram
      * action (which requests the linked IG account field via $fields).
@@ -291,8 +196,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      */
     public function fetchPages(#[\SensitiveParameter] string $userToken, string $fields = 'id,name,access_token,picture{url}'): array|RenewalResult
     {
-        $version = $this->config['graph_version'] ?? 'v23.0';
-        $url = "https://graph.facebook.com/{$version}/me/accounts";
+        $url = $this->graphUrl('me/accounts');
         $query = ['fields' => $fields, 'limit' => 100] + $this->appSecretProofQuery($userToken);
         $pages = [];
 

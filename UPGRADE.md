@@ -586,6 +586,13 @@ revoked, with no warning beforehand.
   being active there. It runs even when one of those listeners threw; the
   listener's exception then reaches the caller of `revoke()` or
   `disconnect()` after your connector returns.
+- If you extend `FacebookConnector` or `InstagramConnector`: both now extend
+  `Connectors\MetaGraphConnector`, which holds `refreshCredential()`,
+  `renewalStrategy()`, `leadTime()`, `appAccessToken()` and `fetchMe()`, and
+  the `fb_exchange_token` call as `exchangeUserToken()` (a `RenewalResult`).
+  `FacebookConnector::extendUserToken()` keeps its array shape. Build Graph
+  URLs with `$this->graphUrl('me/accounts')`, which applies the block's
+  `graph_version` or `MetaGraphConnector::DEFAULT_GRAPH_VERSION`.
 
 ## From 1.x to 2.0
 

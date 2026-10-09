@@ -493,6 +493,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   before changing anything; it can be run again after a failure, splits in
   chunks of 100 credentials, each in its own transaction, and its `down()`
   refuses while a member has two credentials for one owner.
+- `Connectors\MetaGraphConnector`, the base of `FacebookConnector` and
+  `InstagramConnector` (the Facebook Login path). It holds the one
+  `fb_exchange_token` call, `exchangeUserToken($userToken)` (a
+  `RenewalResult`), the Graph version, `graphVersion()` with the
+  `MetaGraphConnector::DEFAULT_GRAPH_VERSION` default (`v23.0`), and the
+  `appsecret_proof` signing. The two connectors carried a copy each of the
+  call and of the version default, so a fix made to one missed the other.
+  `FacebookConnector::extendUserToken()` keeps its array shape.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -515,6 +523,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `ProviderConnector::revoke()` is documented as best effort that must not
   throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
   override.
+- `InstagramConnector` reads an `fb_exchange_token` reply exactly as
+  `FacebookConnector` does: a reply without a token is "Malformed token
+  extension response." (it was "Malformed response, no access_token."), and
+  an `expires_in` that is not a number means an unknown expiry. A
+  `graph_version` set to an empty string takes the default version instead of
+  building a URL without one.
 
 ## [2.0.0]
 

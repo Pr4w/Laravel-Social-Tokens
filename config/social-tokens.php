@@ -4,6 +4,7 @@ use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
+use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
 use Pr4w\SocialTokens\Connectors\XConnector;
@@ -153,10 +154,13 @@ return [
             'driver' => TikTokConnector::class,
         ],
 
+        // Instagram through its linked Facebook Page (Facebook Login). Its
+        // connections and renewals go through the facebook connector, whose
+        // graph_version is the one they use: META_GRAPH_VERSION sets both.
         'instagram' => [
             'driver' => InstagramConnector::class,
             'credentials' => 'facebook',   // shares the Meta app with Facebook
-            'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
+            'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
             // See facebook below: appSecretProof() for your own Instagram calls.
             'appsecret_proof' => env('META_APPSECRET_PROOF', true),
         ],
@@ -164,7 +168,7 @@ return [
         'facebook' => [
             'driver' => FacebookConnector::class,
             'credentials' => 'facebook',
-            'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
+            'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
             // Sign Graph calls made with a user or Page token with
             // appsecret_proof, so the Meta app can turn on "Require App
             // Secret". Needs the secret of the app that issued the tokens.

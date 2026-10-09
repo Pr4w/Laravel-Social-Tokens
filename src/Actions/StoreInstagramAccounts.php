@@ -52,14 +52,14 @@ class StoreInstagramAccounts
 
         // 1. Long lived user token — the shared renewable credential.
         if ($extend) {
-            $extended = $facebook->extendUserToken($userToken);
+            $extended = $facebook->exchangeUserToken($userToken);
 
-            if ($extended instanceof RenewalResult) {
+            if (! $extended->succeeded()) {
                 throw new RuntimeException('Could not extend the Facebook user token: '.$extended->reason);
             }
 
-            $userToken = $extended['token'];
-            $expiresAt = $extended['expiresAt'];
+            $userToken = (string) $extended->accessToken;
+            $expiresAt = $extended->expiresAt;
         }
 
         // 2. Resolve the user id (the credential holder).

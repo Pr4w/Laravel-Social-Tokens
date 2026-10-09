@@ -54,14 +54,14 @@ class StoreFacebookPages
         $expiresAt = null;
 
         if ($extend) {
-            $extended = $connector->extendUserToken($userToken);
+            $extended = $connector->exchangeUserToken($userToken);
 
-            if ($extended instanceof RenewalResult) {
+            if (! $extended->succeeded()) {
                 throw new RuntimeException('Could not extend the Facebook user token: '.$extended->reason);
             }
 
-            $userToken = $extended['token'];
-            $expiresAt = $extended['expiresAt'];
+            $userToken = (string) $extended->accessToken;
+            $expiresAt = $extended->expiresAt;
         }
 
         // 2. Resolve the user id (recorded on each account for reconciliation).

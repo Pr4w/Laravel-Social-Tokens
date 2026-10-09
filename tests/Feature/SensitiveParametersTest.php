@@ -13,6 +13,7 @@ use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
+use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
 use Pr4w\SocialTokens\Connectors\OAuth2Connector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
@@ -244,7 +245,7 @@ it('marks every parameter carrying a token or a secret as sensitive', function (
     [FacebookConnector::class, 'withAppSecretProof', 'accessToken'],
     [InstagramConnector::class, 'appSecretProof', 'accessToken'],
     [InstagramConnector::class, 'exchangeForLongLived', 'accessToken'],
-    [InstagramConnector::class, 'extend', 'accessToken'],
+    [MetaGraphConnector::class, 'exchangeUserToken', 'userToken'],
     [ThreadsConnector::class, 'exchangeForLongLived', 'accessToken'],
     [ThreadsConnector::class, 'refreshWithToken', 'accessToken'],
     [LinkedInConnector::class, 'fetchOrganizations', 'accessToken'],

@@ -725,8 +725,10 @@ For an OAuth 2.0 provider, extend `OAuth2Connector`: declare `tokenUrl()`, the
 `refreshParameters()`, `tokenRequest()` (client authentication), `classifyError()`
 (which error codes mean a dead grant, an app-side problem or a temporary one),
 `refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
-complete references. For anything else, extend `AbstractConnector` and implement
-`refreshCredential()`. Register the class under its key in the config: at most 50
+complete references. A Graph API product on Facebook Login tokens can extend
+`MetaGraphConnector` (the base of `FacebookConnector` and `InstagramConnector`),
+which extends the user token with `fb_exchange_token`. For anything else, extend
+`AbstractConnector` and implement `refreshCredential()`. Register the class under its key in the config: at most 50
 characters, since it is stored in the `provider` columns. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
 configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx

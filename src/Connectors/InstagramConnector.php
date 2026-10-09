@@ -2,110 +2,40 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
-use Carbon\CarbonInterval;
-use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
-use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
- * Instagram publishing via the Instagram Graph API (Facebook Login path).
+ * Instagram publishing via the Instagram Graph API, Facebook Login path: the
+ * Instagram professional account is reached through the Facebook Page it is
+ * linked to, and posts with the Facebook user's long-lived token.
  *
  * Token facts (per Meta developer docs; renewal behaviour is not guaranteed,
  * see SocialToken::applyRenewal() for a renewal that does not extend):
  *  - publishing uses a Facebook long lived User access token (~60 days)
  *  - there is NO refresh token; the long lived token is extended in place via
- *    the fb_exchange_token grant on graph.facebook.com
- *  - a token can only be extended when it is at least 24h old and not expired
+ *    the fb_exchange_token grant on graph.facebook.com (MetaGraphConnector)
  *
- * Note: if you use the newer "Instagram API with Instagram Login" path instead,
- * the extension call is graph.instagram.com/refresh_access_token with
- * grant_type=ig_refresh_token and no client credentials. Same strategy, swap
- * the request below.
- *
- * appSecretProof() signs the app's own Graph calls made with the user token
- * (see SignsGraphRequests).
+ * The "Instagram API with Instagram Login" (graph.instagram.com,
+ * ig_exchange_token and ig_refresh_token) is not this class: swapping the
+ * requests here would not do, since StoreConnection sends every connection
+ * of this connector to the Facebook Page fan-out and its credentials are
+ * renewed under "facebook".
  */
-class InstagramConnector extends AbstractConnector
+class InstagramConnector extends MetaGraphConnector
 {
-    use SignsGraphRequests;
-
     /**
      * Instagram shares the Meta user credential, refreshed via the Facebook
      * connector (fb_exchange_token). So its credentials live under "facebook".
+     * refreshCredential() is therefore not used by the package; it is kept for
+     * custom setups that store provider 'instagram'.
      */
     public function credentialProvider(): string
     {
         return 'facebook';
     }
 
-    public function renewalStrategy(): RenewalStrategy
-    {
-        return RenewalStrategy::ExtendLongLived;
-    }
-
-    /**
-     * Not used by the package: Instagram credentials are stored and renewed under
-     * the facebook connector (see credentialProvider()). Kept for custom setups
-     * that store provider 'instagram'.
-     */
-    public function refreshCredential(SocialToken $token): RenewalResult
-    {
-        if (empty($token->access_token)) {
-            return RenewalResult::terminalFailure('Missing user token.');
-        }
-
-        return $this->extend($token->access_token);
-    }
-
-    public function leadTime(): CarbonInterval
-    {
-        // 60 day token, extend roughly a week early. Well past the 24h minimum age.
-        return CarbonInterval::days(7);
-    }
-
     public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
-        return $this->extend($accessToken);
-    }
-
-    private function extend(#[\SensitiveParameter] string $accessToken): RenewalResult
-    {
-        $version = $this->config['graph_version'] ?? 'v23.0';
-        $url = "https://graph.facebook.com/{$version}/oauth/access_token";
-
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($url, [
-            'grant_type' => 'fb_exchange_token',
-            'client_id' => $this->clientId(),
-            'client_secret' => $this->clientSecret(),
-            'fb_exchange_token' => $accessToken,
-        ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        $token = $body['access_token'] ?? null;
-
-        if ($token === null) {
-            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $token,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            // No refresh token on this path: the access token is the long lived credential.
-            refreshToken: null,
-        );
+        return $this->exchangeUserToken($accessToken);
     }
 }
