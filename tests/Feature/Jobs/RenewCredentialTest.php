@@ -1,10 +1,14 @@
 <?php
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Debug\ShouldntReport;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -159,6 +163,47 @@ it('throws on a transient failure so the queue retries', function () {
 
     runJob($token);
 })->throws(RuntimeException::class, 'Transient renewal failure');
+
+it('throws transient failures as an exception the app does not report', function () {
+    $token = jobCredential();
+    FakeConnector::$nextResult = RenewalResult::transientFailure('Provider returned HTTP 503');
+
+    $thrown = null;
+
+    try {
+        runJob($token);
+    } catch (Throwable $e) {
+        $thrown = $e;
+    }
+
+    // Still a RuntimeException with the same message, for existing catch
+    // blocks and filters; ShouldntReport keeps an outage out of error trackers.
+    expect($thrown)->toBeInstanceOf(TransientRenewalException::class)
+        ->toBeInstanceOf(RuntimeException::class)
+        ->toBeInstanceOf(ShouldntReport::class)
+        ->and($thrown->getMessage())->toBe('Transient renewal failure: Provider returned HTTP 503')
+        ->and($thrown->reason)->toBe('Provider returned HTTP 503')
+        ->and($thrown->context())->toBe(['provider' => 'fake', 'token_id' => $token->getKey()])
+        ->and(app(ExceptionHandler::class)->shouldReport($thrown))->toBeFalse();
+});
+
+it('logs one warning when a credential is backed off after its retries', function () {
+    Log::spy();
+    $token = jobCredential(['expires_at' => now()->addHour()]);
+
+    (new RenewCredential($token))->failed(TransientRenewalException::for($token, 'Provider returned HTTP 503'));
+
+    $fresh = $token->fresh();
+
+    expect($fresh->status)->toBe(AccountStatus::Active)
+        ->and($fresh->renew_at->isFuture())->toBeTrue();
+
+    Log::shouldHaveReceived('warning')->once()->withArgs(fn ($message, $context) => str_contains($message, 'Renewal failed after retries')
+        && $context['token_id'] === $token->getKey()
+        && $context['provider'] === 'fake'
+        && str_contains($context['reason'], 'HTTP 503')
+        && $context['retry_at'] === $fresh->renew_at->toIso8601String());
+});
 
 it('escalates to needs_reconnect after the final attempt when an expired token cannot be extended', function () {
     FakeConnector::$strategy = RenewalStrategy::ExtendLongLived; // an expired long-lived token is dead

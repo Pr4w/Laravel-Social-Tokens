@@ -115,6 +115,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   frequency method without arguments; anything else logs an error and keeps
   the default schedule. A non-frequency method such as `runInBackground` no
   longer schedules the command every minute.
+- On a `sync` queue connection, one failed renewal ended the dispatcher run:
+  the job runs inline and its exception escaped `social-tokens:dispatch-renewals`,
+  so no credential after it was renewed in that run, and a credential failing
+  for good blocked the others on most ticks. The dispatcher now walks every
+  due credential: a transient failure is counted in its output, and any other
+  exception is reported and makes the run exit with a failure code once all
+  credentials were dispatched.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -145,6 +152,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   numeric strings work for `queue.tries`, the HTTP timeouts and the breaker,
   and the HTTP timeouts keep fractional seconds (`'connect_timeout' => 2.5`
   used to be cut to 2).
+- A transient renewal failure throws `Exceptions\TransientRenewalException`, a
+  `RuntimeException` with the same "Transient renewal failure: ..." message,
+  instead of a plain `RuntimeException`. It implements `ShouldntReport`, so a
+  provider outage no longer sends one error-tracker event per credential per
+  attempt and per cycle. Instead, `RenewCredential::failed()` logs one warning
+  ("Renewal failed after retries; retrying later") when it backs a credential
+  off. Uncatalogued errors are still logged as they occur
+  (`log_unknown_errors`).
 
 ## [2.0.0]
 

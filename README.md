@@ -322,6 +322,19 @@ Renewal failures are classified:
 - terminal (invalid_grant, revoked, refresh token expired): the credential moves
   to `needs_reconnect` and an event fires, no further attempts
 
+A transient failure throws `Exceptions\TransientRenewalException` so the queue
+retries the job. It implements `ShouldntReport`: your exception handler does not
+report it, since an outage would send one event per credential per attempt.
+When a credential runs out of retries, the job logs one warning
+(`Renewal failed after retries; retrying later`), records the reason in
+`last_error` and tries again later. Uncatalogued provider errors are logged as
+errors while `log_unknown_errors` is on.
+
+Run a real queue worker. On the `sync` connection each job runs once, inline in
+the dispatcher, without `tries` or `backoff`. The dispatcher still walks every
+due credential past a failed one; only an unexpected error makes it exit with a
+failure code.
+
 A credential that cannot be renewed unattended (LinkedIn without refresh tokens,
 or a refresh token past its own lifetime) is not cut off early: when its window
 opens, `CredentialExpiringSoon` fires once with the expiry date, the credential

@@ -14,12 +14,12 @@ use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
-use RuntimeException;
 use Throwable;
 
 /**
@@ -179,15 +179,14 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        // Transient: throw so the queue retries with backoff. Once retries are
-        // exhausted, failed() backs renew_at off, or flags the credential if it
-        // truly can no longer be renewed.
+        // Transient: throw so the queue retries with backoff (the exception is
+        // never reported: an outage would flood error trackers). Once retries
+        // are exhausted, failed() backs renew_at off, or flags the credential
+        // if it truly can no longer be renewed.
         match ($result->outcome) {
             RenewalOutcome::Success => null,
             RenewalOutcome::Terminal => $token->markNeedsReconnect($result->reason),
-            RenewalOutcome::Transient => throw new RuntimeException(
-                'Transient renewal failure: '.($result->reason ?? 'unknown')
-            ),
+            RenewalOutcome::Transient => throw TransientRenewalException::for($token, $result->reason),
         };
     }
 
@@ -267,6 +266,15 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         $token->renew_at = $this->retryAt($token);
         $token->last_error = $reason;
         $token->save();
+
+        // One line per credential per cycle: the job's own exception is not
+        // reported when it is transient, so this is the outage's trail.
+        Log::warning('[social-tokens] Renewal failed after retries; retrying later', [
+            'provider' => $token->provider,
+            'token_id' => $token->getKey(),
+            'reason' => $reason,
+            'retry_at' => $token->renew_at->toIso8601String(),
+        ]);
     }
 
     protected function clientRejectedKey(SocialToken $token): string

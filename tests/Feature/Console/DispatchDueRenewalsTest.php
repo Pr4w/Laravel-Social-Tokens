@@ -1,7 +1,9 @@
 <?php
 
 use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\Exceptions;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -79,4 +81,52 @@ it('dispatches nothing when no credentials are due', function () {
         ->assertSuccessful();
 
     Bus::assertNotDispatched(RenewCredential::class);
+});
+
+it('keeps renewing on a sync queue when one renewal fails for now', function () {
+    config()->set('queue.default', 'sync');
+    Exceptions::fake();
+    FakeConnector::reset();
+
+    $due = ['access_token' => 'current', 'refresh_token' => 'refresh', 'expires_at' => now()->addHours(2), 'renew_at' => now()->subMinute()];
+    $failing = makeCredential($due); // walked first (lowest id)
+    $healthy = makeCredential($due);
+
+    FakeConnector::$resultUsing = fn (SocialToken $token) => $token->is($failing)
+        ? RenewalResult::transientFailure('Provider returned HTTP 503')
+        : RenewalResult::success(accessToken: 'fresh', expiresAt: now()->addHours(2));
+
+    $this->artisan('social-tokens:dispatch-renewals')
+        ->expectsOutputToContain('Dispatched 2 renewal job(s).')
+        ->expectsOutputToContain('1 renewal(s) failed for now')
+        ->assertSuccessful();
+
+    expect(FakeConnector::$renewCalls)->toBe(2)
+        ->and($healthy->fresh()->access_token)->toBe('fresh')
+        ->and($failing->fresh()->last_error)->toContain('HTTP 503')
+        ->and($failing->fresh()->renew_at->isFuture())->toBeTrue(); // backed off by failed()
+
+    Exceptions::assertNotReported(TransientRenewalException::class);
+});
+
+it('reports an unexpected failure, keeps going, and fails the run', function () {
+    config()->set('queue.default', 'sync');
+    Exceptions::fake();
+    FakeConnector::reset();
+
+    $due = ['access_token' => 'current', 'refresh_token' => 'refresh', 'expires_at' => now()->addHours(2), 'renew_at' => now()->subMinute()];
+    $broken = makeCredential($due);
+    $healthy = makeCredential($due);
+
+    FakeConnector::$resultUsing = fn (SocialToken $token) => $token->is($broken)
+        ? throw new LogicException('connector bug')
+        : RenewalResult::success(accessToken: 'fresh', expiresAt: now()->addHours(2));
+
+    $this->artisan('social-tokens:dispatch-renewals')
+        ->expectsOutputToContain('1 renewal job(s) failed')
+        ->assertFailed();
+
+    expect($healthy->fresh()->access_token)->toBe('fresh');
+
+    Exceptions::assertReported(fn (LogicException $e) => $e->getMessage() === 'connector bug');
 });

@@ -41,6 +41,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Actions\StoreAccountFromSocialite;
 use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
@@ -401,9 +402,11 @@ it('logs nothing that carries a secret while a queued renewal fails to connect',
     try {
         $job->handle(app(SocialTokens::class), app(ConnectorRegistry::class));
     } catch (RuntimeException $e) {
-        // What Illuminate\Queue\Worker::runJob() does with a failed attempt:
-        // report it through the exception handler, i.e. to laravel.log.
-        report($e);
+        // Illuminate\Queue\Worker::runJob() reports a failed attempt through
+        // the exception handler. A transient failure is not reported since 3.0
+        // (ShouldntReport), but its message still reaches failed_jobs and any
+        // app that logs job exceptions: log it as the handler would.
+        Log::error($e->getMessage(), ['exception' => $e]);
         $job->failed($e);
     }
 

@@ -3,9 +3,11 @@
 namespace Pr4w\SocialTokens\Console;
 
 use Illuminate\Console\Command;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Throwable;
 
 class DispatchDueRenewals extends Command
 {
@@ -16,6 +18,8 @@ class DispatchDueRenewals extends Command
     public function handle(ConnectorRegistry $registry): int
     {
         $count = 0;
+        $deferred = 0;
+        $failed = 0;
         $configured = $registry->configured();
 
         SocialToken::query()->dueForRenewal()->whereNotIn('provider', $configured)
@@ -30,12 +34,33 @@ class DispatchDueRenewals extends Command
             ->whereIn('provider', $configured)
             ->inUse()
             ->lazyById()
-            ->each(function (SocialToken $token) use (&$count) {
-                RenewCredential::dispatch($token);
-                $count++;
+            ->each(function (SocialToken $token) use (&$count, &$deferred, &$failed) {
+                // On a sync queue the job runs right here and its failure is
+                // rethrown: one credential must never stop the walk.
+                try {
+                    RenewCredential::dispatch($token);
+                    $count++;
+                } catch (TransientRenewalException) {
+                    // Expected: failed() has already backed it off and logged it.
+                    $count++;
+                    $deferred++;
+                } catch (Throwable $e) {
+                    $failed++;
+                    report($e);
+                }
             });
 
         $this->info("Dispatched {$count} renewal job(s).");
+
+        if ($deferred > 0) {
+            $this->warn("{$deferred} renewal(s) failed for now and will be retried later.");
+        }
+
+        if ($failed > 0) {
+            $this->error("{$failed} renewal job(s) failed or could not be dispatched; see the log.");
+
+            return self::FAILURE;
+        }
 
         return self::SUCCESS;
     }

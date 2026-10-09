@@ -45,6 +45,40 @@ Both are named to run before `2025_01_01_000007_scope_identity_to_owner`, which
 needs them when you come from 1.x. On a 2.x install, which already ran 000007,
 they simply run on their own.
 
+### Transient renewal failures are no longer reported
+
+`RenewCredential` throws `Pr4w\SocialTokens\Exceptions\TransientRenewalException`
+for a transient failure (network, provider 5xx or 429, rate limit, lock
+contention, an uncatalogued error). It extends `RuntimeException` with the same
+`Transient renewal failure: ...` message, so `catch (RuntimeException)` blocks
+and message-based filters keep working. It implements
+`Illuminate\Contracts\Debug\ShouldntReport`, so your exception handler (and
+Sentry, Bugsnag, Flare...) no longer receives one event per credential per
+attempt during an outage. `failed_jobs` rows are unchanged.
+
+What you get instead: one `warning` log per credential when it runs out of
+retries (`[social-tokens] Renewal failed after retries; retrying later`, with
+`provider`, `token_id`, `reason`, `retry_at`), plus `last_error` on the
+credential. If you relied on error-tracker events to notice provider outages,
+alert on that log line, or forward the exception yourself, for example:
+
+```php
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
+
+Event::listen(JobFailed::class, function (JobFailed $event) {
+    if ($event->exception instanceof TransientRenewalException) {
+        Log::error($event->exception->getMessage(), $event->exception->context());
+    }
+});
+```
+
+On the `sync` queue connection, `social-tokens:dispatch-renewals` no longer
+stops at the first failed renewal. It exits with a failure code only for an
+unexpected error, after walking every due credential.
+
 ### Check your published config
 
 No change is needed for a config that kept the shipped forms. Values in other
