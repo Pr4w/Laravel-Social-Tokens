@@ -825,8 +825,8 @@ daily `social-tokens:prune` then deletes the credentials that are revoked,
 flagged `needs_reconnect`, or used by no connected account (left behind by a
 reconnect, or by accounts you deleted), once they have not changed for
 `prune_after_days` (30). Accounts are never deleted: one whose credential is
-pruned keeps its row and reads as `needs_reconnect`, so read
-`$account->credential` null-safely. Set `prune_schedule` to `null` to keep
+pruned keeps its row, without a credential (it reads as `needs_reconnect`
+unless it is revoked itself), so read `$account->credential` null-safely. Set `prune_schedule` to `null` to keep
 everything, or run `php artisan social-tokens:prune --days=7` yourself.
 
 ### When a user removes your app (Meta, Threads)

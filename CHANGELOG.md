@@ -762,9 +762,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   refuses it.
 - `Contracts\StoresConnections`, the action `StoreConnection` calls:
   `storeConnection($provider, $user, $owner, $connectedBy, $longLived,
-  $refreshExpiresAt)`, implemented by `StoreAccountFromSocialite`,
-  `StoreFacebookPages` and `StoreInstagramAccounts`. Every option reaches the
-  action.
+  $refreshExpiresAt, $restoreDisconnected)`, implemented by
+  `StoreAccountFromSocialite`, `StoreFacebookPages` and
+  `StoreInstagramAccounts`. Every option reaches the action.
 - `social_accounts.disconnected_at` (migration
   `2025_01_01_000011_add_disconnected_at_to_social_accounts`, nullable, no
   index), set by `disconnect()` through `SocialAccount::markDisconnected()`
@@ -773,8 +773,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `SocialAccount::clearDisconnected()` forgets it (unsaved), so that the next
   reconnect restores that account.
 - A `restoreDisconnected` option on `StoreConnection::handle()`,
-  `StoreFacebookPages::handle()`, `StoreInstagramAccounts::handle()` and
-  `StoreLinkedInOrganizations::handle()` (see Changed (breaking)).
+  `StoreFacebookPages::handle()`, `StoreInstagramAccounts::handle()`,
+  `StoreLinkedInOrganizations::handle()` and
+  `StoresConnections::storeConnection()` (see Changed (breaking)).
 - `SocialTokens::forgetOwner(Model $owner)` tears down what an owner holds,
   for when the owner itself is deleted: its credentials are revoked (tokens
   erased, the provider called unless another owner still holds a grant for
