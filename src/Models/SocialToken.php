@@ -6,8 +6,10 @@ use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
@@ -310,25 +312,109 @@ class SocialToken extends Model
     }
 
     /**
+     * refresh() through a locking read (SELECT ... FOR UPDATE), which returns
+     * the row as last committed and waits for a write still in flight. A plain
+     * read inside the caller's transaction can return an older snapshot
+     * (MySQL's default REPEATABLE READ), or miss a renewal another process has
+     * written but not committed yet: renewing from such a copy would spend a
+     * single-use refresh token the provider already rotated. Inside a
+     * transaction the row stays locked until it ends; outside one, only for
+     * the read. SQLite has no row locks and reads as usual.
+     *
+     * @internal
+     *
+     * @throws ModelNotFoundException<SocialToken> when the row is gone
+     * @throws QueryException when the database gave up waiting for the row lock
+     *                        (a lock wait timeout, a deadlock), among others
+     */
+    public function refreshForUpdate(): static
+    {
+        $current = $this->newQueryWithoutScopes()
+            ->useWritePdo()
+            ->whereKey($this->getKey())
+            ->lockForUpdate()
+            ->firstOrFail();
+
+        $this->setRawAttributes($current->getAttributes(), true);
+        $this->load(array_keys($this->getRelations()));
+
+        return $this;
+    }
+
+    /**
      * Apply a successful credential refresh and recompute the renewal window.
+     * Nothing is written when the credential was revoked meanwhile, or no
+     * longer holds the tokens this instance was loaded with (see
+     * tryApplyRenewal()).
      */
     public function applyRenewal(RenewalResult $result, ProviderConnector $connector): self
     {
-        // Re-read the status from the database: a revoke may have landed while
-        // the provider call was in flight, and must never be undone here.
+        $this->tryApplyRenewal($result, $connector);
+
+        return $this;
+    }
+
+    /**
+     * applyRenewal() that says whether the renewal was stored. It is stored
+     * only on the token it renewed: the access and refresh tokens this
+     * instance was loaded with, compared by ciphertext under a row lock. A
+     * reconnect that replaced them while the provider call was in flight wins
+     * (the renewal of the old grant would bring back its tokens and lose the
+     * new grant's), and so does a revoke. Either way nothing is written, no
+     * CredentialRenewed fires, and the instance is reloaded with the row as
+     * it now is. Load the credential right before renewing it.
+     *
+     * @throws ModelNotFoundException<SocialToken> when the row was deleted meanwhile
+     */
+    public function tryApplyRenewal(RenewalResult $result, ProviderConnector $connector): bool
+    {
+        // "Not extended" is judged on the access token alone: renew_at may
+        // legitimately land earlier because of the refresh token.
+        $notExtended = $result->expiresAt !== null && ! $result->expiresAt->copy()->sub($connector->leadTime())->isFuture();
+
         if ($this->exists) {
-            $current = $this->newQuery()->whereKey($this->getKey())->value('status'); // cast: an AccountStatus
+            $held = [$this->getRawOriginal('access_token'), $this->getRawOriginal('refresh_token')];
 
-            if ($current !== null) {
-                $this->status = $current;
+            // The lock keeps a reconnect or a revoke from landing between the
+            // comparison and the write: it waits, and is written last.
+            $stored = $this->getConnection()->transaction(function () use ($held, $result, $connector, $notExtended) {
+                $current = $this->newQueryWithoutScopes()
+                    ->useWritePdo()
+                    ->whereKey($this->getKey())
+                    ->lockForUpdate()
+                    ->firstOrFail();
+
+                if ($current->status === AccountStatus::Revoked
+                    || [$current->getRawOriginal('access_token'), $current->getRawOriginal('refresh_token')] !== $held) {
+                    $this->setRawAttributes($current->getAttributes(), true);
+
+                    return false;
+                }
+
+                // A flag that landed meanwhile is lifted: the provider has just
+                // accepted the refresh token.
+                $this->status = $current->status;
                 $this->syncOriginalAttribute('status');
-            }
+
+                return $this->storeRenewal($result, $connector, $notExtended);
+            });
+        } else {
+            $stored = $this->status !== AccountStatus::Revoked && $this->storeRenewal($result, $connector, $notExtended);
         }
 
-        if ($this->status === AccountStatus::Revoked) {
-            return $this; // no token written, no CredentialRenewed
+        if ($stored) {
+            $this->announceRenewal($result, $connector, $notExtended);
         }
 
+        return $stored;
+    }
+
+    /**
+     * Write the renewed token and its new window, on a credential known to
+     * still hold the token that was renewed.
+     */
+    protected function storeRenewal(RenewalResult $result, ProviderConnector $connector, bool $notExtended): bool
+    {
         $this->access_token = $result->accessToken;
 
         // Only overwrite the refresh token when the provider issued a new one.
@@ -341,23 +427,16 @@ class SocialToken extends Model
             $this->refresh_expires_at = $result->refreshExpiresAt;
         }
 
-        $notExtended = false;
-
         if ($result->expiresAt !== null) {
             $this->expires_at = $result->expiresAt;
 
-            // "Not extended" is judged on the access token alone: renew_at may
-            // legitimately land earlier because of the refresh token.
-            if ($result->expiresAt->copy()->sub($connector->leadTime())->isFuture()) {
-                $this->renew_at = static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at);
-            } else {
-                // The provider did not push the expiry past the lead time (e.g.
-                // Meta returning the remaining lifetime): renewing again on every
-                // tick would change nothing. Land the next pass at the expiry,
-                // where the token is flagged if nobody reconnected.
-                $notExtended = true;
-                $this->renew_at = $result->expiresAt->copy();
-            }
+            // The provider did not push the expiry past the lead time (e.g.
+            // Meta returning the remaining lifetime): renewing again on every
+            // tick would change nothing. Land the next pass at the expiry,
+            // where the token is flagged if nobody reconnected.
+            $this->renew_at = $notExtended
+                ? $result->expiresAt->copy()
+                : static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at);
         } else {
             // A renewable credential came back without an expiry. Keeping the
             // old expires_at would be stale, and a null renew_at would turn it
@@ -365,13 +444,6 @@ class SocialToken extends Model
             // check back after one lead time.
             $this->expires_at = null;
             $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at) ?? now()->add($connector->leadTime());
-
-            if (Settings::logUnknownErrors()) {
-                Log::warning('[social-tokens] Renewal returned no expiry', [
-                    'provider' => $this->provider,
-                    'token_id' => $this->getKey(),
-                ]);
-            }
         }
 
         // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
@@ -384,7 +456,18 @@ class SocialToken extends Model
             }
         }
 
-        $this->forceFill(static::issuedState())->save();
+        return $this->forceFill(static::issuedState())->save();
+    }
+
+    /** Events and logs of a stored renewal, once its write is committed or joined the caller's transaction. */
+    protected function announceRenewal(RenewalResult $result, ProviderConnector $connector, bool $notExtended): void
+    {
+        if ($result->expiresAt === null && Settings::logUnknownErrors()) {
+            Log::warning('[social-tokens] Renewal returned no expiry', [
+                'provider' => $this->provider,
+                'token_id' => $this->getKey(),
+            ]);
+        }
 
         event(new CredentialRenewed($this));
 
@@ -415,8 +498,6 @@ class SocialToken extends Model
                 event(new CredentialExpiringSoon($this, $result->expiresAt, 'Provider did not extend the token.'));
             }
         }
-
-        return $this;
     }
 
     /**

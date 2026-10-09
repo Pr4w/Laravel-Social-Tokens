@@ -304,6 +304,31 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `terminal: false` does nothing for a connector that cannot check a token
   (Google, TikTok, X), and that LinkedIn with refresh tokens should report a
   `REVOKED_ACCESS_TOKEN` with `terminal: false`, which introspects the token.
+- **A reconnect during a renewal is no longer undone.** The renewal lock only
+  kept renewals apart: a reconnect (any `Store*` action) that wrote the
+  credential while its renewal waited on the provider was overwritten when the
+  renewal succeeded, bringing back the old grant's tokens under the new grant's
+  scopes (a TikTok reconnect that added `video.publish` was lost, and publishing
+  failed on a scope `hasScope()` reported as granted). When the provider
+  refused the old refresh token instead, the credential that had just been
+  reconnected was flagged `needs_reconnect` and `CredentialNeedsReconnect`
+  fired. A renewal is now stored only while the credential still holds the
+  tokens that were refreshed, and a terminal answer flags only that token:
+  the reconnect wins either way. `validAccessTokenFor()` hands out the
+  reconnected token, or throws a transient `NeedsReconnectException` (retry)
+  when the old refresh token was refused.
+- **A renewal requested inside a database transaction no longer spends a
+  rotated refresh token.** The re-read under the renewal lock was a plain read.
+  On MySQL (REPEATABLE READ), a caller inside a transaction read its snapshot,
+  which still held the TikTok or X refresh token another process had just
+  rotated; on any database, a renewal stored inside a transaction not yet
+  committed was missed. The caller refreshed with the spent token, got
+  `invalid_grant`, and flagged a working credential. The re-read is now a
+  locking read (see Changed).
+- README: the renewal lock's cache store must be shared by every server that
+  serves web requests, runs queue workers or runs the scheduler. The README
+  listed `file` as suitable; a file lock only holds on one host, so a worker
+  server and a web server could both refresh the same TikTok or X token.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -341,6 +366,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   active, with no `last_error`, no `check-static` strike and `last_renewed_at`
   set to now. The `Store*` actions use it; use it too if you store credentials
   yourself.
+- `SocialToken::tryApplyRenewal($result, $connector)`: `applyRenewal()` that
+  returns whether it stored the renewal (see Changed).
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -363,6 +390,28 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `ProviderConnector::revoke()` is documented as best effort that must not
   throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
   override.
+- `renewCredential()` re-reads the credential under the renewal lock with
+  `SELECT ... FOR UPDATE` (SQLite has no row locks and reads as before), so it
+  sees a renewal committed after the caller's transaction began and waits for
+  one not committed yet. Inside your transaction the row stays locked until it
+  ends. A lock wait timeout or a deadlock on that read is a transient failure
+  ("Could not lock the credential for renewal."), and so is a wait of more than
+  30 seconds, after which the 60-second renewal lock could lapse during the
+  provider call. Renewing a TikTok or X credential inside a database
+  transaction logs a warning (`Renewing a single-use refresh token inside a
+  database transaction`), since a rollback discards a refresh token the
+  provider has already replaced
+  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
+- `applyRenewal()` writes only while the credential still holds the access and
+  refresh tokens the instance was loaded with (compared in a transaction, under
+  a row lock), and not over a revoke, as before. Otherwise it writes nothing,
+  fires no `CredentialRenewed`, and reloads the instance with the stored row. A
+  credential deleted meanwhile throws `ModelNotFoundException`.
+- After a terminal renewal failure, `RenewCredential` and
+  `validAccessTokenFor()` flag the credential only while it still holds the
+  refused token (`markNeedsReconnectOnce($reason, $token)`).
+  `renewCredential()` reloads the `$token` it is given under the lock, so
+  `$token->access_token` is that token.
 
 ## [2.0.0]
 

@@ -346,7 +346,8 @@ error and keeps the default. A method that only picks the days (`'weekdays'`,
 Set `dispatch_schedule` to `null` to schedule the command yourself. Both scheduled
 commands run `withoutOverlapping()->onOneServer()` (`check-static` also in the
 background): on several servers, use a shared cache store (redis, memcached,
-database, dynamodb) so that really runs once.
+database, dynamodb) so that really runs once. The renewal lock needs the same
+(see below).
 
 Renewal failures are classified:
 
@@ -411,9 +412,33 @@ plain `terminalFailure()` needs two consecutive runs to flag (a
 `terminalFailure($reason, ['definitive' => true])` to flag on the first.
 
 Renewals run under a per-credential lock so a scheduled job and a synchronous
-`validAccessTokenFor()` can never refresh the same credential at once (which would
-break rotating-refresh-token providers like TikTok). This needs a cache store that
-supports atomic locks: redis, memcached, database, dynamodb, or file.
+`validAccessTokenFor()` never refresh the same credential at once: TikTok and X
+refresh tokens are single-use, so the second refresh would be refused and the
+credential flagged. The second caller waits up to 10 seconds, then uses the token
+the first one stored instead of calling the provider; if the lock is still held,
+or a transaction keeps the credential's row locked for more than 30 seconds, it
+gets a transient failure (the job retries, `validAccessTokenFor()` throws a
+transient `NeedsReconnectException`). The lock lives in your default cache
+store, which must support atomic locks **and be shared by every server that
+serves web requests, runs queue workers or runs the scheduler**: redis,
+memcached, database or dynamodb, on a server they all reach. The `file` and
+`array` stores, or a redis on each host, lock one host only: with a separate
+worker server, a job and a web request each take their own lock and refresh the
+same TikTok or X token.
+
+A reconnect that lands while a renewal is in flight wins: the renewal's result
+is dropped instead of overwriting the new tokens, and a refusal of the old
+refresh token does not flag the reconnected credential.
+
+Ask for a token outside your own database transaction. Under the lock the
+credential is re-read with a locking read (`SELECT ... FOR UPDATE`), so even
+inside a transaction a renewal another process stored is seen, or waited for
+until it commits. But inside one the credential's row then stays locked until
+your transaction ends, and a rollback discards the token the renewal stored:
+for TikTok and X the provider has already retired the old refresh token, so the
+credential dies at its next renewal. Renewing a TikTok or X credential inside a
+transaction logs a warning (`Renewing a single-use refresh token inside a
+database transaction`).
 
 ## Posting
 
@@ -422,7 +447,8 @@ token and gets one, or a clear signal to reconnect. If the job will hold the
 token a while, say how long, and a token expiring sooner is renewed first:
 `validAccessTokenFor($account, 20 * 60)` for an Instagram/Threads container poll
 of up to 15 minutes. Keep it under the provider's token lifetime (1 hour for
-Google), or every call refreshes.
+Google), or every call refreshes. Ask before you open a database transaction,
+not inside it (see [Renewing](#renewing)).
 
 ```php
 use Pr4w\SocialTokens\SocialTokens;

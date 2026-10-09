@@ -311,6 +311,48 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
   rotating the secret, restart your queue workers
   (`php artisan queue:restart`) so they read it.
 
+### Renewals, transactions and the cache store
+
+The renewal lock and the re-read under it changed, so a credential is no longer
+refreshed twice or renewed over a reconnect. Check three things:
+
+1. **Your cache store is shared.** The renewal lock lives in the default cache
+   store. 2.x's README listed `file` as fine; it is not when web requests,
+   queue workers or the scheduler run on more than one server, since each host
+   then takes its own lock and both can refresh the same TikTok or X token.
+   On such a setup set the default store (`CACHE_STORE`, or `CACHE_DRIVER` if
+   your `config/cache.php` still reads it) to `redis`, `memcached`, `database`
+   or `dynamodb`, on a server every host reaches, and restart the workers
+   (`php artisan queue:restart`). A single server can keep `file`.
+2. **You ask for tokens outside your own transactions.** Under the lock,
+   `renewCredential()` now re-reads the credential with `SELECT ... FOR UPDATE`.
+   Inside your `DB::transaction()` that row stays locked until the transaction
+   ends, so other renewals (which give up after 30 seconds, as a transient
+   failure), reconnects and status changes of that credential wait for it, and
+   a rollback discards the token the renewal stored (for TikTok and X, the
+   provider has already replaced the old refresh token, so the credential dies
+   at its next renewal). Call `validAccessTokenFor()`
+   before opening the transaction. To find the places, look for the new
+   warning `[social-tokens] Renewing a single-use refresh token inside a
+   database transaction` in your logs. Tests that use `RefreshDatabase` or
+   `DatabaseTransactions` run inside a transaction too, so a test that renews a
+   TikTok or X credential logs it as well; there it does no harm.
+3. **If you call `renewCredential()` or `applyRenewal()` yourself.**
+   - After a Terminal result, flag the credential only while it holds the
+     refused token: `$token->markNeedsReconnectOnce($result->reason, $token->access_token)`
+     instead of `markNeedsReconnect($result->reason)`. `renewCredential()`
+     reloads the `$token` you pass under the lock, so `$token->access_token`
+     is the token the provider refused, and a credential the user reconnected
+     meanwhile is left alone.
+   - `applyRenewal()` now writes only while the stored credential still holds
+     the access and refresh tokens the instance was loaded with. Load the
+     credential right before you refresh it, not earlier. Use
+     `tryApplyRenewal()` to know whether the renewal was stored; when it was
+     not, the instance holds the stored row. A credential deleted meanwhile
+     throws `ModelNotFoundException`.
+
+There is nothing to migrate.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret

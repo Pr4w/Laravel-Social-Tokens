@@ -179,13 +179,16 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return;
         }
 
+        // Terminal: flag the credential only if it still holds the refused
+        // token ($token was reloaded under the renewal lock), not one a
+        // reconnect stored while the provider call was in flight.
         // Transient: throw so the queue retries with backoff (the exception is
         // never reported: an outage would flood error trackers). Once retries
         // are exhausted, failed() backs renew_at off, or flags the credential
         // if it truly can no longer be renewed.
         match ($result->outcome) {
             RenewalOutcome::Success => null,
-            RenewalOutcome::Terminal => $token->markNeedsReconnect($result->reason),
+            RenewalOutcome::Terminal => $token->markNeedsReconnectOnce($result->reason, (string) $token->access_token),
             RenewalOutcome::Transient => throw TransientRenewalException::for($token, $result->reason),
         };
     }

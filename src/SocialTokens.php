@@ -3,7 +3,9 @@
 namespace Pr4w\SocialTokens;
 
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
@@ -12,6 +14,7 @@ use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
+use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -30,6 +33,8 @@ use Throwable;
  */
 class SocialTokens
 {
+    use DetectsConcurrencyErrors;
+
     public function __construct(protected ConnectorRegistry $registry) {}
 
     public function connector(string $provider): ProviderConnector
@@ -42,11 +47,26 @@ class SocialTokens
      * concurrent renewal (scheduled job vs synchronous call) never refreshes
      * twice. The second arrival re-reads the freshly renewed token instead of
      * calling the provider again, which matters for rotating-refresh-token
-     * providers like TikTok where a double refresh invalidates the token.
+     * providers like TikTok and X where a double refresh invalidates the token.
+     * The re-read is a locking read, so it also sees a renewal committed after
+     * the caller's transaction began, and waits for one not committed yet (a
+     * wait past 30 seconds, or the database's lock wait timeout, is transient).
      *
-     * Applies the result on success (single source of truth). Failures are
-     * returned for the caller to handle, since the job and the synchronous
-     * path react differently to transient failures.
+     * Applies the result on success (single source of truth), on the token
+     * that was refreshed only: when a reconnect replaced it meanwhile, the
+     * result is dropped and the success carries the reconnected token.
+     * Failures are returned for the caller to handle, since the job and the
+     * synchronous path react differently to transient failures.
+     *
+     * $token is reloaded in place under the lock. On a Terminal result it
+     * holds the token the provider refused: flag it with
+     * markNeedsReconnectOnce($result->reason, $token->access_token), so that
+     * a credential reconnected meanwhile is not flagged.
+     *
+     * Call it outside your own database transaction: there the row stays
+     * locked until the transaction ends, and a rollback discards the renewed
+     * token, which for a single-use refresh token (TikTok, X) the provider
+     * has already retired. Such a renewal logs a warning.
      *
      * $minValiditySeconds (floor 30): a token that will not stay valid that long
      * is renewed even if another process just stored it.
@@ -54,6 +74,8 @@ class SocialTokens
      * @throws InvalidArgumentException for a credential never saved in the
      *                                  social_tokens table (use the connector
      *                                  directly to refresh a token held elsewhere).
+     * @throws ModelNotFoundException<SocialToken> for a credential deleted
+     *                                             while it waited or renewed.
      */
     public function renewCredential(SocialToken $token, int $minValiditySeconds = 30): RenewalResult
     {
@@ -71,7 +93,26 @@ class SocialTokens
 
         try {
             return Cache::lock($this->lockKey($token), 60)->block(10, function () use ($token, $connector, $minValiditySeconds) {
-                $token->refresh();
+                $waitingSince = now();
+
+                try {
+                    $token->refreshForUpdate();
+                } catch (QueryException $e) {
+                    // The row is locked by a transaction that outlived the
+                    // database's lock wait (or deadlocked with this one).
+                    if ($this->causedByConcurrencyError($e)) {
+                        return RenewalResult::transientFailure('Could not lock the credential for renewal.');
+                    }
+
+                    throw $e;
+                }
+
+                // A transaction held the row for a long time: the 60-second lock
+                // could lapse during the provider call and let a second renewal
+                // of the same refresh token in.
+                if ($waitingSince->diffInSeconds(now(), true) > 30) {
+                    return RenewalResult::transientFailure('Could not lock the credential for renewal.');
+                }
 
                 // Revoked or flagged since the caller loaded it: never renew.
                 if (! $token->status->isUsable()) {
@@ -89,6 +130,15 @@ class SocialTokens
                     );
                 }
 
+                if ($connector->renewalStrategy() === RenewalStrategy::RotatingRefreshToken
+                    && $token->getConnection()->transactionLevel() > 0) {
+                    Log::warning('[social-tokens] Renewing a single-use refresh token inside a database transaction', [
+                        'provider' => $token->provider,
+                        'token_id' => $token->getKey(),
+                        'hint' => 'A rollback discards the new refresh token and the credential dies at its next renewal: ask for the token before opening the transaction.',
+                    ]);
+                }
+
                 $result = $connector->refreshCredential($token);
 
                 if ($result->clientError) {
@@ -104,14 +154,24 @@ class SocialTokens
                     ]);
                 }
 
-                if ($result->succeeded()) {
-                    $token->applyRenewal($result, $connector);
-
-                    // Revoked while the provider call was in flight: applyRenewal()
-                    // stored nothing, and the token must not be handed out.
+                if ($result->succeeded() && ! $token->tryApplyRenewal($result, $connector)) {
+                    // Nothing stored, and $token now holds the row as it is.
+                    // Revoked while the provider call was in flight: the token
+                    // must not be handed out.
                     if ($token->status === AccountStatus::Revoked) {
                         return RenewalResult::terminalFailure('Credential was revoked during renewal.');
                     }
+
+                    if (! $token->status->isUsable() || $token->access_token === null) {
+                        return RenewalResult::terminalFailure("Credential is {$token->status->value}.");
+                    }
+
+                    // Reconnected meanwhile: the new grant's token, not the one
+                    // renewed from the old grant.
+                    return RenewalResult::success(
+                        accessToken: $token->access_token,
+                        expiresAt: $token->expires_at,
+                    );
                 }
 
                 return $result;
@@ -193,19 +253,23 @@ class SocialTokens
 
         $result = $this->renewCredential($token, $minValiditySeconds);
 
-        if ($result->succeeded()) {
-            $token->refresh();
-
-            if ($token->access_token !== null) {
-                return $token->access_token;
-            }
+        // The token renewCredential() stored, or the one another process
+        // stored meanwhile: a plain re-read inside the caller's transaction
+        // could return an older snapshot.
+        if ($result->succeeded() && $result->accessToken !== null) {
+            return $result->accessToken;
         }
 
         // Terminal failure: the connection is broken, flag the credential. Its
         // accounts' rows are not rewritten; every account it backs reports it
         // through effectiveStatus().
         if ($result->outcome === RenewalOutcome::Terminal) {
-            $token->markNeedsReconnect($result->reason);
+            // Only if it still holds the refused token: a reconnect that
+            // landed meanwhile is a working credential, worth a retry.
+            if (! $token->markNeedsReconnectOnce($result->reason, (string) $token->access_token)
+                && $token->fresh()?->status->isUsable()) {
+                throw NeedsReconnectException::transient($account, 'The credential was reconnected during renewal; retry.');
+            }
 
             throw NeedsReconnectException::for($account, $result->reason);
         }
