@@ -45,7 +45,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   - It checks before changing anything, and refuses with instructions: on
     MySQL/MariaDB, that the new unique keys fit InnoDB's 3072-byte limit; and
     that the credentials' owner column can hold every owner id of the accounts,
-    so the backfill cannot fail halfway on a type mismatch.
+    so the backfill cannot fail halfway on a type mismatch. These checks read
+    real columns and rows, so `migrate --pretend` skips them: it lists the
+    statements, as 2.0.0 did, for a schema the package created, with the owner
+    columns in the app's default morph key type.
   - The credentials' owner column takes the key type of the accounts' own
     column: a uuid column (native, or `char(36)`) gives uuid, a `char(26)`
     column ulid, whatever the app's default morph key type. Owners declared

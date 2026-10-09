@@ -107,6 +107,14 @@ and if either fails it says why and changes nothing:
   `Schema::morphUsingUlids()`, and is refused while morph keys default to
   integers (except on SQLite, which enforces no type).
 
+**`migrate --pretend`** reads no columns or rows (every query comes back
+empty), so it cannot run these checks, nor the 50-character check of
+`000006_shorten_provider_columns`. It lists the statements for a schema the
+package created: the owner columns in your default morph key type (the real run
+takes the type of `social_accounts.ownable_id`), and `provider` shortened on
+both tables (the real run skips a column already at most 50 characters). Only
+a real run on a copy of production exercises the checks.
+
 **Index names on a prefixed install:** with a table prefix and
 `prefix_indexes`, the new keys carry the prefix
 (`acme_social_accounts_owner_identity_unique`), like the indexes Laravel names

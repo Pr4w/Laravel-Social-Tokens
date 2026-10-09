@@ -18,6 +18,9 @@ use Illuminate\Support\Facades\Schema;
  * supported servers. SQLite declares no length and enforces none, and SQL
  * Server has no such cap and cannot shrink a column an index uses in place:
  * both are left alone.
+ *
+ * Under `migrate --pretend` no length can be read (every query returns no
+ * rows): it lists the change a column the package created, varchar(255), gets.
  */
 return new class extends Migration
 {
@@ -31,7 +34,8 @@ return new class extends Migration
             return;
         }
 
-        $tables = array_filter($this->tables(), fn (string $table) => $this->length($table) > self::LENGTH);
+        $pretending = Schema::getConnection()->pretending();
+        $tables = array_filter($this->tables(), fn (string $table) => $pretending || $this->length($table) > self::LENGTH);
 
         // Check every table before changing any.
         array_map(fn (string $table) => $this->refuseLongerValues($table), $tables);

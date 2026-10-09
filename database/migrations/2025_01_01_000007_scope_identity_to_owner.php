@@ -29,6 +29,12 @@ use Illuminate\Support\Str;
  * Not one transaction: on PostgreSQL that held the ALTER's ACCESS EXCLUSIVE lock
  * on social_tokens, blocking every token read of the live app, until the last
  * credential was backfilled. The backfill commits in short chunks instead.
+ *
+ * Under `migrate --pretend` every query returns no rows, so the schema reads as
+ * empty and the guards would answer wrongly (an accounts table without owner
+ * columns). It lists instead the statements for a schema the package created,
+ * with owner columns of the app's morph key type. The checks need real columns
+ * and rows: only a real run makes them.
  */
 return new class extends Migration
 {
@@ -44,8 +50,14 @@ return new class extends Migration
         $accounts = config('social-tokens.table', 'social_accounts');
         $tokens = config('social-tokens.tokens_table', 'social_tokens');
 
-        $morphType = Schema::hasColumn($tokens, 'ownable_type') ? null : $this->ownerMorphType($accounts);
-        $this->ensureOwnerKeysFit($accounts, $tokens);
+        $pretending = Schema::getConnection()->pretending();
+
+        if ($pretending) {
+            $morphType = SchemaBuilder::$defaultMorphKeyType;
+        } else {
+            $morphType = Schema::hasColumn($tokens, 'ownable_type') ? null : $this->ownerMorphType($accounts);
+            $this->ensureOwnerKeysFit($accounts, $tokens);
+        }
 
         if ($morphType !== null) {
             Schema::table($tokens, fn (Blueprint $table) => match ($morphType) {
@@ -68,7 +80,10 @@ return new class extends Migration
 
             // Two owners may now hold the same external identity, and splitting
             // a shared credential inserts a second row for the same holder.
-            if ($old = $this->uniqueIndexOn($table, ['provider', $external])) {
+            // Pretending, it is the key 1.x created, under Laravel's name for it.
+            $old = $pretending ? ['provider', $external] : $this->uniqueIndexOn($table, ['provider', $external]);
+
+            if ($old !== null) {
                 Schema::table($table, fn (Blueprint $blueprint) => $blueprint->dropUnique($old));
             }
         }
@@ -104,18 +119,24 @@ return new class extends Migration
             }
         }
 
+        $pretending = Schema::getConnection()->pretending();
+
         foreach ([[$accounts, 'provider_user_id'], [$tokens, 'provider_holder_id']] as [$table, $external]) {
             if ($this->uniqueIndexOn($table, ['provider', $external]) === null) {
                 Schema::table($table, fn (Blueprint $blueprint) => $blueprint->unique(['provider', $external]));
             }
 
             // Looked up by columns: 2.0.0 named it without the table prefix.
-            if ($new = $this->uniqueIndexOn($table, ['provider', $external, 'ownable_type', 'ownable_id'])) {
+            $new = $pretending
+                ? $this->indexName($table, 'owner_identity_unique')
+                : $this->uniqueIndexOn($table, ['provider', $external, 'ownable_type', 'ownable_id']);
+
+            if ($new !== null) {
                 Schema::table($table, fn (Blueprint $blueprint) => $blueprint->dropUnique($new));
             }
         }
 
-        if (Schema::hasColumn($tokens, 'ownable_type')) {
+        if ($pretending || Schema::hasColumn($tokens, 'ownable_type')) {
             Schema::table($tokens, fn (Blueprint $table) => $table->dropMorphs('ownable'));
         }
     }
