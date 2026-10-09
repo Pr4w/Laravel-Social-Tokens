@@ -491,6 +491,44 @@ callback, `revoke()`, `markRevoked()`).
    one account only, forget its disconnection before the reconnect:
    `$account->clearDisconnected()->save()`.
 
+### Tear down the owners you delete
+
+The owner columns carry no foreign key: deleting an owner (a workspace, a
+team) leaves its accounts active and its credentials renewed, and each of
+them still counts as a grant that keeps other owners' `revoke()` and
+`disconnect()` of the same TikTok or Google user local. 3.0 adds
+`SocialTokens::forgetOwner($owner)`, which revokes and deletes what the owner
+holds without touching other owners' rows.
+
+1. Call it before the owner is deleted, once your own rows that point at its
+   accounts are dealt with (the accounts are deleted):
+
+   ```php
+   protected static function booted(): void
+   {
+       // forceDeleting for a model that uses SoftDeletes: a restored
+       // workspace keeps its connections.
+       static::deleting(fn (Workspace $workspace) => app(SocialTokens::class)->forgetOwner($workspace));
+   }
+   ```
+
+2. Tear down the owners you deleted before. `forgetOwner()` only needs the
+   owner's morph class and key, so an unsaved instance carrying the old id
+   will do:
+
+   ```php
+   $type = (new Workspace)->getMorphClass();
+   $gone = fn ($query) => $query->where('ownable_type', $type)
+       ->whereNotIn('ownable_id', Workspace::query()->select('id'))
+       ->distinct()->pluck('ownable_id');
+
+   $gone(SocialAccount::query())->merge($gone(SocialToken::query()))->unique()
+       ->each(fn ($id) => app(SocialTokens::class)->forgetOwner((new Workspace)->forceFill(['id' => $id])));
+   ```
+
+   Add `withTrashed()` to the subquery if soft-deleted workspaces should keep
+   their connections.
+
 ### Review your `reportRejected()` calls
 
 2.x's README told you to pass `terminal: true` for any Meta 190/102 and for an

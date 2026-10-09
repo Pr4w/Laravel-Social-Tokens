@@ -112,6 +112,22 @@ providers grant access:
 A connection with an owner never adopts an existing owner-less row: it creates
 its own. To attach an owner-less row, `associate()` it yourself.
 
+**Deleting an owner.** The owner columns carry no foreign key, so a deleted
+workspace would leave its accounts active, its credentials renewed, and each
+of them counting as a grant that keeps other owners' revocations local. Call
+`forgetOwner()` before deleting it: it revokes every credential of the owner
+(the provider is called unless another owner still holds a grant for the same
+external user), revokes its accounts, deletes both and returns the deleted
+accounts. Deal with your own rows that point at those accounts first.
+
+```php
+static::deleting(fn (Workspace $workspace) => app(SocialTokens::class)->forgetOwner($workspace));
+// with SoftDeletes, use forceDeleting: a restored workspace keeps its connections
+```
+
+`CredentialRevoked` and `AccountRevoked` fire before the rows are deleted, so a
+queued listener finds them gone.
+
 The owner is a polymorphic relation (`ownable_type`, `ownable_id`), and both
 columns are part of the unique keys:
 

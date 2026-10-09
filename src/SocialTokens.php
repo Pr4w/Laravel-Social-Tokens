@@ -562,6 +562,67 @@ class SocialTokens
     }
 
     /**
+     * Tear down everything one owner holds, for when the owner itself goes (a
+     * deleted workspace): each of its credentials is revoked as revoke() does
+     * (tokens erased, the provider called unless another owner still holds a
+     * grant for the same external user), each of its accounts revoked, then
+     * its accounts and credentials are deleted. Other owners' rows are not
+     * touched, and the deleted ones no longer count as a grant that keeps
+     * another owner's revoke() from reaching the provider. A credential
+     * already revoked is not sent to the provider again.
+     *
+     * CredentialRevoked and AccountRevoked fire once per row that changes,
+     * before the deletion: a queued listener finds the row gone. Every row is
+     * revoked and deleted even when a listener throws; the first exception is
+     * rethrown after.
+     *
+     * Call it before the owner is deleted (its `deleting` event, or
+     * `forceDeleting` for a soft-deleted one), once your own rows that point
+     * at its accounts are dealt with: the accounts are deleted.
+     *
+     * @return EloquentCollection<int, SocialAccount> The accounts deleted, revoked.
+     */
+    public function forgetOwner(Model $owner): EloquentCollection
+    {
+        $credentials = SocialToken::query()->ownedBy($owner)->orderBy('id')->get();
+        $failure = null;
+
+        foreach ($credentials as $token) {
+            if ($token->status === AccountStatus::Revoked) {
+                continue;
+            }
+
+            try {
+                $this->revoke($token);
+            } catch (Throwable $e) {
+                $failure ??= $e;
+            }
+        }
+
+        $accounts = SocialAccount::query()->ownedBy($owner)->orderBy('id')->get();
+
+        try {
+            $this->revokeEach($accounts->all());
+        } catch (Throwable $e) {
+            $failure ??= $e;
+        }
+
+        (new SocialToken)->getConnection()->transaction(function () use ($credentials, $accounts) {
+            // Explicitly, rather than through the foreign key: SQLite enforces
+            // it only when foreign keys are on.
+            SocialAccount::query()->whereIn('social_token_id', $credentials->modelKeys())->update(['social_token_id' => null]);
+            SocialAccount::query()->whereKey($accounts->modelKeys())->delete();
+            SocialToken::query()->whereKey($credentials->modelKeys())->delete();
+        });
+
+        if ($failure !== null) {
+            throw $failure;
+        }
+
+        return $accounts;
+    }
+
+    /**
      * Revoke, locally, everything one external user's grant backs, under every
      * owner: the credentials they hold, the accounts recorded under them
      * (provider_holder_id: a Facebook user's Pages and Instagram accounts),

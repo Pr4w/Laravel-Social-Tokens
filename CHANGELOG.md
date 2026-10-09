@@ -757,6 +757,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - A `restoreDisconnected` option on `StoreConnection::handle()`,
   `StoreFacebookPages::handle()`, `StoreInstagramAccounts::handle()` and
   `StoreLinkedInOrganizations::handle()` (see Changed (breaking)).
+- `SocialTokens::forgetOwner(Model $owner)` tears down what an owner holds,
+  for when the owner itself is deleted: its credentials are revoked (tokens
+  erased, the provider called unless another owner still holds a grant for
+  the same external user), its accounts revoked, then both are deleted, and
+  the deleted accounts returned. The owner columns carry no foreign key, so
+  a deleted workspace used to leave its accounts active and its credentials
+  renewed for good, each counting as a grant that kept every other owner's
+  `revoke()` and `disconnect()` of the same TikTok or Google user from
+  reaching the provider
+  ([UPGRADE](UPGRADE.md#tear-down-the-owners-you-delete)).
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
