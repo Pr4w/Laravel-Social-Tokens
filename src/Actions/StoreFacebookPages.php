@@ -94,7 +94,7 @@ class StoreFacebookPages
         // 4a. The renewable Meta user credential (shared with Instagram). Only
         // when the user manages a Page, so no credential is left orphaned.
         if ($pages !== []) {
-            SocialToken::query()->updateOrCreate(
+            SocialToken::persistCredential(
                 ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $userToken,
@@ -111,13 +111,19 @@ class StoreFacebookPages
 
         // 4. One static page-token credential + one account per page that can
         // post: a Page listed without an access_token (no posting task for this
-        // user) is not stored. It still counts as managed below.
-        $postable = collect($pages)->filter(fn (array $page) => ! empty($page['id']) && ! empty($page['access_token']));
+        // user) is not stored. It still counts as managed below. A loop, not a
+        // collection callback: the Pages and their tokens would be arguments of
+        // the collection's frames in the trace of a failed write.
+        $accounts = collect();
 
-        $accounts = $postable->values()->map(function (array $page) use ($userId, $scopesByAccount, $owner, $connectedBy) {
+        foreach ($pages as $page) {
+            if (empty($page['id']) || empty($page['access_token'])) {
+                continue;
+            }
+
             $withScopes = $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[(string) $page['id']] ?? []];
 
-            $token = SocialToken::query()->updateOrCreate(
+            $token = SocialToken::persistCredential(
                 ['provider' => 'facebook', 'provider_holder_id' => $page['id']] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $page['access_token'], // page token, ready to post with
@@ -130,7 +136,7 @@ class StoreFacebookPages
                 ] + $withScopes,
             );
 
-            return $this->persistAccount(
+            $accounts->push($this->persistAccount(
                 ['provider' => 'facebook', 'provider_user_id' => $page['id']] + SocialAccount::ownerKey($owner),
                 [
                     'social_token_id' => $token->getKey(),
@@ -142,8 +148,8 @@ class StoreFacebookPages
                 ] + $withScopes,
                 $owner,
                 $connectedBy,
-            );
-        });
+            ));
+        }
 
         // 5. Reconcile: any still-active page account for THIS user that they no
         // longer manage is flagged. Scoped to the user id, so a co-owner's pages

@@ -90,7 +90,7 @@ class StoreAccountFromSocialite
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
 
         // The credential (holder = the account's own id for a 1:1 provider).
-        $token = SocialToken::query()->updateOrCreate(
+        $token = SocialToken::persistCredential(
             [
                 'provider' => $connector->credentialProvider(),
                 'provider_holder_id' => $user->getId(),

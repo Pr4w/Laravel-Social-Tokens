@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -9,6 +11,7 @@ use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
+use Pr4w\SocialTokens\Tests\Fixtures\Owner;
 
 function socialToken(array $attrs = []): SocialToken
 {
@@ -119,3 +122,39 @@ it('marks a credential for reconnection and fires CredentialNeedsReconnect', fun
 
     Event::assertDispatched(CredentialNeedsReconnect::class, fn ($e) => $e->reason === 'revoked upstream');
 });
+
+it('persists a credential under its keys, creating then updating the one row', function () {
+    $owner = Owner::create();
+    $keys = ['provider' => 'tiktok', 'provider_holder_id' => 'tt-1'] + SocialAccount::ownerKey($owner);
+
+    $created = SocialToken::persistCredential($keys, ['access_token' => 'first', 'status' => AccountStatus::Active]);
+    $updated = SocialToken::persistCredential($keys, ['access_token' => 'second', 'refresh_token' => 'r']);
+
+    expect($updated->is($created))->toBeTrue()
+        ->and(SocialToken::query()->count())->toBe(1)
+        ->and($created->fresh()->access_token)->toBe('second')
+        ->and($created->fresh()->refresh_token)->toBe('r')
+        ->and($created->fresh()->ownable->is($owner))->toBeTrue();
+});
+
+it('updates the row a concurrent request created under the same keys', function (bool $inTransaction) {
+    $owner = Owner::create();
+    $keys = ['provider' => 'tiktok', 'provider_holder_id' => 'tt-1'] + SocialAccount::ownerKey($owner);
+
+    // Another request inserts the row right after the lookup found none.
+    $raced = false;
+    DB::listen(function (QueryExecuted $query) use (&$raced, $keys) {
+        if (! $raced && str_starts_with($query->sql, 'select')) {
+            $raced = true;
+            DB::table('social_tokens')->insert($keys + ['access_token' => encrypt('theirs', false), 'status' => 'active']);
+        }
+    });
+
+    $persist = fn () => SocialToken::persistCredential($keys, ['access_token' => 'mine', 'status' => AccountStatus::Active]);
+    $token = $inTransaction ? DB::transaction($persist) : $persist();
+
+    expect($raced)->toBeTrue()
+        ->and($token->exists)->toBeTrue()
+        ->and(SocialToken::query()->count())->toBe(1)
+        ->and(SocialToken::query()->sole()->access_token)->toBe('mine');
+})->with(['outside a transaction' => false, 'inside a transaction' => true]);

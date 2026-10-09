@@ -109,7 +109,7 @@ class StoreInstagramAccounts
         // page-only connection leaves no orphaned credential behind.
         $credential = $managedIgIds === []
             ? null
-            : SocialToken::query()->updateOrCreate(
+            : SocialToken::persistCredential(
                 ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
                 [
                     'access_token' => $userToken,
@@ -150,7 +150,7 @@ class StoreInstagramAccounts
 
             // Companion Facebook Page: a static page-token credential + account.
             if ($withLinkedPages && ! empty($page['id']) && ! empty($page['access_token'])) {
-                $pageToken = SocialToken::query()->updateOrCreate(
+                $pageToken = SocialToken::persistCredential(
                     ['provider' => 'facebook', 'provider_holder_id' => $page['id']] + SocialAccount::ownerKey($owner),
                     [
                         'access_token' => $page['access_token'],

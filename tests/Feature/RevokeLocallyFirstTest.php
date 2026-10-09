@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Database\QueryException;
 use Illuminate\Encryption\Encrypter;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -10,6 +11,7 @@ use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
 use Pr4w\SocialTokens\Connectors\XConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Events\AccountRevoked;
 use Pr4w\SocialTokens\Events\CredentialRevoked;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -158,4 +160,58 @@ it('hands the provider the token even when a revocation listener wipes it', func
     app(SocialTokens::class)->revoke(revokeFirstFake());
 
     expect($sent)->toBe('access');
+});
+
+/*
+ * The revocation events fire synchronously, before the provider call. A
+ * listener that throws (a bug, a mail server down, a queue push failing during
+ * an outage) must not leave the grant valid at the provider: the row is
+ * already revoked by then, so a retried disconnect() returns early and would
+ * never make that call. The listener's exception still reaches the caller.
+ */
+
+it('revokes at the provider, and every account, when a credential revocation listener throws', function () {
+    Event::listen(CredentialRevoked::class, fn () => throw new RuntimeException('listener failed'));
+    $token = revokeFirstFake();
+
+    expect(fn () => app(SocialTokens::class)->revoke($token))->toThrow(RuntimeException::class, 'listener failed');
+
+    expect($token->fresh()->status)->toBe(AccountStatus::Revoked)
+        ->and($token->accounts()->first()->status)->toBe(AccountStatus::Revoked)
+        ->and(FakeConnector::$revokeCalls)->toBe(1);
+});
+
+it('revokes at the provider when an account revocation listener throws', function () {
+    Event::listen(AccountRevoked::class, fn () => throw new RuntimeException('listener failed'));
+    $token = revokeFirstFake();
+
+    expect(fn () => app(SocialTokens::class)->revoke($token))->toThrow(RuntimeException::class, 'listener failed');
+
+    expect($token->fresh()->status)->toBe(AccountStatus::Revoked)
+        ->and(FakeConnector::$revokeCalls)->toBe(1);
+});
+
+it('revokes at the provider once when disconnecting with a throwing listener, retried or not', function (string $event) {
+    Event::listen($event, fn () => throw new RuntimeException('listener failed'));
+    $account = revokeFirstFake()->accounts()->first();
+
+    expect(fn () => app(SocialTokens::class)->disconnect($account))->toThrow(RuntimeException::class, 'listener failed');
+
+    expect($account->fresh()->status)->toBe(AccountStatus::Revoked)
+        ->and($account->credential()->first()->status)->toBe(AccountStatus::Revoked)
+        ->and(FakeConnector::$revokeCalls)->toBe(1);
+
+    app(SocialTokens::class)->disconnect($account->fresh()); // the user clicks again: nothing left to do
+
+    expect(FakeConnector::$revokeCalls)->toBe(1);
+})->with([CredentialRevoked::class, AccountRevoked::class]);
+
+it('leaves the credential alone when the account revocation itself fails', function () {
+    $account = revokeFirstFake()->accounts()->first();
+    DB::statement('CREATE TRIGGER fail_account_revoke BEFORE UPDATE ON social_accounts BEGIN SELECT RAISE(ABORT, \'disk I/O error\'); END');
+
+    expect(fn () => app(SocialTokens::class)->disconnect($account))->toThrow(QueryException::class);
+
+    expect($account->credential()->first()->status)->toBe(AccountStatus::Active)
+        ->and(FakeConnector::$revokeCalls)->toBe(0);
 });

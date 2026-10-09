@@ -55,6 +55,13 @@ Renewal happens on the credential, **once** — every account sharing it sees th
 fresh token. A Facebook page token is stored as a *static* credential (no expiry,
 never auto-refreshed); everything else is renewable on its lead time.
 
+Tokens are stored encrypted with your `APP_KEY` and hidden from `toArray()`. The
+package marks every parameter that carries one `#[\SensitiveParameter]` and
+encrypts tokens before writing them, so none of its frames, nor the database
+writes it makes, put a token in an exception trace. Set
+`zend.exception_ignore_args=On` in production to cover code outside the package
+too.
+
 ### Owners
 
 Identity is scoped to the **owner** you pass when connecting (`owner:` — a User,
@@ -508,7 +515,9 @@ app(SocialTokens::class)->revoke($account->credential);
 Both record the revocation locally first (the `Revoked` events fire then), and
 only then ask the provider to invalidate the token. That call is best effort:
 when it fails (provider down, a token that no longer decrypts after an
-`APP_KEY` change), a warning is logged and the local revocation stands.
+`APP_KEY` change), a warning is logged and the local revocation stands. A
+revocation listener that throws does not prevent it either: the provider is
+still called, then the listener's exception reaches you.
 
 `$account->markRevoked()` only flags the account locally: no provider call, and
 the credential is left as is.

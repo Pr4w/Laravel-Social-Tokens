@@ -232,6 +232,13 @@ class SocialTokens
      * call: the user's decision stands even when that call cannot be made (a
      * token that no longer decrypts after an APP_KEY change, a provider down,
      * a connector that throws). A failed provider call is logged.
+     *
+     * Nor does the provider call depend on the revocation listeners, which run
+     * synchronously before it. Once the row is revoked, a CredentialRevoked
+     * listener that throws (or a queued one whose push fails) still lets the
+     * cascade run, and any revocation listener that throws still lets the
+     * provider call happen; its exception then reaches the caller. A retried
+     * disconnect() would not make that call: the credential is revoked by then.
      */
     public function revoke(SocialToken $token): void
     {
@@ -249,12 +256,20 @@ class SocialTokens
         // listener may wipe them from the instance it receives, this one.
         $atProvider = clone $token;
 
-        $token->markRevoked();
-
-        $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
-
-        if (! $sharedGrant && $this->registry->has($token->provider)) {
-            $this->revokeAtProvider($atProvider);
+        try {
+            $token->markRevoked();
+        } finally {
+            // Revoked in memory only when the row is: the status is set before
+            // CredentialRevoked fires, never when the update itself failed.
+            if ($token->status === AccountStatus::Revoked) {
+                try {
+                    $token->accounts()->get()->each(fn (SocialAccount $account) => $account->markRevoked());
+                } finally {
+                    if (! $sharedGrant && $this->registry->has($token->provider)) {
+                        $this->revokeAtProvider($atProvider);
+                    }
+                }
+            }
         }
     }
 
@@ -282,11 +297,28 @@ class SocialTokens
      * and organizations) keep posting; the credential itself is revoked, at the
      * provider too, only when its last connected account goes. "Connected" means
      * not revoked: a sibling flagged needs_reconnect keeps the credential alive.
+     *
+     * An AccountRevoked listener that throws does not stop the credential's
+     * revocation: the account row is revoked by then, so a retried disconnect()
+     * would find nothing to do on it. The exception reaches the caller after.
      */
     public function disconnect(SocialAccount $account): void
     {
-        $account->markRevoked();
+        try {
+            $account->markRevoked();
+        } finally {
+            if ($account->status === AccountStatus::Revoked) {
+                $this->revokeCredentialOnceUnused($account);
+            }
+        }
+    }
 
+    /**
+     * Revoke a disconnected account's credential when no other connected
+     * account uses it.
+     */
+    protected function revokeCredentialOnceUnused(SocialAccount $account): void
+    {
         $token = $account->credential()->first();
 
         if ($token === null || $token->status === AccountStatus::Revoked) {

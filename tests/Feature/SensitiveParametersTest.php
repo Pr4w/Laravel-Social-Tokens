@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Actions\StoreAccountFromSocialite;
@@ -134,6 +136,82 @@ it('keeps the LinkedIn member and refresh tokens out of the trace when listing o
     ));
 
     expect($e->getMessage())->toContain('Could not list LinkedIn organizations')
+        ->and(sensitiveLeaksIn($e, ['AQV-LINKEDIN-MEMBER', 'AQW-LINKEDIN-REFRESH']))->toBe([]);
+});
+
+/*
+ * The #[\SensitiveParameter] attribute covers the package's own frames only.
+ * The Store* actions used to hand the plaintext tokens to Eloquent's
+ * updateOrCreate(), whose firstOrCreate(), createOrFirst() and create() frames
+ * then carried them in the trace of a failed write (connection lost, deadlock,
+ * disk error). The tokens are now cast, encrypted, before the write starts.
+ */
+
+/** Fail every write of the social_tokens row held by $holder, as a lost connection or a full disk would. */
+function sensitiveFailTokenWrite(string $holder, string $on = 'INSERT'): void
+{
+    DB::statement("CREATE TRIGGER sensitive_fail_token_write BEFORE {$on} ON social_tokens WHEN NEW.provider_holder_id = '{$holder}' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END");
+}
+
+/** Meta extends the token and lists one Page, with its token and a linked Instagram account. */
+function sensitiveMetaPages(): void
+{
+    Http::fake(function ($request) {
+        $url = $request->url();
+
+        return match (true) {
+            str_contains($url, '/oauth/access_token') => Http::response(['access_token' => 'EAAG-LONG-LIVED-60DAY', 'expires_in' => 5183944]),
+            str_contains($url, '/debug_token') => Http::response(['data' => ['scopes' => [], 'granular_scopes' => []]]),
+            str_contains($url, '/me/accounts') => Http::response(['data' => [[
+                'id' => 'page-1', 'name' => 'Page One', 'access_token' => 'EAAP-PAGE-TOKEN',
+                'instagram_business_account' => ['id' => 'ig-1', 'username' => 'insta'],
+            ]]]),
+            default => Http::response([], 404),
+        };
+    });
+}
+
+it('keeps the Meta tokens out of the trace of a failed database write', function (string $action, string $holder) {
+    sensitiveMetaPages();
+    sensitiveFailTokenWrite($holder);
+
+    $e = sensitiveThrown(fn () => app($action)->handle(userToken: 'EAAG-SHORT-LIVED', userId: 'fb-user'));
+
+    expect($e)->toBeInstanceOf(QueryException::class)
+        ->and(sensitiveLeaksIn($e, ['EAAG-SHORT-LIVED', 'EAAG-LONG-LIVED-60DAY', 'EAAP-PAGE-TOKEN']))->toBe([]);
+})->with([
+    'facebook user credential' => [StoreFacebookPages::class, 'fb-user'],
+    'facebook page credential' => [StoreFacebookPages::class, 'page-1'],
+    'instagram user credential' => [StoreInstagramAccounts::class, 'fb-user'],
+    'instagram companion page credential' => [StoreInstagramAccounts::class, 'page-1'],
+]);
+
+it('keeps the Socialite tokens out of the trace of a failed database write', function (string $on) {
+    if ($on === 'UPDATE') {
+        SocialToken::create(['provider' => 'tiktok', 'provider_holder_id' => 'tt-user', 'access_token' => 'old', 'status' => 'active']);
+    }
+
+    sensitiveFailTokenWrite('tt-user', $on);
+
+    $user = socialiteUser(['id' => 'tt-user', 'token' => 'ACT-TIKTOK-ACCESS', 'refreshToken' => 'RFT-TIKTOK-REFRESH']);
+
+    $e = sensitiveThrown(fn () => app(StoreConnection::class)->handle('tiktok', $user));
+
+    expect($e)->toBeInstanceOf(QueryException::class)
+        ->and(sensitiveLeaksIn($e, ['ACT-TIKTOK-ACCESS', 'RFT-TIKTOK-REFRESH']))->toBe([]);
+})->with(['INSERT', 'UPDATE']);
+
+it('keeps the LinkedIn tokens out of the trace of a failed database write', function () {
+    Http::fake(['api.linkedin.com/*' => Http::response(['elements' => []])]);
+    sensitiveFailTokenWrite('member-1');
+
+    $e = sensitiveThrown(fn () => app(StoreLinkedInOrganizations::class)->handle(
+        accessToken: 'AQV-LINKEDIN-MEMBER',
+        memberId: 'member-1',
+        refreshToken: 'AQW-LINKEDIN-REFRESH',
+    ));
+
+    expect($e)->toBeInstanceOf(QueryException::class)
         ->and(sensitiveLeaksIn($e, ['AQV-LINKEDIN-MEMBER', 'AQW-LINKEDIN-REFRESH']))->toBe([]);
 });
 

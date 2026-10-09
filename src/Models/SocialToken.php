@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -156,6 +157,39 @@ class SocialToken extends Model
                     ->orWhere(fn ($none) => $none
                         ->whereNull("{$accounts}.ownable_type")
                         ->whereNull("{$tokens}.ownable_type")))));
+    }
+
+    // Persistence -------------------------------------------------------------
+
+    /**
+     * Store a credential's tokens on the row identified by $keys, created when
+     * missing: updateOrCreate() without handing Eloquent the plaintext. Its
+     * query frames (updateOrCreate, firstOrCreate, createOrFirst, create) would
+     * record the tokens in the trace of a failed write (connection lost,
+     * deadlock, disk error), where an error tracker collects them. Here the
+     * encrypted cast applies in forceFill(), which has returned before the
+     * write starts, so those frames only ever see ciphertext.
+     *
+     * A row another request created under the same keys meanwhile is updated
+     * instead, as createOrFirst() would.
+     *
+     * @param  array<string, mixed>  $keys
+     * @param  array<string, mixed>  $values
+     */
+    public static function persistCredential(array $keys, #[\SensitiveParameter] array $values): static
+    {
+        $token = static::query()->firstOrNew($keys)->forceFill($values);
+
+        try {
+            // A savepoint inside the caller's transaction: on PostgreSQL a failed
+            // insert would otherwise abort it, and the lookup below with it.
+            static::query()->withSavepointIfNeeded(fn () => $token->save());
+        } catch (UniqueConstraintViolationException $e) {
+            $token = static::query()->useWritePdo()->where($keys)->first() ?? throw $e;
+            $token->forceFill($values)->save();
+        }
+
+        return $token;
     }
 
     // Scopes ------------------------------------------------------------------

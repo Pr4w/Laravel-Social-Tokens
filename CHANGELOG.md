@@ -8,17 +8,25 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 **Breaking:** see [UPGRADE.md, From 2.x to 3.0](UPGRADE.md#from-2x-to-30).
 
 ### Security
-- **Tokens no longer reach exception traces.** PHP records call arguments in
-  a trace unless `zend.exception_ignore_args` is On (it is Off without a
-  php.ini, as in the official Docker images), and error trackers such as
-  Sentry and Flare collect them. When `StoreFacebookPages`,
+- **No package frame records a token in an exception trace any more.** PHP
+  records call arguments in a trace unless `zend.exception_ignore_args` is On
+  (it is Off without a php.ini, as in the official Docker images), and error
+  trackers such as Sentry and Flare collect them. When `StoreFacebookPages`,
   `StoreInstagramAccounts` or `StoreLinkedInOrganizations` threw (a Graph or
   LinkedIn 5xx while listing Pages or organizations), the trace held the
   extended 60-day Meta user token, or the LinkedIn member and refresh tokens.
   Every parameter that carries a token or a secret is now
   `#[\SensitiveParameter]`, the Socialite user passed to `StoreConnection` and
   `StoreAccountFromSocialite` included: traces show a `SensitiveParameterValue`
-  in its place.
+  in its place. The attribute only covers the package's own frames, so the
+  `Store*` actions also stopped handing plaintext tokens to Eloquent: when
+  storing a connection failed at the database (connection lost, deadlock, disk
+  error), the frames of `updateOrCreate()` and the query methods below it held
+  the user, Page and refresh tokens. The tokens are now encrypted before the
+  write starts (`SocialToken::persistCredential()`, see Added), so those frames
+  only see ciphertext. Frames the package does not control (your own code
+  handling a token, another package) can still record one:
+  `zend.exception_ignore_args=On` in production is the complete fix.
 - **Queued listeners no longer copy whole models into the queue.** The seven
   events lacked `SerializesModels`, so a `ShouldQueue` listener had the event
   PHP-serialised with every attribute and loaded relation: the credential's
@@ -73,9 +81,33 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   own transaction ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
 - `SocialAccount::connectedBy()` is a relation named `connectedBy`, after its
   method (it was named `connected_by`). Code reading the loaded relation by
-  its old name (`getRelation('connected_by')`, `relationLoaded('connected_by')`)
-  must use `connectedBy`; `toArray()` still shows it as `connected_by` (see
-  Fixed).
+  its old name (`getRelation('connected_by')`, `relationLoaded('connected_by')`,
+  `setRelation('connected_by', ...)`) must use `connectedBy`. So must code
+  reading the snake-case property: `$account->connected_by`, which returned the
+  model after `associate()` or `with('connectedBy')`, now returns null (or
+  throws `MissingAttributeException` under
+  `Model::preventAccessingMissingAttributes()`); read `$account->connectedBy`.
+  `toArray()` still shows it as `connected_by` (see Fixed, and
+  [UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
+- `revoke()` fires `CredentialRevoked` and `AccountRevoked` before the
+  provider-side revocation instead of after it, and hands the connector the
+  credential as it was before those events (a listener that wipes the token
+  no longer affects the provider call). A provider revocation that throws is
+  no longer rethrown: it is logged (`[social-tokens] {provider} token
+  revocation failed`, with `provider`, `token_id`, `exception` and a redacted
+  `message`); the X connector's own failure log takes that form too. A
+  revocation listener that throws no longer stops the provider call either:
+  `revoke()` and `disconnect()` still make it, then rethrow the listener's
+  exception (see Fixed, and
+  [UPGRADE](UPGRADE.md#revocation-is-recorded-before-the-provider-call),
+  [If you wrote a connector](UPGRADE.md#if-you-wrote-a-connector)).
+- Graph calls the package makes with a user or Page token now send
+  `appsecret_proof` by default (see Added). Meta accepts it whether or not
+  "Require App Secret" is on, but it only matches tokens issued to the
+  configured app: tokens issued by another Meta app fail
+  `social-tokens:check-static` with "Invalid appsecret_proof" until you set
+  `META_APPSECRET_PROOF=false`
+  ([UPGRADE](UPGRADE.md#meta-calls-carry-appsecret_proof)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -195,7 +227,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `DecryptException` with the credential and every account still active, and
   `disconnect()` throw with the credential still active. The credential and its
   accounts are now revoked first; the provider call follows, and whatever it
-  throws is logged as a warning, never rethrown.
+  throws is logged as a warning, never rethrown. A `CredentialRevoked` or
+  `AccountRevoked` listener that throws (a mail server down, a queued
+  listener whose push fails) no longer skips the provider call: the row was
+  already revoked, so a retried `disconnect()` would never have made it, and
+  the grant stayed valid at the provider.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -226,6 +262,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `appSecretProof($token)` on both connectors signs your own Graph calls.
 - `Support\Settings::flag()`: reads a boolean config value the way the
   package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
+- `SocialToken::persistCredential($keys, $values)`: `updateOrCreate()` for a
+  credential's tokens, which encrypts them before the write so a failed write
+  leaves no plaintext token in the exception trace (see Security). The
+  `Store*` actions use it; use it too if you store credentials yourself.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -245,17 +285,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ("Renewal failed after retries; retrying later") when it backs a credential
   off. Uncatalogued errors are still logged as they occur
   (`log_unknown_errors`).
-- `revoke()` fires `CredentialRevoked` and `AccountRevoked` before the
-  provider-side revocation instead of after it, and hands the connector the
-  credential as it was before those events (a listener that wipes the token
-  no longer affects the provider call). A provider revocation that throws is
-  logged (`[social-tokens] {provider} token revocation failed`, with
-  `provider`, `token_id`, `exception` and a redacted `message`); the X
-  connector's own failure log takes that form too.
-- Graph calls the package makes with a user or Page token now send
-  `appsecret_proof` by default (see Added). Meta accepts it whether or not
-  "Require App Secret" is on, but it only matches tokens issued to the
-  configured app ([UPGRADE](UPGRADE.md#meta-calls-carry-appsecret_proof)).
 - `ProviderConnector::revoke()` is documented as best effort that must not
   throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
   override.

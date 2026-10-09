@@ -114,7 +114,12 @@ What to check:
 `SocialAccount::connectedBy()` is now a relation named `connectedBy`, after
 its method; it was named `connected_by`. If your code reads it by the old name
 (`$account->getRelation('connected_by')`, `relationLoaded('connected_by')`,
-`setRelation('connected_by', ...)`), use `connectedBy`. `$account->connectedBy`,
+`setRelation('connected_by', ...)`), use `connectedBy`. The same goes for the
+snake-case property: `$account->connected_by` returned the connecting model
+after `associate()` or `with('connectedBy')` in 2.x, and now returns null
+without an error (or throws `MissingAttributeException` under
+`Model::preventAccessingMissingAttributes()`). Search your code and views for
+`->connected_by` and read `$account->connectedBy` instead. `$account->connectedBy`,
 `with('connectedBy')` and `toArray()` (key `connected_by`) need no change;
 eager loading now actually avoids the extra query per row.
 
@@ -189,6 +194,23 @@ forms are now normalised instead of failing or being misread:
   codes, the HTTP status and the response's keys, never the body. Correct the
   comment in your copy so nobody adds the body back.
 
+### Revocation is recorded before the provider call
+
+`revoke()`, and `disconnect()` when it removes a credential's last connected
+account, now revoke the credential and its accounts locally first, firing
+`CredentialRevoked` and `AccountRevoked`, and only then ask the provider to
+invalidate the token.
+
+- If your app caught an exception from `revoke()` or `disconnect()` to tell the
+  user that the provider-side revocation failed, it no longer gets one: the
+  failure is logged as a warning, `[social-tokens] {provider} token revocation
+  failed`, and the credential is revoked locally all the same. Alert on that
+  log line if you need to know.
+- Your revocation listeners now run before the provider call. An exception one
+  of them throws still reaches the caller, but only after the provider call:
+  the revocation has happened by then, so do not report the disconnect as
+  failed or undo anything on the strength of it.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret
@@ -206,7 +228,9 @@ forms are now normalised instead of failing or being misread:
 - Your connector's `revoke()` now runs after `CredentialRevoked` and
   `AccountRevoked` have fired, on a copy of the credential taken before them,
   and the stored status is already `revoked`. Do not rely on the status
-  being active there.
+  being active there. It runs even when one of those listeners threw; the
+  listener's exception then reaches the caller of `revoke()` or
+  `disconnect()` after your connector returns.
 
 ## From 1.x to 2.0
 

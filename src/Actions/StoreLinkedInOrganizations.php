@@ -91,7 +91,7 @@ class StoreLinkedInOrganizations
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
 
         // The shared renewable member credential every organization posts with.
-        $credential = SocialToken::query()->updateOrCreate(
+        $credential = SocialToken::persistCredential(
             ['provider' => 'linkedin', 'provider_holder_id' => $memberId] + SocialAccount::ownerKey($owner),
             [
                 'access_token' => $accessToken,
