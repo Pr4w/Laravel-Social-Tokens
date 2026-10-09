@@ -1052,7 +1052,9 @@ SocialAccount::factory()->linkedInOrganization($memberId)->create();            
 // Shape the credential made with the account with SocialToken::factory()'s states,
 SocialAccount::factory()->credential(fn ($credential) => $credential->expired())->create();
 // or share one: several Instagram accounts of one Facebook user.
-SocialAccount::factory()->count(2)->forProvider('instagram')->for($metaUserCredential, 'credential')->create();
+$metaUserCredential = SocialToken::factory()->forProvider('facebook', $facebookUserId)->withoutRefreshToken()->create();
+SocialAccount::factory()->count(2)->forProvider('instagram')->heldBy($facebookUserId)
+    ->for($metaUserCredential, 'credential')->create();
 ```
 
 Account states: `forProvider()`, `ownedBy()`, `connectedBy()`, `heldBy()`,
