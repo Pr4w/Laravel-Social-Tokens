@@ -58,11 +58,20 @@ files (existing files are left alone).
   nullable timestamps to `social_tokens`, `data_access_expires_at` and
   `data_access_warned_at` (see
   [Meta data access](#meta-data-access-and-tokens-that-never-expire)). It can
-  be run again after a failure. **Run it with the deploy:**
-  `social-tokens:dispatch-renewals` reads these columns. On MySQL and
-  PostgreSQL, until it has run, every dispatcher run still dispatches the
-  renewals, then reports the failed data access check ("Could not check the
-  data access deadlines") and exits with a failure code.
+  be run again after a failure. **Run it before, or together with, the code
+  deploy:** the Meta connectors write these columns and
+  `social-tokens:dispatch-renewals` reads them. Until it has run:
+  - every Facebook and Instagram (Facebook Login) connection throws a
+    `QueryException` (unknown column `data_access_expires_at`);
+  - the renewal of a Meta user credential fails whenever Meta reports the
+    deadline, as it usually does, and is retried;
+  - each dispatcher run still dispatches all the renewals, then reports the
+    failed data access check ("Could not check the data access deadlines")
+    and exits with a failure code. On SQLite the check does not fail: it
+    silently finds nothing.
+
+  The other providers, Instagram Login and Threads included, keep connecting
+  and renewing.
 
 The two 000006 migrations are named to run before
 `2025_01_01_000007_scope_identity_to_owner`, which needs them when you come

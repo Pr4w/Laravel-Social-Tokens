@@ -194,10 +194,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   Fixed, and
   [UPGRADE](UPGRADE.md#meta-data-access-and-tokens-that-never-expire)).
 - Migration `2025_01_01_000009_add_data_access_expiry_to_social_tokens` is
-  required: `social-tokens:dispatch-renewals` reads its columns. On MySQL and
-  PostgreSQL, until it has run, each dispatcher run still dispatches the
-  renewals, then reports the failed data access check and exits with a
-  failure code ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
+  required: the Meta connectors write its columns and
+  `social-tokens:dispatch-renewals` reads them. Until it has run, Facebook
+  and Instagram (Facebook Login) connections throw a `QueryException`
+  (unknown column `data_access_expires_at`), and the renewal of a Meta user
+  credential fails and is retried. Other providers keep connecting and
+  renewing. Each dispatcher run still dispatches all renewals, then reports
+  the failed data access check and exits with a failure code (on SQLite the
+  check silently finds nothing). Run the migration before, or together with,
+  the code deploy ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
 - `InstagramConnector`'s reason for an `fb_exchange_token` reply without a
   token reads "Malformed token extension response." (it was "Malformed
   response, no access_token."; see Changed, and

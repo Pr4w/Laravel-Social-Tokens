@@ -78,9 +78,9 @@ class DispatchDueRenewals extends Command
             $this->warn("{$deferred} renewal(s) failed for now and will be retried later.");
         }
 
-        // After the renewals, and guarded: a failing scan (on MySQL or
-        // PostgreSQL its columns do not exist until migration 000009 has run)
-        // must not cost any provider its renewals.
+        // After the renewals, and guarded: a failing scan (its columns do not
+        // exist until migration 000009 has run) must not cost any provider
+        // its renewals.
         try {
             $this->warnDataAccessExpiring();
             $deadlinesChecked = true;
