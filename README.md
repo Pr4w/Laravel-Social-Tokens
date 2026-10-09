@@ -160,7 +160,10 @@ via its `credentials` key. Set a connector's `driver` to `null` to disable it:
 new connections for that provider are then refused (`InvalidArgumentException`),
 the dispatcher skips its existing credentials with a warning, and once one
 expires `validAccessTokenFor()` throws a transient `NeedsReconnectException`.
-Every provider you connect through the package needs a connector.
+A `driver` naming a class that does not exist or does not implement
+`ProviderConnector` is handled the same way, and logged as an error so the
+typo does not go unnoticed. Every provider you connect through the package
+needs a connector.
 
 TikTok and Threads aren't built into `laravel/socialite` itself. Install their
 drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.

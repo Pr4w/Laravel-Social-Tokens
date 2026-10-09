@@ -60,6 +60,15 @@ forms are now normalised instead of failing or being misread:
 - `http.timeout` and `http.connect_timeout` keep fractional seconds (2.x cut
   `2.5` to `2`).
 - `check_static_breaker.min_checked` below 1 counts as 1.
+- A connector `driver` that names a missing class, or a class that does not
+  implement `ProviderConnector`, now counts as no connector, like
+  `driver => null`: the dispatcher skips its credentials, `disconnect()` and
+  `revoke()` revoke locally without calling the provider, and
+  `validAccessTokenFor()` throws a transient `NeedsReconnectException`. 2.x
+  threw `InvalidArgumentException` from all of these. Connecting still throws.
+  The package logs `The connector driver for provider [...] does not name a
+  ProviderConnector class` once per process: search your log for it after
+  deploying.
 
 ## From 1.x to 2.0
 

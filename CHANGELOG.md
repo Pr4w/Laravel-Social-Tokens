@@ -97,6 +97,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - Boolean settings written as strings are read as booleans:
   `'log_unknown_errors' => 'false'` or `'check_renewable' => 'false'` in a
   published config used to count as true.
+- A connector `driver` naming a class that does not exist (a renamed custom
+  connector) or does not implement `ProviderConnector` passed every "no
+  connector" guard, which then threw `InvalidArgumentException`:
+  `disconnect()` / `revoke()` failed after revoking the account,
+  `validAccessTokenFor()` threw it instead of the documented transient
+  `NeedsReconnectException`, and the dispatcher kept queueing jobs that failed.
+  `ConnectorRegistry::has()` and `configured()` now mean "resolvable", so such
+  a provider is handled like `driver => null`, with one error log per process.
+  Connecting still throws.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
