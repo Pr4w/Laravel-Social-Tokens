@@ -51,8 +51,10 @@ interface ProviderConnector
     /**
      * Revoke the credential on the provider side, if supported. Best effort:
      * it must not throw. The package has already revoked the credential
-     * locally when it calls this, and logs whatever escapes. Read the token
-     * inside the try block too: it decrypts, and fails after an APP_KEY change.
+     * locally when it calls this, erasing the stored tokens, and hands over a
+     * copy taken before: read the tokens from $token, never from the
+     * database. It logs whatever escapes. Read the token inside the try block
+     * too: it decrypts, and fails after an APP_KEY change.
      */
     public function revoke(SocialToken $token): void;
 }
