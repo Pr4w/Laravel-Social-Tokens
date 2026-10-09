@@ -519,8 +519,32 @@ credential and delete the `organizations` one, then roll back.
 If you call `StoreLinkedInOrganizations::handle()` again with the stored
 member token to pick up new Pages, leave `expiresAt` out (or pass the stored
 `$credential->expires_at`): the token's expiry, schedule and issue date are
-now kept, so a warning already sent is not sent again. Do not pass a new `now()->addDays(60)` for a token you did not just
-receive: it moves the expiry warning past the token's real end.
+now kept, so a warning already sent is not sent again. Do not pass a new
+`now()->addDays(60)` for a token you did not just receive: it moves the
+expiry warning past the token's real end.
+
+Read that token from the organizations' credential. A 2.x lookup by member id
+and owner alone can now return the personal profile's credential (see "LinkedIn
+profiles and organizations have separate credentials" above), whose token
+cannot post as the organizations: passed here, it would be taken for a new
+token and replace theirs, with no expiry (without a refresh token, that
+credential would then never be warned about before it dies).
+
+```php
+// 2.x
+$credential = SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)->first();
+
+// 3.0
+$credential = $organizationAccount->credential; // any of the member's organization rows, or:
+$credential = SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
+    ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first();
+
+app(StoreLinkedInOrganizations::class)->handle(
+    accessToken: $credential->access_token,
+    memberId: $memberId,
+    owner: $owner,
+);
+```
 
 2.x erased the expiry of a credential re-synced without `expiresAt`. To find
 those rows (no expiry and no schedule, so only `check-static` notices them

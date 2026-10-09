@@ -404,10 +404,13 @@ class SocialTokens
 
     /**
      * Disconnect ONE account. Accounts sharing its credential (the other
-     * Instagram accounts of the same Facebook user, a LinkedIn member's profile
-     * and organizations) keep posting; the credential itself is revoked, at the
+     * Instagram accounts of the same Facebook user, the other organizations of
+     * a LinkedIn member) keep posting; the credential itself is revoked, at the
      * provider too, only when its last connected account goes. "Connected" means
      * not revoked: a sibling flagged needs_reconnect keeps the credential alive.
+     * A LinkedIn member's personal profile has its own credential, apart from
+     * the organizations' (purpose 'organizations'), so disconnecting it revokes
+     * that one at once, and the organizations keep theirs.
      *
      * An AccountRevoked listener that throws does not stop the credential's
      * revocation: the account row is revoked by then, so a retried disconnect()

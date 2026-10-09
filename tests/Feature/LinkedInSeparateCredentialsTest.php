@@ -149,3 +149,64 @@ it('still keeps a Meta user credential alive through the Pages that name its hol
 
     expect(SocialToken::query()->inUse()->whereKey($user->getKey())->exists())->toBeTrue();
 });
+
+it('keeps the profile\'s refresh token and its expiry when the profile is reconnected without them', function () {
+    $refreshExpiresAt = now()->addDays(365)->startOfSecond()->toImmutable();
+
+    app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+        'id' => 'member-1',
+        'token' => 'profile-token',
+        'refreshToken' => 'profile-refresh',
+    ]), $this->owner, refreshExpiresAt: $refreshExpiresAt);
+
+    $personal = app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+        'id' => 'member-1',
+        'token' => 'profile-token-2',
+    ]), $this->owner);
+
+    $credential = SocialToken::query()->forPurpose()->sole();
+
+    expect($personal->social_token_id)->toBe($credential->getKey())
+        ->and($credential->access_token)->toBe('profile-token-2')
+        ->and($credential->refresh_token)->toBe('profile-refresh')
+        ->and($credential->refresh_expires_at?->equalTo($refreshExpiresAt))->toBeTrue();
+});
+
+it('never gives the profile the organizations\' refresh token', function () {
+    app(StoreLinkedInOrganizations::class)->handle(
+        accessToken: 'org-token',
+        memberId: 'member-1',
+        owner: $this->owner,
+        refreshToken: 'org-refresh',
+        expiresAt: now()->addDays(60),
+        refreshExpiresAt: now()->addDays(365),
+    );
+
+    $personal = app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+        'id' => 'member-1',
+        'token' => 'profile-token',
+    ]), $this->owner);
+
+    expect($personal->credential->purpose)->toBe(SocialToken::DEFAULT_PURPOSE)
+        ->and($personal->credential->refresh_token)->toBeNull()
+        ->and($personal->credential->refresh_expires_at)->toBeNull();
+});
+
+it('never gives the organizations the profile\'s refresh token', function () {
+    app(StoreAccountFromSocialite::class)->handle('linkedin', socialiteUser([
+        'id' => 'member-1',
+        'token' => 'profile-token',
+        'refreshToken' => 'profile-refresh',
+    ]), $this->owner, refreshExpiresAt: now()->addDays(365));
+
+    $organization = app(StoreLinkedInOrganizations::class)->handle(
+        accessToken: 'org-token',
+        memberId: 'member-1',
+        owner: $this->owner,
+        expiresAt: now()->addDays(60),
+    )->sole();
+
+    expect($organization->credential->purpose)->toBe(StoreLinkedInOrganizations::PURPOSE)
+        ->and($organization->credential->refresh_token)->toBeNull()
+        ->and($organization->credential->refresh_expires_at)->toBeNull();
+});

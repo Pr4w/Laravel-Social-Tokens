@@ -335,9 +335,27 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
 ```
 
 To re-sync the list later (to pick up new Pages), call `handle()` again with the
-stored member token (`accessToken: $credential->access_token`) and no
-`expiresAt`: the token's expiry, its renewal schedule and its issue date are
-kept. Pass `expiresAt` whenever the token is new.
+member token stored on the organizations' credential and no `expiresAt`: the
+token's expiry, its renewal schedule and its issue date are kept. Pass
+`expiresAt` whenever the token is new.
+
+```php
+$credential = $organizationAccount->credential; // any of the member's organization rows, or:
+$credential = SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
+    ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first();
+
+app(StoreLinkedInOrganizations::class)->handle(
+    accessToken: $credential->access_token,
+    memberId: $memberId,
+    owner: $owner,
+);
+```
+
+Take it from that credential, not from a lookup by member id alone: a member
+who also connected their profile has a second credential (see below), whose
+token cannot post as the organizations. Passed here, it would be taken for a
+new token and replace theirs, with no expiry: without a refresh token, that
+credential would then never be warned about before it dies.
 
 Every organization posts with the same member token, so each row mirrors it (the
 organization URN is stored in `profile` for posting). Only organizations where
