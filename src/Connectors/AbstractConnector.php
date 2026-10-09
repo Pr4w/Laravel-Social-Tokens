@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
 
 abstract class AbstractConnector implements ProviderConnector
@@ -89,8 +90,8 @@ abstract class AbstractConnector implements ProviderConnector
      */
     protected function http(): PendingRequest
     {
-        return Http::timeout((int) config('social-tokens.http.timeout', 15))
-            ->connectTimeout((int) config('social-tokens.http.connect_timeout', 5));
+        return Http::timeout(Settings::httpTimeout())
+            ->connectTimeout(Settings::connectTimeout());
     }
 
     /**

@@ -56,7 +56,7 @@ return [
     | Safety breaker for that check: when at least `min_checked` credentials were
     | checked and more than `max_terminal_ratio` of them came back rejected, the
     | run treats it as a provider-side incident, flags nothing and logs a
-    | critical alert instead.
+    | critical alert instead. A `min_checked` below 1 counts as 1.
     */
     'check_static_breaker' => ['min_checked' => 10, 'max_terminal_ratio' => 0.2],
 
@@ -102,6 +102,11 @@ return [
     |--------------------------------------------------------------------------
     | Job retry behaviour
     |--------------------------------------------------------------------------
+    |
+    | "backoff" is in seconds: one value (60) or one per retry, the last one
+    | repeating ([60, 300, 900]). The sync queue runs each job once, inline,
+    | and applies neither "tries" nor "backoff": run a real queue worker.
+    |
     */
     'queue' => [
         'connection' => env('SOCIAL_TOKENS_QUEUE_CONNECTION'),

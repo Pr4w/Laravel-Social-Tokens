@@ -18,6 +18,7 @@ use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Events\CredentialRevoked;
 use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 
 /**
  * The renewable credential. One credential can back many accounts (a Meta user
@@ -306,7 +307,7 @@ class SocialToken extends Model
             $this->expires_at = null;
             $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at) ?? now()->add($connector->leadTime());
 
-            if (config('social-tokens.log_unknown_errors', true)) {
+            if (Settings::logUnknownErrors()) {
                 Log::warning('[social-tokens] Renewal returned no expiry', [
                     'provider' => $this->provider,
                     'token_id' => $this->getKey(),

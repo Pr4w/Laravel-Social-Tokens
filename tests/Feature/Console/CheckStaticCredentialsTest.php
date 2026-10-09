@@ -73,3 +73,26 @@ it('only checks active static credentials that back an account, on providers tha
 
     Http::assertNothingSent();
 });
+
+it('completes when the breaker minimum is 0 and nothing was checked', function (int $minChecked) {
+    config(['social-tokens.check_static_breaker' => ['min_checked' => $minChecked, 'max_terminal_ratio' => 0.2]]);
+    Http::fake();
+
+    staticCredential('fake'); // a connector that cannot check: nothing is checked
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Checked 0 static credential(s), flagged 0.')
+        ->assertSuccessful();
+})->with(['zero' => [0], 'negative' => [-1]]);
+
+it('still applies the breaker when the minimum is 0', function () {
+    config(['social-tokens.check_static_breaker' => ['min_checked' => 0, 'max_terminal_ratio' => 0.2]]);
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['error' => [
+        'type' => 'OAuthException', 'code' => 190, 'error_subcode' => 460, 'message' => 'Password changed.',
+    ]], 400)]);
+    $token = staticCredential();
+
+    $this->artisan('social-tokens:check-static')->assertFailed();
+
+    expect($token->fresh()->status)->toBe(AccountStatus::Active);
+});

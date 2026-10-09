@@ -86,6 +86,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   and the README Install section says to call `Schema::morphUsingUuids()` /
   `morphUsingUlids()`, or to declare the accounts' owner columns as uuid or
   ulid, before migrating.
+- A published config with a single `queue.backoff` value (`'backoff' => 60`,
+  a form every Laravel job accepts) made each `social-tokens:dispatch-renewals`
+  run throw a `TypeError` on the first due credential, so no renewal was ever
+  queued again. The backoff now takes one value, a list, or a comma-separated
+  string.
+- `social-tokens:check-static` crashed with `DivisionByZeroError` when
+  `check_static_breaker.min_checked` was 0 (or negative) and the run checked
+  no credential. A minimum below 1 now counts as 1.
+- Boolean settings written as strings are read as booleans:
+  `'log_unknown_errors' => 'false'` or `'check_renewable' => 'false'` in a
+  published config used to count as true.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -112,6 +123,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   are known transient failures: still retried, no longer logged as uncatalogued.
 - OAuth token-endpoint failures carry the HTTP `status` in their context, and
   terminal ones carry `error` / `error_description` too.
+- Config values are read and normalised in one place, `Support\Settings`:
+  numeric strings work for `queue.tries`, the HTTP timeouts and the breaker,
+  and the HTTP timeouts keep fractional seconds (`'connect_timeout' => 2.5`
+  used to be cut to 2).
 
 ## [2.0.0]
 

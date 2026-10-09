@@ -10,6 +10,7 @@ use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
 
 /**
@@ -52,7 +53,7 @@ class CheckStaticCredentials extends Command
         /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int, kind: string}> $terminal */
         $terminal = [];
 
-        $checkRenewable = (bool) config('social-tokens.check_renewable', false);
+        $checkRenewable = Settings::checkRenewable();
 
         // Phase 1: ask the provider about every credential, writing no verdict.
         SocialToken::query()
@@ -113,7 +114,7 @@ class CheckStaticCredentials extends Command
                         'strikes' => $token->failed_checks + 1,
                         'kind' => $kind,
                     ];
-                } elseif ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
+                } elseif ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
                         'provider' => $token->provider,
                         'token_id' => $token->getKey(),
@@ -129,11 +130,9 @@ class CheckStaticCredentials extends Command
 
         // Phase 2: too many rejections at once is the provider's incident, not
         // every user's: flag nothing and alert the operator.
-        $breaker = (array) config('social-tokens.check_static_breaker', []);
-        $minChecked = (int) ($breaker['min_checked'] ?? 10);
-        $maxRatio = (float) ($breaker['max_terminal_ratio'] ?? 0.2);
+        ['min_checked' => $minChecked, 'max_terminal_ratio' => $maxRatio] = Settings::staticCheckBreaker();
 
-        if ($checked >= $minChecked && count($terminal) / $checked > $maxRatio) {
+        if ($checked > 0 && $checked >= $minChecked && count($terminal) / $checked > $maxRatio) {
             Log::critical('[social-tokens] check-static aborted: too many credentials rejected at once', [
                 'checked' => $checked,
                 'terminal' => count($terminal),

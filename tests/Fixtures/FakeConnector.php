@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Tests\Fixtures;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -16,6 +17,14 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 class FakeConnector extends AbstractConnector
 {
     public static ?RenewalResult $nextResult = null;
+
+    /**
+     * Per-credential outcome, when a test needs different results for
+     * different credentials. Wins over $nextResult.
+     *
+     * @var (Closure(SocialToken): RenewalResult)|null
+     */
+    public static ?Closure $resultUsing = null;
 
     public static int $renewCalls = 0;
 
@@ -41,6 +50,10 @@ class FakeConnector extends AbstractConnector
     {
         static::$renewCalls++;
 
+        if (static::$resultUsing !== null) {
+            return (static::$resultUsing)($token);
+        }
+
         return static::$nextResult
             ?? RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
     }
@@ -58,6 +71,7 @@ class FakeConnector extends AbstractConnector
     public static function reset(): void
     {
         static::$nextResult = null;
+        static::$resultUsing = null;
         static::$renewCalls = 0;
         static::$strategy = RenewalStrategy::RotatingRefreshToken;
         static::$lead = null;

@@ -18,6 +18,7 @@ use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 use RuntimeException;
 use Throwable;
 
@@ -64,7 +65,7 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         $span = 0;
 
         for ($attempt = 1; $attempt < $this->tries(); $attempt++) {
-            $span += (int) ($backoff[$attempt - 1] ?? (end($backoff) ?: 0));
+            $span += $backoff[$attempt - 1] ?? (end($backoff) ?: 0);
         }
 
         return $span + 300; // margin for the tries themselves (10s lock wait + HTTP timeouts)
@@ -72,15 +73,15 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
 
     public function tries(): int
     {
-        return (int) config('social-tokens.queue.tries', 4);
+        return Settings::tries();
     }
 
     /**
-     * @return array<int, int>
+     * @return list<int>
      */
     public function backoff(): array
     {
-        return config('social-tokens.queue.backoff', [60, 300, 900]);
+        return Settings::backoff();
     }
 
     public function handle(SocialTokens $tokens, ConnectorRegistry $registry): void

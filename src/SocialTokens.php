@@ -16,6 +16,7 @@ use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 
 /**
  * The single door the publishing layer uses. It knows nothing about refresh
@@ -100,7 +101,7 @@ class SocialTokens
                     ]);
                 }
 
-                if ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
+                if ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued renewal error', [
                         'provider' => $token->provider,
                         'token_id' => $token->getKey(),
@@ -310,7 +311,7 @@ class SocialTokens
             $result = $connector->checkCredential($token);
 
             if ($result->outcome !== RenewalOutcome::Terminal) {
-                if ($result->unknown && config('social-tokens.log_unknown_errors', true)) {
+                if ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
                         'provider' => $token->provider,
                         'token_id' => $token->getKey(),

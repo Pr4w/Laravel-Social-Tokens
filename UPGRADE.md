@@ -45,6 +45,22 @@ Both are named to run before `2025_01_01_000007_scope_identity_to_owner`, which
 needs them when you come from 1.x. On a 2.x install, which already ran 000007,
 they simply run on their own.
 
+### Check your published config
+
+No change is needed for a config that kept the shipped forms. Values in other
+forms are now normalised instead of failing or being misread:
+
+- `queue.backoff` may be one value (`60`), a list, or a comma-separated string.
+  A single value used to stop every dispatcher run with a `TypeError`.
+- Boolean settings written as strings are read as booleans. If your published
+  `config/social-tokens.php` holds `'log_unknown_errors' => 'false'` or
+  `'check_renewable' => 'false'` (a literal string, not `env()`), 2.x treated
+  it as true: uncatalogued errors were logged, renewable credentials were
+  checked. 3.0 turns them off. Write `true` to keep the 2.x behaviour.
+- `http.timeout` and `http.connect_timeout` keep fractional seconds (2.x cut
+  `2.5` to `2`).
+- `check_static_breaker.min_checked` below 1 counts as 1.
+
 ## From 1.x to 2.0
 
 2.0 scopes identity to the **owner** you pass when connecting. An account is
