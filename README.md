@@ -130,12 +130,22 @@ external user), revokes its accounts, deletes both and returns the deleted
 accounts. Deal with your own rows that point at those accounts first.
 
 ```php
-static::deleting(fn (Workspace $workspace) => app(SocialTokens::class)->forgetOwner($workspace));
+static::deleting(function (Workspace $workspace): void {
+    app(SocialTokens::class)->forgetOwner($workspace);
+});
 // with SoftDeletes, use forceDeleting: a restored workspace keeps its connections
 ```
 
-`CredentialRevoked` and `AccountRevoked` fire before the rows are deleted, so a
-queued listener finds them gone.
+Keep the closure from returning `forgetOwner()`'s result, as an arrow function
+would: Eloquent stops calling the `deleting` listeners at the first one that
+returns something other than null, so the owner's later `deleting` listeners,
+an observer's included, would silently not run.
+
+`CredentialRevoked` and `AccountRevoked` fire before the rows are deleted. A
+queued listener of either event fails with `ModelNotFoundException` (and lands
+in `failed_jobs`), because the row is gone by the time it runs: listen
+synchronously, or keep what the listener needs in an event of your own (see
+[queued listeners](UPGRADE.md#queued-listeners-re-read-the-models)).
 
 The owner is a polymorphic relation (`ownable_type`, `ownable_id`), and both
 columns are part of the unique keys:

@@ -786,7 +786,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   a deleted workspace used to leave its accounts active and its credentials
   renewed for good, each counting as a grant that kept every other owner's
   `revoke()` and `disconnect()` of the same TikTok or Google user from
-  reaching the provider
+  reaching the provider. `CredentialRevoked` and `AccountRevoked` fire before
+  the rows are deleted, so a queued listener of either fails with
+  `ModelNotFoundException`
   ([UPGRADE](UPGRADE.md#tear-down-the-owners-you-delete)).
 - `social-tokens:prune` deletes the credentials nothing will use again once
   they have not changed for `prune_after_days` (30, at least 1; `--days`

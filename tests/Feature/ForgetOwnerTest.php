@@ -121,3 +121,31 @@ it('does nothing for an owner without rows', function () {
         ->and(SocialAccount::query()->count())->toBe(1);
     Http::assertNothingSent();
 });
+
+it('documents a deleting hook that leaves the owner\'s other deleting listeners running', function () {
+    // Model events stop at the first listener that returns something other
+    // than null: an arrow function handing back forgetOwner()'s collection
+    // would skip every later deleting listener, an observer's included.
+    foreach (['README.md', 'UPGRADE.md'] as $doc) {
+        expect((string) file_get_contents(__DIR__.'/../../'.$doc))
+            ->not->toMatch('/deleting\(fn\b[^\n]*forgetOwner/')
+            ->toContain("static::deleting(function (Workspace \$workspace): void {\n")
+            ->toContain('    app(SocialTokens::class)->forgetOwner($workspace);');
+    }
+
+    Owner::deleting(function (Owner $owner): void {
+        app(SocialTokens::class)->forgetOwner($owner);
+    });
+    $later = false;
+    Owner::deleting(function () use (&$later) {
+        $later = true;
+    });
+    forgetOwnerConnect('tiktok', 'tt-1', $this->alice);
+
+    $this->alice->delete();
+
+    expect($later)->toBeTrue()
+        ->and(Owner::query()->find($this->alice->getKey()))->toBeNull()
+        ->and(SocialAccount::query()->count())->toBe(0)
+        ->and(SocialToken::query()->count())->toBe(0);
+});

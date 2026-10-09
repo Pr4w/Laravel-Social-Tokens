@@ -508,9 +508,24 @@ holds without touching other owners' rows.
    {
        // forceDeleting for a model that uses SoftDeletes: a restored
        // workspace keeps its connections.
-       static::deleting(fn (Workspace $workspace) => app(SocialTokens::class)->forgetOwner($workspace));
+       static::deleting(function (Workspace $workspace): void {
+           app(SocialTokens::class)->forgetOwner($workspace);
+       });
    }
    ```
+
+   A block closure that returns nothing, not an arrow function: Eloquent
+   stops calling the `deleting` listeners at the first one that returns
+   something other than null, and `forgetOwner()` returns the deleted
+   accounts, so the workspace's later `deleting` listeners (an observer's
+   included) would be skipped without an error.
+
+   `CredentialRevoked` and `AccountRevoked` fire before the rows are deleted:
+   a queued listener of either fails with `ModelNotFoundException` and lands
+   in `failed_jobs` (see
+   [Queued listeners re-read the models](#queued-listeners-re-read-the-models)).
+   Listen synchronously, or keep what the listener needs in an event of your
+   own.
 
 2. Tear down the owners you deleted before. `forgetOwner()` only needs the
    owner's morph class and key, so an unsaved instance carrying the old id

@@ -572,13 +572,19 @@ class SocialTokens
      * already revoked is not sent to the provider again.
      *
      * CredentialRevoked and AccountRevoked fire once per row that changes,
-     * before the deletion: a queued listener finds the row gone. Every row is
-     * revoked and deleted even when a listener throws; the first exception is
-     * rethrown after.
+     * before the deletion: a queued listener of either fails with
+     * ModelNotFoundException (failed_jobs), the row being deleted by the time
+     * it runs, so listen synchronously or keep what the listener needs in an
+     * event of your own (UPGRADE.md, "Queued listeners re-read the models").
+     * Every row is revoked and deleted even when a listener throws; the first
+     * exception is rethrown after.
      *
      * Call it before the owner is deleted (its `deleting` event, or
      * `forceDeleting` for a soft-deleted one), once your own rows that point
-     * at its accounts are dealt with: the accounts are deleted.
+     * at its accounts are dealt with: the accounts are deleted. From a block
+     * closure that returns nothing: model events stop at the first listener
+     * that returns something other than null, and the collection returned
+     * here would keep the owner's later `deleting` listeners from running.
      *
      * @return EloquentCollection<int, SocialAccount> The accounts deleted, revoked.
      */
