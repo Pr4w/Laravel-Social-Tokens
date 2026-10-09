@@ -235,6 +235,30 @@ SocialToken::where('provider', 'facebook')->where('status', 'active')
     });
 ```
 
+### Instagram without a Facebook Page
+
+3.0 adds the Instagram API with Instagram Login, under the connector key
+`instagram_login` (see the README, "Instagram without a Facebook Page").
+Nothing changes for Instagram accounts connected through a Facebook Page
+(`instagram`). To offer it:
+
+1. If you keep a published `config/social-tokens.php`, add the entry:
+
+   ```php
+   'instagram_login' => [
+       'driver' => \Pr4w\SocialTokens\Connectors\InstagramLoginConnector::class,
+       'graph_version' => env('META_GRAPH_VERSION', \Pr4w\SocialTokens\Connectors\MetaGraphConnector::DEFAULT_GRAPH_VERSION),
+   ],
+   ```
+
+2. Add the Instagram app's id and secret to `config/services.php` as
+   `instagram_login` (or add `'credentials' => 'instagram'` to the entry
+   above if your Socialite driver reads `services.instagram`).
+3. Connect with `StoreConnection::handle('instagram_login', $user)`. The
+   accounts have `provider = 'instagram_login'`: include it wherever you
+   select Instagram accounts, and publish to them through
+   `graph.instagram.com`.
+
 ### Check your published config
 
 No change is needed for a config that kept the shipped forms. Values in other
@@ -659,6 +683,12 @@ revoked, with no warning beforehand.
   being active there. It runs even when one of those listeners threw; the
   listener's exception then reaches the caller of `revoke()` or
   `disconnect()` after your connector returns.
+- If you extend `ThreadsConnector`: it now extends
+  `Connectors\LongLivedTokenConnector`, which holds the refresh, the
+  connect-time exchange and the `/me` check. Override `refreshUrl()`,
+  `exchangeUrl()`, `meUrl()` or `exchangeParameters()` rather than the
+  `REFRESH_URL`, `EXCHANGE_URL` and `ME_URL` constants alone (they are still
+  read through `static::`). `refreshWithToken()` is protected.
 - If you extend `FacebookConnector` or `InstagramConnector`: both now extend
   `Connectors\MetaGraphConnector`, which holds `refreshCredential()`,
   `renewalStrategy()`, `leadTime()`, `appAccessToken()` and `fetchMe()`, and

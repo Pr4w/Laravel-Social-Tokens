@@ -3,6 +3,7 @@
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
+use Pr4w\SocialTokens\Connectors\InstagramLoginConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
@@ -164,6 +165,7 @@ return [
     |
     |   // config/services.php
     |   'facebook' => ['client_id' => env('META_APP_ID'), 'client_secret' => env('META_APP_SECRET')],
+    |   'instagram_login' => ['client_id' => env('INSTAGRAM_APP_ID'), 'client_secret' => env('INSTAGRAM_APP_SECRET')],
     |   'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'), 'client_secret' => env('TIKTOK_CLIENT_SECRET')],
     |   'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'), 'client_secret' => env('GOOGLE_CLIENT_SECRET')],
     |   'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET')],
@@ -195,6 +197,16 @@ return [
             // appsecret_proof, so the Meta app can turn on "Require App
             // Secret". Needs the secret of the app that issued the tokens.
             'appsecret_proof' => env('META_APPSECRET_PROOF', true),
+        ],
+
+        // Instagram with no Facebook Page: the "Instagram API with Instagram
+        // Login" (graph.instagram.com). One account per connection, renewed
+        // with ig_refresh_token. Uses the Instagram app id and secret, read
+        // from services.instagram_login unless "credentials" names the entry
+        // your Socialite driver reads.
+        'instagram_login' => [
+            'driver' => InstagramLoginConnector::class,
+            'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
         ],
 
         'threads' => [

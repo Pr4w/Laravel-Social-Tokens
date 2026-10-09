@@ -15,11 +15,12 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *  - there is NO refresh token; the long lived token is extended in place via
  *    the fb_exchange_token grant on graph.facebook.com (MetaGraphConnector)
  *
- * The "Instagram API with Instagram Login" (graph.instagram.com,
- * ig_exchange_token and ig_refresh_token) is not this class: swapping the
- * requests here would not do, since StoreConnection sends every connection
- * of this connector to the Facebook Page fan-out and its credentials are
- * renewed under "facebook".
+ * An account with no Facebook Page uses the "Instagram API with Instagram
+ * Login" instead (graph.instagram.com, ig_exchange_token and
+ * ig_refresh_token): InstagramLoginConnector, under its own provider key.
+ * Swapping the requests here would not do, since StoreConnection sends every
+ * connection of this connector to the Facebook Page fan-out and its
+ * credentials are renewed under "facebook".
  */
 class InstagramConnector extends MetaGraphConnector
 {

@@ -12,7 +12,9 @@ use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
+use Pr4w\SocialTokens\Connectors\InstagramLoginConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
+use Pr4w\SocialTokens\Connectors\LongLivedTokenConnector;
 use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
 use Pr4w\SocialTokens\Connectors\OAuth2Connector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
@@ -248,6 +250,10 @@ it('marks every parameter carrying a token or a secret as sensitive', function (
     [MetaGraphConnector::class, 'exchangeUserToken', 'userToken'],
     [ThreadsConnector::class, 'exchangeForLongLived', 'accessToken'],
     [ThreadsConnector::class, 'refreshWithToken', 'accessToken'],
+    [ThreadsConnector::class, 'exchangeParameters', 'accessToken'],
+    [LongLivedTokenConnector::class, 'exchangeParameters', 'accessToken'],
+    [LongLivedTokenConnector::class, 'tokenCall', 'query'],
+    [InstagramLoginConnector::class, 'exchangeForLongLived', 'accessToken'],
     [LinkedInConnector::class, 'fetchOrganizations', 'accessToken'],
     [SocialToken::class, 'markNeedsReconnectOnce', 'checkedToken'],
     [SocialTokens::class, 'reportRejected', 'rejectedToken'],

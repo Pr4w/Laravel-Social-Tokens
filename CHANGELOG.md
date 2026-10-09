@@ -460,6 +460,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   an active account posts with (the Instagram accounts). It is a warning only:
   Meta does not say which calls a lapse blocks for an app with business
   permissions, so the credential is not flagged.
+- The `InstagramConnector` docblock said the Instagram API with Instagram
+  Login only needed its renewal request swapped. It did not work:
+  `StoreConnection` sends every `InstagramConnector` to the Facebook Page
+  fan-out, and its credentials are renewed under `facebook`, so an Instagram
+  Login token went to `graph.facebook.com` and was refused. That path is now
+  its own connector (see Added).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -543,6 +549,20 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `withTokenLifetime($result)`, and
   `FacebookConnector::grantedScopesFrom($data, $accountIds)`, which
   `grantedScopesByAccount()` now uses.
+- **Instagram without a Facebook Page**, through the Instagram API with
+  Instagram Login: `InstagramLoginConnector`, registered as `instagram_login`
+  (its own credentials, `services.instagram_login`: the Instagram app id and
+  secret). `StoreConnection` stores one account per connection, never the
+  Facebook Page fan-out; the 1-hour token is exchanged at connect
+  (`ig_exchange_token`), and the 60-day token is extended a week ahead
+  (`ig_refresh_token`, once it is 24 hours old) and checked on
+  `graph.instagram.com/me`. A creator or business account not linked to a
+  Page could not be connected before.
+- `Connectors\LongLivedTokenConnector`, the base of `ThreadsConnector` and
+  `InstagramLoginConnector`: a Meta API whose long-lived token extends itself
+  with a `refresh_access_token` call, guarded by the 24-hour minimum age, with
+  a connect-time exchange and a `/me` check. A product declares its URLs,
+  grant names and label.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -574,6 +594,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - A Meta user credential's renewal makes a second call, `debug_token` on the
   new token, to read its lifetime (see Fixed). A failure of that call leaves
   the renewal as it was, the stored data access deadline included.
+- `ThreadsConnector` extends `LongLivedTokenConnector`. Its requests and
+  failure reasons are unchanged; `refreshWithToken()` is protected instead of
+  private, and an `expires_in` that is not a number means an unknown expiry.
 
 ## [2.0.0]
 

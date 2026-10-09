@@ -2,12 +2,6 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
-use Carbon\CarbonInterval;
-use Pr4w\SocialTokens\Contracts\ChecksCredential;
-use Pr4w\SocialTokens\Enums\RenewalStrategy;
-use Pr4w\SocialTokens\Models\SocialToken;
-use Pr4w\SocialTokens\Support\RenewalResult;
-
 /**
  * Threads publishing via the Threads API.
  *
@@ -17,10 +11,11 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *  - no refresh token; the long lived token is extended via th_refresh_token
  *  - extension only works while the token is still valid and at least 24h old
  *
- * Mechanically identical to Instagram's strategy, different host and grant.
- * The refresh call needs only the access token, no client credentials.
+ * Mechanically identical to the Instagram API with Instagram Login
+ * (LongLivedTokenConnector), on graph.threads.net. The refresh call needs
+ * only the access token, no client credentials.
  */
-class ThreadsConnector extends AbstractConnector implements ChecksCredential
+class ThreadsConnector extends LongLivedTokenConnector
 {
     protected const REFRESH_URL = 'https://graph.threads.net/refresh_access_token';
 
@@ -28,139 +23,48 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
 
     protected const ME_URL = 'https://graph.threads.net/v1.0/me';
 
-    public function renewalStrategy(): RenewalStrategy
+    protected function refreshUrl(): string
     {
-        return RenewalStrategy::ExtendLongLived;
+        return static::REFRESH_URL;
     }
 
-    public function leadTime(): CarbonInterval
+    protected function exchangeUrl(): string
     {
-        return CarbonInterval::days(7);
+        return static::EXCHANGE_URL;
     }
 
-    /** th_refresh_token refuses a token less than 24 hours old (Meta docs). */
-    public const MINIMUM_TOKEN_AGE_HOURS = 24;
-
-    public function refreshCredential(SocialToken $token): RenewalResult
+    protected function meUrl(): string
     {
-        // last_renewed_at is when the current token was issued (renewal or
-        // connection). Null means unknown (backfilled or imported rows): keep
-        // trying, as before, rather than guess from updated_at or created_at.
-        if ($token->last_renewed_at !== null
-            && $token->last_renewed_at->greaterThan(now()->subHours(self::MINIMUM_TOKEN_AGE_HOURS))) {
-            return RenewalResult::transientFailure('Threads token is less than 24h old and cannot be refreshed yet.');
-        }
-
-        return $this->refreshWithToken($token->access_token);
+        return static::ME_URL;
     }
 
-    private function refreshWithToken(#[\SensitiveParameter] ?string $accessToken): RenewalResult
+    protected function refreshGrant(): string
     {
-        if (empty($accessToken)) {
-            return RenewalResult::terminalFailure('Missing access token.');
-        }
+        return 'th_refresh_token';
+    }
 
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get(self::REFRESH_URL, [
-            'grant_type' => 'th_refresh_token',
-            'access_token' => $accessToken,
-        ]));
+    protected function exchangeGrant(): string
+    {
+        return 'th_exchange_token';
+    }
 
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        $accessToken = $body['access_token'] ?? null;
-
-        if ($accessToken === null) {
-            return RenewalResult::unknownFailure('Malformed response, no access_token.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $accessToken,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-            refreshToken: null,
-        );
+    protected function label(): string
+    {
+        return 'Threads';
     }
 
     /**
-     * Ask Threads whether the token still works (GET /me), without renewing it.
+     * Threads' exchange has always sent the client id with the secret.
+     *
+     * @return array<string, mixed>
      */
-    public function checkCredential(SocialToken $token): RenewalResult
+    protected function exchangeParameters(#[\SensitiveParameter] string $accessToken): array
     {
-        if (empty($token->access_token)) {
-            return RenewalResult::terminalFailure('Missing access token.', ['definitive' => true]);
-        }
-
-        $accessToken = $token->access_token;
-
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get(self::ME_URL, [
-            'fields' => 'id',
-            'access_token' => $accessToken,
-        ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : [];
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::mapCredentialCheck($body['error']);
-        }
-
-        return isset($body['id'])
-            ? RenewalResult::success(accessToken: $accessToken)
-            : RenewalResult::unknownFailure('Malformed Threads /me response, no id.', ['status' => $response->status()]);
-    }
-
-    /**
-     * Connect-time exchange: swap the short lived token Socialite returns for the
-     * ~60 day long lived one. Uses the th_exchange_token grant (client credentials
-     * required), distinct from the th_refresh_token grant used by renew().
-     */
-    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
-    {
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get(self::EXCHANGE_URL, [
-            'grant_type' => 'th_exchange_token',
+        return [
+            'grant_type' => $this->exchangeGrant(),
             'client_id' => $this->clientId(),
             'client_secret' => $this->clientSecret(),
             'access_token' => $accessToken,
-        ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        $body = $response->json();
-        $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        $token = $body['access_token'] ?? null;
-
-        if ($token === null) {
-            return RenewalResult::unknownFailure('Malformed th_exchange_token response.', [
-                'status' => $response->status(),
-                'keys' => array_keys($body), // never the body: it may carry tokens
-            ]);
-        }
-
-        return RenewalResult::success(
-            accessToken: $token,
-            expiresAt: isset($body['expires_in']) ? now()->addSeconds((int) $body['expires_in']) : null,
-        );
+        ];
     }
 }

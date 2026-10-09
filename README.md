@@ -22,7 +22,7 @@ accounts. Each works on its own; together they cover connect → publish → mea
 
 ## Why
 
-Seven providers across four renewal strategies, and any naive "access token +
+Eight providers across four renewal strategies, and any naive "access token +
 refresh token + cron" design breaks on at least one of them:
 
 | Provider | Access token | Renewal model | Strategy |
@@ -31,7 +31,8 @@ refresh token + cron" design breaks on at least one of them:
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
 | X (Twitter) | 2h | refresh_token grant, single-use refresh token rotates | `RotatingRefreshToken` |
 | Facebook | Page token, no expiry | page token stored static; the shared user token is extended | `ExtendLongLived` |
-| Instagram | 60 days, or no expiry | extend the long lived user token, no refresh token | `ExtendLongLived` |
+| Instagram (through a Facebook Page) | 60 days, or no expiry | extend the long lived user token, no refresh token | `ExtendLongLived` |
+| Instagram (Instagram Login, no Page) | 60 days | extend the long lived token (`ig_refresh_token`), no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
 
@@ -168,6 +169,7 @@ and Facebook share a single Meta app:
 ```php
 // config/services.php
 'facebook' => ['client_id' => env('META_APP_ID'),        'client_secret' => env('META_APP_SECRET'),        'redirect' => env('META_REDIRECT')],
+'instagram_login' => ['client_id' => env('INSTAGRAM_APP_ID'), 'client_secret' => env('INSTAGRAM_APP_SECRET'), 'redirect' => env('INSTAGRAM_REDIRECT')],
 'threads'  => ['client_id' => env('THREADS_CLIENT_ID'),  'client_secret' => env('THREADS_CLIENT_SECRET'),  'redirect' => env('THREADS_REDIRECT')],
 'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'),  'client_secret' => env('TIKTOK_CLIENT_SECRET'),   'redirect' => env('TIKTOK_REDIRECT')],
 'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'),   'client_secret' => env('GOOGLE_CLIENT_SECRET'),   'redirect' => env('GOOGLE_REDIRECT')],
@@ -186,7 +188,7 @@ A `driver` naming a class that does not exist or does not implement
 typo does not go unnoticed. Every provider you connect through the package
 needs a connector.
 
-TikTok and Threads aren't built into `laravel/socialite` itself. Install their
+TikTok, Threads and Instagram Login aren't built into `laravel/socialite` itself. Install their
 drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 `composer require socialiteproviders/tiktok`) and register the listener, so
 `Socialite::driver('tiktok')` resolves. Their credentials still go in the same
@@ -200,8 +202,9 @@ authentication settings allow Read and write. OAuth 1.0a is not supported.
 
 Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
-handles TikTok, Google, X, Instagram, Threads and Facebook, and the LinkedIn
-personal profile (for LinkedIn organizations, see below).
+handles TikTok, Google, X, Instagram (through a Facebook Page, or with Instagram
+Login), Threads and Facebook, and the LinkedIn personal profile (for LinkedIn
+organizations, see below).
 
 Which scopes to request is your app's decision (they drive the consent screen
 and your provider app review), so you supply them at redirect — the package does
@@ -260,6 +263,32 @@ is flagged `needs_reconnect` at its next renewal. The package renews each X
 credential about every 90 minutes, which also keeps its ~6-month refresh token
 alive; with many X accounts, keep X's token-endpoint rate limits in mind.
 
+### Instagram without a Facebook Page
+
+An Instagram professional account (business or creator) that is not linked to
+a Facebook Page connects through the **Instagram API with Instagram Login**,
+under its own connector key, `instagram_login`. The Facebook Login path
+(`instagram`) finds Instagram accounts through the Pages a Facebook user
+manages, so it cannot reach these.
+
+- **Socialite.** Use a driver that completes Business Login for Instagram
+  (`https://www.instagram.com/oauth/authorize`, scopes such as
+  `instagram_business_basic` and `instagram_business_content_publish`), and
+  pass `provider: 'instagram_login'` to `StoreConnection`, whatever the
+  driver's own name. The connector reads the **Instagram** app id and secret
+  (App Dashboard, Instagram > API setup with Instagram login), from
+  `services.instagram_login`; if your driver reads another services entry,
+  point the connector at it with `'credentials' => 'instagram'`.
+- **What is stored.** One account per connection (`provider` `instagram_login`,
+  the Instagram-scoped user id), on its own renewable credential. The 1-hour
+  token Socialite returns is exchanged for the 60-day one
+  (`ig_exchange_token`), which is extended a week before it expires
+  (`ig_refresh_token`, once it is at least 24 hours old). `check-static` with
+  `check_renewable` asks `graph.instagram.com/me` about it.
+- **Publishing.** Call `graph.instagram.com` with the token, not
+  `graph.facebook.com`. Code that picks Instagram accounts by
+  `provider = 'instagram'` must include `instagram_login`.
+
 ### Meta: Require App Secret
 
 Every Graph call the package makes with a user or Page token (`/me`,
@@ -281,13 +310,14 @@ Http::withToken($token)->post("https://graph.facebook.com/v23.0/{$igUserId}/medi
 A proof only matches tokens issued to the configured Meta app. Set
 `META_APPSECRET_PROOF=false` (the `appsecret_proof` option of the `facebook` and
 `instagram` connectors) to stop sending it, for example while tokens issued by
-a former Meta app are still stored. Threads calls (`graph.threads.net`) are not
-signed.
+a former Meta app are still stored. Threads calls (`graph.threads.net`) and
+Instagram Login calls (`graph.instagram.com`) are not signed.
 
 ### What `StoreConnection` handles for you
 
-- **Long-lived tokens.** Threads hands back a short-lived token, which is upgraded
-  to its long-lived (~60 day) form before storing so the row is renewable.
+- **Long-lived tokens.** Threads and Instagram Login hand back a short-lived
+  token, which is upgraded to its long-lived (~60 day) form before storing so
+  the row is renewable.
   LinkedIn, TikTok and Google are already durable and stored as-is. Pass
   `longLived: false` to skip the upgrade.
 - **Instagram & Facebook fan-out.** These publish per Instagram account / per
@@ -757,7 +787,10 @@ For an OAuth 2.0 provider, extend `OAuth2Connector`: declare `tokenUrl()`, the
 `refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
 complete references. A Graph API product on Facebook Login tokens can extend
 `MetaGraphConnector` (the base of `FacebookConnector` and `InstagramConnector`),
-which extends the user token with `fb_exchange_token`. For anything else, extend
+which extends the user token with `fb_exchange_token`; a Meta API whose
+long-lived token extends itself with a `refresh_access_token` call can extend
+`LongLivedTokenConnector` (the base of `ThreadsConnector` and
+`InstagramLoginConnector`). For anything else, extend
 `AbstractConnector` and implement `refreshCredential()`. Register the class under its key in the config: at most 50
 characters, since it is stored in the `provider` columns. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
