@@ -818,6 +818,34 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   (for TikTok and X, the only copy of the rotated refresh token). It exits
   with a failure code when a row kept changing (run it again), and when a
   token decrypts with none of the keys, which it logs and leaves.
+- **Testing helpers for apps** (README, "Testing your app"):
+  - Model factories: `SocialAccount::factory()` makes an active account with
+    a credential of its own that matches it as a connection stores them
+    (provider, holder, owner; a Facebook Page on a never-expiring Page token,
+    an Instagram account on the Meta user credential), and
+    `SocialToken::factory()` a credential alone, scheduled with its
+    provider's lead time. States: `forProvider()`, `ownedBy()`,
+    `connectedBy()`, `heldBy()`, `linkedInOrganization()`, `credential()`,
+    `needsReconnect()`, `revoked()`, `disconnected()` on accounts;
+    `forProvider()`, `ownedBy()`, `forPurpose()`, `dueForRenewal()`,
+    `expired()`, `neverExpiring()`, `withoutRefreshToken()`,
+    `needsReconnect()`, `revoked()` on credentials. They live in
+    `Pr4w\SocialTokens\Database\Factories` and need no Faker.
+  - `Pr4w\SocialTokens\Facades\SocialTokens`, registered as the
+    `SocialTokens` alias. Its `fake()` swaps in `Testing\SocialTokensFake`:
+    the real service against the test database, with the real connectors,
+    whose renewals, provider-side revocations and `reportRejected()` checks
+    are answered without a request (`renewWith()`, `checkWith()`) and
+    recorded (`assertRenewed()`, `assertNotRenewed()`,
+    `assertRevokedAtProvider()`, `assertNotRevokedAtProvider()`,
+    `assertChecked()`, `assertNotChecked()`).
+  - `Testing\FakeConnector`, a connector that makes no request, for a
+    provider key of an app's tests: scripted renewals, connect-time
+    exchange and revocation, and the same assertions.
+- `SocialTokens` reaches the providers through two protected methods,
+  `refreshAtProvider()` (renewals) and `checkAtProvider()` (the check of
+  `reportRejected()`), next to `revokeAtProvider()`, so that a subclass can
+  answer in their place.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors

@@ -17,7 +17,8 @@
     },
     "autoload": {
         "psr-4": {
-            "Pr4w\\SocialTokens\\": "src/"
+            "Pr4w\\SocialTokens\\": "src/",
+            "Pr4w\\SocialTokens\\Database\\Factories\\": "database/factories/"
         }
     },
     "autoload-dev": {
@@ -29,7 +30,10 @@
         "laravel": {
             "providers": [
                 "Pr4w\\SocialTokens\\SocialTokensServiceProvider"
-            ]
+            ],
+            "aliases": {
+                "SocialTokens": "Pr4w\\SocialTokens\\Facades\\SocialTokens"
+            }
         }
     },
     "minimum-stability": "stable",

@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -15,6 +16,7 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
+use Pr4w\SocialTokens\Database\Factories\SocialTokenFactory;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Events\CredentialDataAccessExpiring;
@@ -62,7 +64,8 @@ use Pr4w\SocialTokens\Support\Settings;
  */
 class SocialToken extends Model
 {
-    use TransitionsStatus;
+    /** @use HasFactory<SocialTokenFactory> */
+    use HasFactory, TransitionsStatus;
 
     /** The purpose of a holder's default credential. */
     public const DEFAULT_PURPOSE = '';
@@ -102,6 +105,12 @@ class SocialToken extends Model
     public function getTable()
     {
         return config('social-tokens.tokens_table', 'social_tokens');
+    }
+
+    /** The package's factory: Laravel would look for one in the app's Database\Factories namespace. */
+    protected static function newFactory(): SocialTokenFactory
+    {
+        return SocialTokenFactory::new();
     }
 
     protected static function booted(): void

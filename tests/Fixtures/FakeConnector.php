@@ -13,6 +13,10 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * A connector whose behaviour is driven by static state, so tests can control
  * renewal outcomes, strategy, lead time and the connect-time exchange without
  * any HTTP. Register it under a provider key via config and reset() per test.
+ *
+ * The package's own suite keeps this static variant: its state survives the
+ * tests that rebuild the connector registry. Apps get the shipped,
+ * per-instance one, Pr4w\SocialTokens\Testing\FakeConnector.
  */
 class FakeConnector extends AbstractConnector
 {

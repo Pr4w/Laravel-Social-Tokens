@@ -983,6 +983,95 @@ returns a `RenewalResult` and writes nothing. The lock, the double-check, the jo
 and `validAccessTokenFor()` need the package's tables; `renewCredential()` throws
 for a token that was never saved.
 
+## Testing your app
+
+The package ships factories for its two models, a fake that answers the
+providers' calls, and a connector that makes no request.
+
+**Factories.** `SocialAccount::factory()` makes an active account posting with
+a credential of its own, created with it and matching it as a connection
+stores them: provider (Instagram's under `facebook`), holder, owner.
+`SocialToken::factory()` makes a credential alone.
+
+```php
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
+
+SocialAccount::factory()->forProvider('tiktok')->ownedBy($workspace)->create();
+SocialAccount::factory()->forProvider('instagram')->heldBy($facebookUserId)->create(); // on the Meta user credential
+SocialAccount::factory()->forProvider('facebook')->create();                          // a Page, on its own Page token
+SocialAccount::factory()->linkedInOrganization($memberId)->create();                  // on the organizations' credential
+
+// Shape the credential made with the account with SocialToken::factory()'s states,
+SocialAccount::factory()->credential(fn ($credential) => $credential->expired())->create();
+// or share one: several Instagram accounts of one Facebook user.
+SocialAccount::factory()->count(2)->forProvider('instagram')->for($metaUserCredential, 'credential')->create();
+```
+
+Account states: `forProvider()`, `ownedBy()`, `connectedBy()`, `heldBy()`,
+`linkedInOrganization()`, `credential()`, `needsReconnect()`, `revoked()`,
+`disconnected()`. Credential states: `forProvider()`, `ownedBy()`,
+`forPurpose()`, `dueForRenewal()` (its token still works), `expired()`
+(`validAccessTokenFor()` renews it first), `neverExpiring()`,
+`withoutRefreshToken()`, `needsReconnect()`, `revoked()`. `renew_at` follows the
+expiry and the provider connector's lead time, as at a connection.
+
+**Faking the providers.** After `SocialTokens::fake()`, everything runs as in
+production, against your test database, with the real connectors' strategies
+and lead times and the usual events, except the calls to the providers: a
+renewal succeeds with a new token, a provider-side revocation does nothing,
+and the check `reportRejected()` makes finds the token working, unless told
+otherwise.
+
+```php
+use Pr4w\SocialTokens\Facades\SocialTokens;
+use Pr4w\SocialTokens\Support\RenewalResult;
+
+it('retries the post while TikTok is down', function () {
+    SocialTokens::fake()->renewWith(RenewalResult::transientFailure('Provider returned HTTP 503'));
+
+    $account = SocialAccount::factory()->forProvider('tiktok')
+        ->credential(fn ($credential) => $credential->expired())
+        ->create();
+
+    PublishPost::dispatchSync($post, $account); // asks validAccessTokenFor($account)
+
+    SocialTokens::assertRenewed($account);
+    // ... assert the post is scheduled for a retry
+});
+```
+
+`renewWith()` and `checkWith()` take a `RenewalResult`, or a closure that
+receives the credential, for every provider or for one (`provider: 'tiktok'`,
+the key the credential renews under: `facebook` for Instagram). The
+assertions, for a credential, an account's credential, or any:
+`assertRenewed()` (optionally `times:`), `assertNotRenewed()`,
+`assertRevokedAtProvider()`, `assertNotRevokedAtProvider()`, `assertChecked()`,
+`assertNotChecked()`; `renewals()`, `revocations()` and `checks()` list the
+calls. Call `fake()` before resolving your own classes that take
+`SocialTokens`: those resolved earlier keep the real service. Connecting
+(`StoreConnection` and the `Store*` actions) and `social-tokens:check-static`
+still call the providers: fake those with `Http::fake()`. Outside tests, the
+facade (registered as `SocialTokens`) is the service.
+
+**A connector of your own.** `Pr4w\SocialTokens\Testing\FakeConnector` makes
+no request, for a provider key of your tests. Register it before anything
+resolves the package's services, then script the instance the package uses:
+
+```php
+use Pr4w\SocialTokens\Testing\FakeConnector;
+
+config(['social-tokens.connectors.acme' => ['driver' => FakeConnector::class]]);
+
+app(\Pr4w\SocialTokens\SocialTokens::class)->connector('acme')
+    ->renewWith(RenewalResult::terminalFailure('invalid_grant'));
+```
+
+It also takes `exchangeWith()` (the connect-time long-lived exchange),
+`revokeUsing()`, `withStrategy()` and `withLeadTime()` (or `strategy` and
+`lead_minutes` in its config block), and has the renewal and revocation
+assertions.
+
 ## License
 
 MIT.

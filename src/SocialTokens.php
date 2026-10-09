@@ -158,7 +158,7 @@ class SocialTokens
                     ]);
                 }
 
-                $result = $connector->refreshCredential($token);
+                $result = $this->refreshAtProvider($connector, $token);
 
                 if ($result->clientError) {
                     $this->alertClientRejected($token, $result);
@@ -200,6 +200,16 @@ class SocialTokens
             // the caller can retry, and the in-flight renewal will land.
             return RenewalResult::transientFailure('Could not acquire renewal lock.');
         }
+    }
+
+    /**
+     * The provider call of a renewal, made under the renewal lock: the one
+     * place renewCredential() reaches the provider, so that a test double
+     * (Testing\SocialTokensFake) can answer instead.
+     */
+    protected function refreshAtProvider(ProviderConnector $connector, SocialToken $token): RenewalResult
+    {
+        return $connector->refreshCredential($token);
     }
 
     /**
@@ -823,7 +833,7 @@ class SocialTokens
             return false;
         }
 
-        $result = $connector->checkCredential($token);
+        $result = $this->checkAtProvider($connector, $token);
 
         if ($result->clientError) {
             $this->alertClientRejected($token, $result);
@@ -857,6 +867,16 @@ class SocialTokens
 
         // The provider's reason ("password changed") is the real cause.
         return $token->markNeedsReconnectOnce($result->reason ?? $reason, $checkedToken);
+    }
+
+    /**
+     * The provider call of reportRejected(), asking whether the token still
+     * works: the one place it reaches the provider, so that a test double
+     * (Testing\SocialTokensFake) can answer instead.
+     */
+    protected function checkAtProvider(ChecksCredential $connector, SocialToken $token): RenewalResult
+    {
+        return $connector->checkCredential($token);
     }
 
     /**

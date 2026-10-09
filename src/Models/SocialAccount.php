@@ -4,9 +4,11 @@ namespace Pr4w\SocialTokens\Models;
 
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Pr4w\SocialTokens\Database\Factories\SocialAccountFactory;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
 use Pr4w\SocialTokens\Events\AccountRevoked;
@@ -43,7 +45,8 @@ use Pr4w\SocialTokens\Models\Concerns\TransitionsStatus;
  */
 class SocialAccount extends Model
 {
-    use TransitionsStatus;
+    /** @use HasFactory<SocialAccountFactory> */
+    use HasFactory, TransitionsStatus;
 
     protected $guarded = [];
 
@@ -63,6 +66,12 @@ class SocialAccount extends Model
     public function getTable()
     {
         return config('social-tokens.table', 'social_accounts');
+    }
+
+    /** The package's factory: Laravel would look for one in the app's Database\Factories namespace. */
+    protected static function newFactory(): SocialAccountFactory
+    {
+        return SocialAccountFactory::new();
     }
 
     // Relationships ---------------------------------------------------------
