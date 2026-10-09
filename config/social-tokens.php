@@ -120,8 +120,8 @@ return [
     | Each request is verified with that connector's app secret. The routes
     | carry only the middleware listed here (Meta sends no CSRF token, so not
     | the web group). Set deletion_status_url to serve the status page
-    | yourself: {code} and {provider} in it are replaced, or the code is
-    | appended as ?code=.
+    | yourself: {provider} in it is replaced, and so is {code}; without
+    | {code}, the code is appended as ?code=.
     |
     */
     'callbacks' => [

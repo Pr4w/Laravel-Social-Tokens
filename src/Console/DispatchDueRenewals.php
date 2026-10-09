@@ -14,9 +14,10 @@ use Throwable;
 
 /**
  * Dispatches one renewal job per credential whose renew_at has passed. Each
- * run also announces the Meta data access deadlines that came within their
+ * run then announces the Meta data access deadlines that came within their
  * lead time (CredentialDataAccessExpiring): a token that never expires has no
- * renewal to carry that warning.
+ * renewal to carry that warning. The warning comes second and cannot stop the
+ * renewals: they keep every provider's tokens alive, it only informs.
  */
 class DispatchDueRenewals extends Command
 {
@@ -26,8 +27,6 @@ class DispatchDueRenewals extends Command
 
     public function handle(ConnectorRegistry $registry): int
     {
-        $this->warnDataAccessExpiring();
-
         $count = 0;
         $deferred = 0;
         $failed = 0;
@@ -79,6 +78,18 @@ class DispatchDueRenewals extends Command
             $this->warn("{$deferred} renewal(s) failed for now and will be retried later.");
         }
 
+        // After the renewals, and guarded: a failing scan (on MySQL or
+        // PostgreSQL its columns do not exist until migration 000009 has run)
+        // must not cost any provider its renewals.
+        try {
+            $this->warnDataAccessExpiring();
+            $deadlinesChecked = true;
+        } catch (Throwable $e) {
+            report($e);
+            $deadlinesChecked = false;
+            $this->error('Could not check the data access deadlines; see the log.');
+        }
+
         if ($stopped) {
             $this->error('Could not queue a renewal job; stopped until the next run. See the log.');
 
@@ -91,14 +102,14 @@ class DispatchDueRenewals extends Command
             return self::FAILURE;
         }
 
-        return self::SUCCESS;
+        return $deadlinesChecked ? self::SUCCESS : self::FAILURE;
     }
 
     /**
      * Fire CredentialDataAccessExpiring once for each credential whose data
      * access lapses within the configured lead. Warn-only: nothing is flagged.
-     * A listener that throws is reported and does not stop the run, nor the
-     * renewals after it; that credential is not warned again.
+     * A listener that throws is reported and does not stop the scan; that
+     * credential is not warned again.
      */
     protected function warnDataAccessExpiring(): void
     {

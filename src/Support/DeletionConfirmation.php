@@ -36,8 +36,8 @@ final class DeletionConfirmation
 
     /**
      * Where the user checks the request: `callbacks.deletion_status_url`
-     * ({code} and {provider} replaced, or ?code= appended), else the
-     * package's own status route.
+     * ({provider} replaced, and {code}, or ?code= appended when it has none),
+     * else the package's own status route.
      *
      * @throws RuntimeException when neither exists: checked before anything is deleted.
      */
@@ -46,8 +46,10 @@ final class DeletionConfirmation
         $url = Settings::callbacks()['deletion_status_url'];
 
         if ($url !== null) {
+            $url = strtr($url, ['{provider}' => rawurlencode($provider)]);
+
             return str_contains($url, '{code}')
-                ? strtr($url, ['{code}' => rawurlencode($code), '{provider}' => rawurlencode($provider)])
+                ? strtr($url, ['{code}' => rawurlencode($code)])
                 : $url.(str_contains($url, '?') ? '&' : '?').http_build_query(['code' => $code]);
         }
 

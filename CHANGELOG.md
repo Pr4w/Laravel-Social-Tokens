@@ -175,6 +175,33 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   separately; disconnecting the personal row revokes the profile's credential,
   and revoking an organization's credential no longer revokes the personal row
   ([UPGRADE](UPGRADE.md#linkedin-profiles-and-organizations-have-separate-credentials)).
+- `FacebookConnector` and `InstagramConnector` extend
+  `Connectors\MetaGraphConnector`, and `ThreadsConnector` extends
+  `Connectors\LongLivedTokenConnector`; the methods they shared moved there
+  (see Added). The package no longer calls
+  `FacebookConnector::extendUserToken()` or `grantedScopesByAccount()`, at
+  connect or at renewal, so a subclass overriding either is skipped: override
+  `exchangeUserToken()` (a `RenewalResult`), and `debugToken()` or the static
+  `grantedScopesFrom()`, instead. The `Store*` actions call
+  `grantedScopesFrom()` and `tokenLifetime()` on the configured connector
+  class, so a subclass's own versions are used
+  ([UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
+- A Meta user token that `debug_token` reports as never expiring
+  (`expires_at: 0`) becomes static at its next renewal: `renew_at` null, no
+  more weekly `fb_exchange_token` call nor `CredentialRenewed` event. Only
+  `social-tokens:check-static` watches it from then on; an app that set
+  `check_static_schedule` to `null` must schedule the command itself (see
+  Fixed, and
+  [UPGRADE](UPGRADE.md#meta-data-access-and-tokens-that-never-expire)).
+- Migration `2025_01_01_000009_add_data_access_expiry_to_social_tokens` is
+  required: `social-tokens:dispatch-renewals` reads its columns. On MySQL and
+  PostgreSQL, until it has run, each dispatcher run still dispatches the
+  renewals, then reports the failed data access check and exits with a
+  failure code ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
+- `InstagramConnector`'s reason for an `fb_exchange_token` reply without a
+  token reads "Malformed token extension response." (it was "Malformed
+  response, no access_token."; see Changed, and
+  [UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -455,11 +482,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   could lose data access while it looked healthy, with no warning. It is now
   stored on the credential (`social_tokens.data_access_expires_at`, migration
   `2025_01_01_000009_add_data_access_expiry_to_social_tokens`) at connect and
-  after each renewal, and `social-tokens:dispatch-renewals` fires
-  `CredentialDataAccessExpiring` once, seven days before it, for a credential
-  an active account posts with (the Instagram accounts). It is a warning only:
-  Meta does not say which calls a lapse blocks for an app with business
-  permissions, so the credential is not flagged.
+  after each renewal; a reconnect whose `debug_token` call fails clears the
+  old one (unknown) rather than keep a deadline the new login has moved.
+  `social-tokens:dispatch-renewals` fires `CredentialDataAccessExpiring`
+  once, seven days before it, for a credential an active account posts with
+  (the Instagram accounts), after dispatching the run's renewals: a failure
+  of that check never holds them back. It is a warning only: Meta does not
+  say which calls a lapse blocks for an app with business permissions, so
+  the credential is not flagged.
 - The `InstagramConnector` docblock said the Instagram API with Instagram
   Login only needed its renewal request swapped. It did not work:
   `StoreConnection` sends every `InstagramConnector` to the Facebook Page
@@ -531,7 +561,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `MetaGraphConnector::DEFAULT_GRAPH_VERSION` default (`v23.0`), and the
   `appsecret_proof` signing. The two connectors carried a copy each of the
   call and of the version default, so a fix made to one missed the other.
-  `FacebookConnector::extendUserToken()` keeps its array shape.
+  `FacebookConnector::extendUserToken()` keeps its array shape, for your own
+  code: the package calls `exchangeUserToken()` (see Changed (breaking)).
 - `Events\CredentialDataAccessExpiring($token, $dataAccessExpiresAt)`, fired
   once per deadline (see Fixed), and the `data_access_warning` config block
   (`enabled`, `SOCIAL_TOKENS_DATA_ACCESS_WARNING`, default on; `lead_days`,
@@ -548,7 +579,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `data_access_expires_at`, in the app's timezone),
   `withTokenLifetime($result)`, and
   `FacebookConnector::grantedScopesFrom($data, $accountIds)`, which
-  `grantedScopesByAccount()` now uses.
+  `grantedScopesByAccount()` now uses. The connect-time actions call
+  `debugToken()` once and read the scopes and the lifetime from its reply.
 - **Instagram without a Facebook Page**, through the Instagram API with
   Instagram Login: `InstagramLoginConnector`, registered as `instagram_login`
   (its own credentials, `services.instagram_login`: the Instagram app id and
@@ -592,7 +624,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     `callbacks.enabled` (`SOCIAL_TOKENS_CALLBACKS`, off by default), under
     `callbacks.prefix` (`social-tokens/meta`) with `callbacks.middleware`
     (none); `callbacks.deletion_status_url` points the answer at the app's
-    own page. `Support\CallbackRoutes::register()` registers them anywhere.
+    own page (`{provider}` and `{code}` in it are replaced; without `{code}`,
+    `?code=` is appended). `Support\CallbackRoutes::register()` registers them anywhere.
   - `Support\MetaSignedRequest::parse($signedRequest, $secret)` (and
     `make()`), `Exceptions\InvalidSignedRequestException`, and the
     `Contracts\VerifiesSignedRequests` connector capability, implemented by

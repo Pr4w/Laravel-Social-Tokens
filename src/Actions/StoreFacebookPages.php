@@ -90,7 +90,7 @@ class StoreFacebookPages
         // (the call failed) keeps whatever scopes are stored.
         $pageIds = collect($pages)->pluck('id')->filter()->map(fn ($id) => (string) $id)->all();
         $debug = $this->debugUserToken($connector, $userToken);
-        $scopesByAccount = $debug === null ? null : FacebookConnector::grantedScopesFrom($debug, $pageIds);
+        $scopesByAccount = $debug === null ? null : $connector::grantedScopesFrom($debug, $pageIds);
 
         // 4a. The Meta user credential (shared with Instagram). Only when the
         // user manages a Page, so no credential is left orphaned.
@@ -101,6 +101,7 @@ class StoreFacebookPages
                 $userToken,
                 $expiresAt,
                 $debug,
+                newLogin: $extend,
             );
         }
 

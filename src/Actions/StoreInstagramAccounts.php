@@ -99,7 +99,7 @@ class StoreInstagramAccounts
         // token's lifetime, from one debug_token call. Best effort: unknown
         // (the call failed) keeps whatever scopes are stored.
         $debug = $this->debugUserToken($facebook, $userToken);
-        $scopesByAccount = $debug === null ? null : FacebookConnector::grantedScopesFrom($debug, $accountIds);
+        $scopesByAccount = $debug === null ? null : $facebook::grantedScopesFrom($debug, $accountIds);
 
         $scopesFor = fn (string $id): array => $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[$id] ?? []];
 
@@ -116,6 +116,7 @@ class StoreInstagramAccounts
                 $userToken,
                 $expiresAt,
                 $debug,
+                newLogin: $extend,
             );
 
         $accounts = collect();

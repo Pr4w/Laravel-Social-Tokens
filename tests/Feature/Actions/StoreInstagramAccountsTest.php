@@ -1,10 +1,22 @@
 <?php
 
 use Illuminate\Support\Facades\Http;
+use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
+use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\ConnectorRegistry;
+
+/** A FacebookConnector subclass that reads the per-account scopes its own way. */
+class ScopesOverridingFacebookConnector extends FacebookConnector
+{
+    public static function grantedScopesFrom(array $data, array $accountIds): array
+    {
+        return array_fill_keys(array_map('strval', $accountIds), ['from_the_override']);
+    }
+}
 
 function fakeInstagramGraph(array $o = []): void
 {
@@ -121,3 +133,13 @@ it('throws when the pages listing fails', function () {
 
     $this->store->handle(userToken: 'short', userId: 'user-1');
 })->throws(RuntimeException::class);
+
+it('reads the per-account scopes through the configured connector class', function (string $action) {
+    config(['social-tokens.connectors.facebook.driver' => ScopesOverridingFacebookConnector::class]);
+    app()->forgetInstance(ConnectorRegistry::class);
+    fakeInstagramGraph();
+
+    app($action)->handle(userToken: 'short', userId: 'user-1');
+
+    expect(SocialAccount::where('provider_user_id', 'page-1')->sole()->scopes)->toBe(['from_the_override']);
+})->with([StoreInstagramAccounts::class, StoreFacebookPages::class]);

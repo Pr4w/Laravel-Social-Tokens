@@ -280,6 +280,8 @@ it('points the answer at the app\'s own status page', function (string $configur
     expect($answer['url'])->toBe(str_replace('CODE', $answer['confirmation_code'], $expected));
 })->with([
     'placeholders' => ['https://app.test/privacy/deletion/{provider}/{code}', 'https://app.test/privacy/deletion/facebook/CODE'],
+    'provider only' => ['https://app.test/privacy/{provider}/deletion', 'https://app.test/privacy/facebook/deletion?code=CODE'],
+    'code only' => ['https://app.test/privacy/deletion/{code}', 'https://app.test/privacy/deletion/CODE'],
     'no placeholder' => ['https://app.test/privacy/deletion', 'https://app.test/privacy/deletion?code=CODE'],
     'a query already' => ['https://app.test/privacy?tab=deletion', 'https://app.test/privacy?tab=deletion&code=CODE'],
 ]);

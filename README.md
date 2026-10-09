@@ -566,16 +566,21 @@ and after each renewal:
 - **Data access** (`data_access_expires_at` on the credential). Meta stops
   sharing the user's data with your app 90 days after the user was last
   active in it, although the token keeps working and renewing; only a new
-  login through your app moves the date. `social-tokens:dispatch-renewals`
-  fires `CredentialDataAccessExpiring` once, seven days before it (or as soon
-  as it learns of a date already close or past), for a credential an active
-  account posts with. Ask the user to reconnect. Meta does not say which
-  calls a lapse blocks for an app with business permissions (Instagram
-  publishing included; the `pages_*` permissions are documented as not
-  expiring), so the package only warns: the credential is not flagged and
-  stays usable. If Meta then rejects a call, report it with
-  `reportRejected()`. Tune or turn off the warning in `data_access_warning`
-  (`SOCIAL_TOKENS_DATA_ACCESS_WARNING=false`).
+  login through your app moves the date. A reconnect (`StoreFacebookPages` or
+  `StoreInstagramAccounts` with `extend: true`, the default) stores the new
+  date or, when `debug_token` does not answer, clears the old one (null,
+  unknown) until the next renewal reads it; a re-sync with `extend: false`
+  keeps the stored date in that case. `social-tokens:dispatch-renewals` fires
+  `CredentialDataAccessExpiring` once, seven days before it (or as soon as it
+  learns of a date already close or past), for a credential an active account
+  posts with. It checks after dispatching the run's renewals: if the check
+  fails, the renewals still go out and the command exits with a failure code.
+  Ask the user to reconnect. Meta does not say which calls a lapse blocks for
+  an app with business permissions (Instagram publishing included; the
+  `pages_*` permissions are documented as not expiring), so the package only
+  warns: the credential is not flagged and stays usable. If Meta then rejects
+  a call, report it with `reportRejected()`. Tune or turn off the warning in
+  `data_access_warning` (`SOCIAL_TOKENS_DATA_ACCESS_WARNING=false`).
 
 ```php
 $account->credential->data_access_expires_at; // null when unknown
@@ -786,8 +791,8 @@ add some, a throttle for instance, in `callbacks.middleware`, and move them with
   url is a status page the package serves
   (`GET {prefix}/{provider}/deletion/{code}`, which recognises only the codes
   it signed with your `APP_KEY`), or yours, with
-  `SOCIAL_TOKENS_DELETION_STATUS_URL` (`{code}` and `{provider}` are replaced,
-  or `?code=` is appended).
+  `SOCIAL_TOKENS_DELETION_STATUS_URL` (`{provider}` is replaced, and so is
+  `{code}`; without `{code}`, `?code=` is appended).
 
 To place the routes yourself, leave `enabled` off and call
 `Pr4w\SocialTokens\Support\CallbackRoutes::register()` from your routes file, or

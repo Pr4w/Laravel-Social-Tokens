@@ -35,6 +35,14 @@ trait PersistsMetaUserCredential
      * there, and so is the data access deadline. Without it, an unknown
      * expiry is checked back after one lead time.
      *
+     * A new login ($newLogin: the action exchanged a token the user just
+     * granted) is what moves the data access deadline, so the stored one is
+     * stale even when debug_token does not give the new one: it is cleared
+     * (unknown, which also re-arms its warning) and the next renewal reads
+     * it. Kept, the old deadline would show a user who just reconnected as
+     * lapsed until then. A re-sync of a token the app already held keeps
+     * what is stored.
+     *
      * @param  array<string, mixed>  $keys
      * @param  array<string, mixed>|null  $debug  debugUserToken()'s result.
      */
@@ -44,16 +52,18 @@ trait PersistsMetaUserCredential
         #[\SensitiveParameter] string $userToken,
         ?CarbonInterface $expiresAt,
         ?array $debug,
+        bool $newLogin,
     ): SocialToken {
-        $lifetime = $debug === null ? null : MetaGraphConnector::tokenLifetime($debug);
+        $lifetime = $debug === null ? null : $connector::tokenLifetime($debug);
         $expiresAt ??= $lifetime['expires_at'] ?? null;
         $static = $expiresAt === null && ($lifetime['never_expires'] ?? false);
+        $dataAccess = $lifetime['data_access_expires_at'] ?? null;
 
         return SocialToken::persistCredential($keys, [
             'access_token' => $userToken,
             'refresh_token' => null,
             'expires_at' => $expiresAt,
             'renew_at' => $static ? null : SocialToken::renewAtFor($expiresAt, $connector), // an unknown expiry is checked back
-        ] + array_filter(['data_access_expires_at' => $lifetime['data_access_expires_at'] ?? null]));
+        ] + ($newLogin || $dataAccess !== null ? ['data_access_expires_at' => $dataAccess] : []));
     }
 }

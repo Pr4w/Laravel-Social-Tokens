@@ -58,7 +58,11 @@ files (existing files are left alone).
   nullable timestamps to `social_tokens`, `data_access_expires_at` and
   `data_access_warned_at` (see
   [Meta data access](#meta-data-access-and-tokens-that-never-expire)). It can
-  be run again after a failure.
+  be run again after a failure. **Run it with the deploy:**
+  `social-tokens:dispatch-renewals` reads these columns. On MySQL and
+  PostgreSQL, until it has run, every dispatcher run still dispatches the
+  renewals, then reports the failed data access check ("Could not check the
+  data access deadlines") and exits with a failure code.
 
 The two 000006 migrations are named to run before
 `2025_01_01_000007_scope_identity_to_owner`, which needs them when you come
@@ -187,7 +191,11 @@ renewal. Nothing is required; what changes:
   `CredentialDataAccessExpiring` once, seven days before Meta stops sharing
   the user's data with your app (90 days after the user was last active in
   it). Listen for it and ask the user to reconnect: only a new login moves the
-  date. The credential is not flagged.
+  date. The credential is not flagged. A reconnect (`extend: true`, the
+  default) stores the new date, or leaves it null (unknown) when
+  `debug_token` does not answer, until the next renewal reads it; a re-sync
+  with `extend: false` keeps the stored date then. Treat null as "unknown",
+  not as "expired".
 - **One more Graph call per renewal** of a Meta user credential
   (`debug_token`, with the app access token).
 
@@ -724,9 +732,22 @@ revoked, with no warning beforehand.
   `Connectors\MetaGraphConnector`, which holds `refreshCredential()`,
   `renewalStrategy()`, `leadTime()`, `appAccessToken()` and `fetchMe()`, and
   the `fb_exchange_token` call as `exchangeUserToken()` (a `RenewalResult`).
-  `FacebookConnector::extendUserToken()` keeps its array shape. Build Graph
-  URLs with `$this->graphUrl('me/accounts')`, which applies the block's
-  `graph_version` or `MetaGraphConnector::DEFAULT_GRAPH_VERSION`.
+  Build Graph URLs with `$this->graphUrl('me/accounts')`, which applies the
+  block's `graph_version` or `MetaGraphConnector::DEFAULT_GRAPH_VERSION`.
+- **The package no longer calls `FacebookConnector::extendUserToken()` or
+  `grantedScopesByAccount()`**, at connect or at renewal. Both still exist,
+  for your own code, but an override of either is silently skipped: move it
+  to `exchangeUserToken()` (return a `RenewalResult`; the connect-time
+  actions and `refreshCredential()` both call it), and to `debugToken()` or
+  the static `grantedScopesFrom($data, $accountIds)` (the actions call it,
+  and `tokenLifetime()`, on your configured connector class). Search your
+  connector subclasses for `function extendUserToken` and
+  `function grantedScopesByAccount`.
+- `InstagramConnector` reads an `fb_exchange_token` reply as
+  `FacebookConnector` does: a reply without a token fails with "Malformed
+  token extension response." (it was "Malformed response, no
+  access_token."). Update anything that matches the old text in
+  `last_error`, a caught `RuntimeException` message or your logs.
 
 ## From 1.x to 2.0
 

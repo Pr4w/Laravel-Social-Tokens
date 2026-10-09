@@ -1,14 +1,17 @@
 <?php
 
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Queue;
 use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\CredentialDataAccessExpiring;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
+use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
@@ -262,6 +265,83 @@ it('warns again for the next deadline once a new login moved it', function () {
     $this->artisan('social-tokens:dispatch-renewals');
 
     Event::assertDispatchedTimes(CredentialDataAccessExpiring::class, 2);
+});
+
+it('forgets the old data access deadline when a new login cannot read the new one', function (string $action) {
+    $this->freezeSecond();
+
+    // Lapsed and already announced; the user then logs in again, which moves
+    // the deadline, but debug_token is down.
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'data_access_expires_at' => now()->subDays(2),
+        'data_access_warned_at' => now()->subDays(9),
+    ]);
+    fakeMetaLifetime(['access_token' => 'long-user-token', 'expires_in' => 5183944], null);
+
+    app($action)->handle(userToken: 'short', userId: 'user-1');
+
+    $token->refresh();
+
+    expect($token->access_token)->toBe('long-user-token')
+        ->and($token->data_access_expires_at)->toBeNull() // unknown: the next renewal reads it
+        ->and($token->isDataAccessExpired())->toBeFalse()
+        ->and($token->data_access_warned_at)->toBeNull();
+})->with([StoreInstagramAccounts::class, StoreFacebookPages::class]);
+
+it('forgets the old data access deadline when debug_token gives none for a new login', function () {
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'data_access_expires_at' => now()->subDays(2),
+        'data_access_warned_at' => now()->subDays(9),
+    ]);
+    fakeMetaLifetime(debug: ['expires_at' => now()->addDays(60)->getTimestamp()]);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'short', userId: 'user-1');
+
+    expect($token->fresh()->data_access_expires_at)->toBeNull()
+        ->and($token->fresh()->data_access_warned_at)->toBeNull();
+});
+
+it('keeps the stored data access deadline when a re-sync of the same token cannot read it', function () {
+    $this->freezeSecond();
+    $dataAccess = now()->addDays(3)->startOfSecond();
+    $warnedAt = now()->subDays(4)->startOfSecond();
+
+    // extend: false re-syncs a token the app already holds: no new login.
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'data_access_expires_at' => $dataAccess,
+        'data_access_warned_at' => $warnedAt,
+    ]);
+    fakeMetaLifetime(debug: null);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'user-1', extend: false);
+
+    expect($token->fresh()->data_access_expires_at->equalTo($dataAccess))->toBeTrue()
+        ->and($token->fresh()->data_access_warned_at->equalTo($warnedAt))->toBeTrue();
+});
+
+it('still dispatches due renewals when the data access warning cannot run', function () {
+    Queue::fake();
+    Event::fake([CredentialDataAccessExpiring::class]);
+
+    $due = instagramBackedCredential(['renew_at' => now()->subMinute()]);
+
+    // The warning's scan fails, as it does on MySQL or PostgreSQL before
+    // migration 000009 has run (unknown column).
+    DB::connection()->beforeExecuting(function (string $sql) {
+        if (str_contains($sql, 'data_access_warned_at') && str_starts_with(strtolower(ltrim($sql)), 'select')) {
+            throw new RuntimeException('Unknown column data_access_warned_at');
+        }
+    });
+
+    $this->artisan('social-tokens:dispatch-renewals')
+        ->expectsOutputToContain('Dispatched 1 renewal job(s).')
+        ->expectsOutputToContain('Could not check the data access deadlines')
+        ->assertFailed();
+
+    Queue::assertPushed(RenewCredential::class, fn (RenewCredential $job) => $job->token->is($due));
 });
 
 it('does not re-arm the warning when a renewal reports the same deadline', function () {
