@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Pr4w\SocialTokens\Actions\StoreConnection;
+use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
@@ -127,6 +128,63 @@ it('keeps a disconnected Instagram account out of a reconnect, and its companion
         ->and(reconnectAccount('page-2', $this->owner)->isUsable())->toBeTrue();
 });
 
+it('keeps a disconnected companion Page out of an Instagram reconnect', function () {
+    reconnectGraph();
+    reconnect('instagram', $this->owner);
+    app(SocialTokens::class)->disconnect(reconnectAccount('page-2', $this->owner));
+
+    Event::fake([AccountConnected::class]);
+    reconnectGraph(token: 'new-user-token');
+    $accounts = reconnect('instagram', $this->owner);
+
+    $removed = reconnectAccount('page-2', $this->owner);
+
+    expect($accounts->pluck('provider_user_id')->sort()->values()->all())->toBe(['ig-page-1', 'ig-page-2', 'page-1'])
+        ->and($removed->status)->toBe(AccountStatus::Revoked)
+        ->and($removed->wasDisconnected())->toBeTrue()
+        ->and($removed->credential->status)->toBe(AccountStatus::Revoked)
+        ->and($removed->credential->access_token)->toBeNull()
+        ->and(reconnectAccount('page-1', $this->owner)->credential->access_token)->toBe('page-1-new-user-token');
+
+    Event::assertNotDispatched(AccountConnected::class, fn (AccountConnected $event) => $event->account->provider_user_id === 'page-2');
+});
+
+it('stores no Meta user credential when every Instagram account listed was disconnected', function () {
+    reconnectGraph();
+    $store = fn () => app(StoreInstagramAccounts::class)->handle('short', owner: $this->owner, userId: 'user-1', withLinkedPages: false);
+
+    $store();
+    app(SocialTokens::class)->disconnect(reconnectAccount('ig-page-1', $this->owner));
+    app(SocialTokens::class)->disconnect(reconnectAccount('ig-page-2', $this->owner));
+
+    $accounts = $store();
+
+    $user = SocialToken::query()->ownedBy($this->owner)->where('provider_holder_id', 'user-1')->sole();
+
+    expect($accounts)->toBeEmpty()
+        ->and($user->status)->toBe(AccountStatus::Revoked)
+        ->and($user->access_token)->toBeNull()
+        ->and($user->renew_at)->toBeNull();
+});
+
+it('refreshes the Meta user credential the companion Pages still need when every Instagram account was disconnected', function () {
+    reconnectGraph();
+    reconnect('instagram', $this->owner);
+    app(SocialTokens::class)->disconnect(reconnectAccount('ig-page-1', $this->owner));
+    app(SocialTokens::class)->disconnect(reconnectAccount('ig-page-2', $this->owner));
+
+    reconnectGraph(token: 'new-user-token');
+    $accounts = reconnect('instagram', $this->owner);
+
+    $user = SocialToken::query()->ownedBy($this->owner)->where('provider_holder_id', 'user-1')->sole();
+
+    expect($accounts->pluck('provider_user_id')->all())->toBe(['page-1', 'page-2'])
+        ->and($user->status)->toBe(AccountStatus::Active)
+        ->and($user->access_token)->toBe('new-user-token')
+        ->and(reconnectAccount('page-2', $this->owner)->credential->access_token)->toBe('page-2-new-user-token')
+        ->and(reconnectAccount('ig-page-2', $this->owner)->status)->toBe(AccountStatus::Revoked);
+});
+
 it('stores no Meta user credential when every target listed was disconnected', function () {
     reconnectGraph(['page-1']);
     reconnect('facebook', $this->owner);
@@ -154,6 +212,51 @@ it('keeps a disconnected LinkedIn organization out of a re-sync', function () {
 
     expect($sync(restore: true)->pluck('provider_user_id')->all())->toBe(['111', '222'])
         ->and(reconnectAccount('222', $this->owner)->isUsable())->toBeTrue();
+});
+
+it('stores no LinkedIn organizations credential when every organization listed was disconnected', function () {
+    $sync = fn () => app(StoreLinkedInOrganizations::class)->handle(
+        accessToken: 'member-token', memberId: 'member-1', owner: $this->owner, expiresAt: now()->addDays(60),
+    );
+
+    $sync();
+    app(SocialTokens::class)->disconnect(reconnectAccount('111', $this->owner));
+    app(SocialTokens::class)->disconnect(reconnectAccount('222', $this->owner));
+
+    $accounts = $sync();
+
+    $credential = SocialToken::query()->ownedBy($this->owner)->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
+
+    expect($accounts)->toBeEmpty()
+        ->and($credential->status)->toBe(AccountStatus::Revoked)
+        ->and($credential->access_token)->toBeNull()
+        ->and($credential->renew_at)->toBeNull();
+});
+
+it('forgets the disconnection of the Instagram accounts and organizations it restores', function () {
+    reconnectGraph();
+    reconnect('instagram', $this->owner);
+    app(SocialTokens::class)->disconnect(reconnectAccount('ig-page-2', $this->owner));
+    reconnect('instagram', $this->owner, restore: true);
+
+    $sync = fn (bool $restore = false) => app(StoreLinkedInOrganizations::class)->handle(
+        accessToken: 'member-token', memberId: 'member-1', owner: $this->owner, expiresAt: now()->addDays(60), restoreDisconnected: $restore,
+    );
+    $sync();
+    app(SocialTokens::class)->disconnect(reconnectAccount('222', $this->owner));
+    $sync(restore: true);
+
+    foreach (['ig-page-2', '222'] as $id) {
+        expect(reconnectAccount($id, $this->owner)->isUsable())->toBeTrue()
+            ->and(reconnectAccount($id, $this->owner)->disconnected_at)->toBeNull();
+    }
+
+    // A later deauthorization revokes them; they are not taken for disconnected.
+    app(SocialTokens::class)->revokeExternalUser('facebook', 'user-1');
+    app(SocialTokens::class)->revokeExternalUser('linkedin', 'member-1');
+
+    expect(reconnect('instagram', $this->owner)->pluck('provider_user_id')->all())->toContain('ig-page-2')
+        ->and($sync()->pluck('provider_user_id')->all())->toBe(['111', '222']);
 });
 
 it('brings back the accounts a deauthorization revoked, which the user did not disconnect', function () {

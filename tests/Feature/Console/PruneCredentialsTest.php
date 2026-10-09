@@ -98,6 +98,7 @@ it('takes the retention from the config, at least one day, or from --days', func
     expect(prunedIds())->toBe(['ten-days', 'hours']); // the default, 30
 
     config(['social-tokens.prune_after_days' => 0]);
+    $this->travel(2)->hours();
     $this->artisan('social-tokens:prune')->assertSuccessful();
     expect(prunedIds())->toBe(['hours']); // at least 1 day
 
@@ -177,4 +178,29 @@ it('schedules an unscheduled credential again when its account reconnects', func
     app(StoreConnection::class)->handle('tiktok', socialiteUser(['id' => 'tt-1', 'refreshToken' => 'r2', 'expiresIn' => 86400]));
 
     expect($account->credential->fresh()->renew_at)->not->toBeNull();
+});
+
+it('keeps the schedule of a credential reconnected while the dispatcher unschedules it', function () {
+    Queue::fake();
+    $account = app(StoreConnection::class)->handle('tiktok', socialiteUser(['id' => 'tt-1', 'refreshToken' => 'r1', 'expiresIn' => 86400]))->sole();
+    $account->markNeedsReconnect('flagged');
+    $this->travel(23)->hours();
+
+    // The user reconnects right after the dispatcher read the unused due
+    // credentials: the update re-checks, and the credential is not due by then.
+    $reconnected = false;
+    DB::listen(function ($query) use (&$reconnected) {
+        if (! $reconnected && preg_match('/^select [`"]?id[`"]? from [`"]?\w*social_tokens[`"]? /', $query->sql)) {
+            $reconnected = true;
+            app(StoreConnection::class)->handle('tiktok', socialiteUser(['id' => 'tt-1', 'refreshToken' => 'r2', 'expiresIn' => 86400]));
+        }
+    });
+
+    $this->artisan('social-tokens:dispatch-renewals')
+        ->doesntExpectOutputToContain('Unscheduled')
+        ->assertSuccessful();
+
+    expect($reconnected)->toBeTrue()
+        ->and($account->credential->fresh()->refresh_token)->toBe('r2')
+        ->and($account->credential->fresh()->renew_at?->isFuture())->toBeTrue();
 });
