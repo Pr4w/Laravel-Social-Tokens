@@ -59,10 +59,12 @@ return [
     'check_static_schedule' => 'daily',
 
     /*
-    | Safety breaker for that check: when at least `min_checked` credentials were
-    | checked and more than `max_terminal_ratio` of them came back rejected, the
-    | run treats it as a provider-side incident, flags nothing and logs a
-    | critical alert instead. A `min_checked` below 1 counts as 1.
+    | Safety breaker for that check, applied to each provider: when at least
+    | `min_checked` of its credentials were checked and more than
+    | `max_terminal_ratio` of them came back rejected, the run treats it as that
+    | provider's incident (or a change in the app's setup), flags none of its
+    | credentials and logs a critical alert instead. The same test over every
+    | checked credential stops the whole run. A `min_checked` below 1 counts as 1.
     */
     'check_static_breaker' => ['min_checked' => 10, 'max_terminal_ratio' => 0.2],
 

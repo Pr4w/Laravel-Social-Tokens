@@ -211,6 +211,24 @@ invalidate the token.
   the revocation has happened by then, so do not report the disconnect as
   failed or undo anything on the strength of it.
 
+### Checks and rejection reports flag fewer credentials
+
+Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
+(firing `CredentialNeedsReconnect`) now stay active:
+
+- `social-tokens:check-static` applies its breaker to each provider: when more
+  than `max_terminal_ratio` (20%) of at least `min_checked` (10) credentials of
+  one provider are rejected in a run, none of that provider's credentials is
+  flagged and the run logs `[social-tokens] check-static skipped {provider}:
+  too many of its credentials rejected at once` (critical, with `provider`,
+  `checked`, `terminal`). The other providers are still flagged, and the
+  command exits with a failure code. If you alert on `check-static aborted`,
+  alert on this message too. The run-wide breaker is unchanged.
+- `check-static` no longer checks a credential whose accounts are all flagged
+  or revoked (a Facebook Page the user no longer manages, flagged at their last
+  connect). It used to flag that Page's credential too, with a second
+  `CredentialNeedsReconnect` for a Page your app had already been told about.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret

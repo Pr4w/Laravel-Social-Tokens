@@ -22,8 +22,13 @@ use Throwable;
  * A verdict cuts the account off, so the run is deliberately cautious:
  *  - a definitive answer (a Meta session subcode) flags at once; any other
  *    terminal answer must be confirmed by the next run (two strikes);
- *  - when a large share of the checked tokens fail at once (a provider-side
- *    incident), nothing is flagged and a critical log is raised instead;
+ *  - when a large share of one provider's checked tokens fail at once (an
+ *    incident on its side, or the app's own setup), none of that provider's
+ *    credentials is flagged and a critical log is raised instead; the same
+ *    test over the whole run stops every verdict;
+ *  - a credential no active account uses (every account flagged or revoked,
+ *    such as a Page the user no longer manages) is not checked: its verdict
+ *    would change nothing, and its rejections would count towards the breaker;
  *  - a credential that throws (e.g. cannot be decrypted after an APP_KEY
  *    rotation) is logged and skipped, never flagged;
  *  - a credential whose token changed during the check (reconnected meanwhile)
@@ -50,7 +55,10 @@ class CheckStaticCredentials extends Command
         $errors = 0;
         $checkedByKind = ['static' => 0, 'renewable' => 0];
 
-        /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int, kind: string}> $terminal */
+        /** @var array<string, int> $checkedByProvider */
+        $checkedByProvider = [];
+
+        /** @var array<int, array{id: int|string, cipher: mixed, reason: string, definitive: bool, strikes: int, kind: string, provider: string}> $terminal */
         $terminal = [];
 
         $checkRenewable = Settings::checkRenewable();
@@ -67,9 +75,9 @@ class CheckStaticCredentials extends Command
                         ->where(fn ($query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()->addMinute())));
                 }
             })
-            ->has('accounts')
+            ->whereHas('accounts', fn ($query) => $query->where('status', AccountStatus::Active->value))
             ->lazyById()
-            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind) {
+            ->each(function (SocialToken $token) use ($registry, &$checked, &$errors, &$terminal, &$checkedByKind, &$checkedByProvider) {
                 $kind = $token->renew_at === null ? 'static' : 'renewable';
 
                 if (! $registry->has($token->provider)) {
@@ -99,6 +107,7 @@ class CheckStaticCredentials extends Command
 
                 $checked++;
                 $checkedByKind[$kind]++;
+                $checkedByProvider[$token->provider] = ($checkedByProvider[$token->provider] ?? 0) + 1;
                 $cipher = $token->getRawOriginal('access_token');
 
                 if ($result->succeeded()) {
@@ -113,6 +122,7 @@ class CheckStaticCredentials extends Command
                         'definitive' => (bool) ($result->context['definitive'] ?? false),
                         'strikes' => $token->failed_checks + 1,
                         'kind' => $kind,
+                        'provider' => $token->provider,
                     ];
                 } elseif ($result->unknown && Settings::logUnknownErrors()) {
                     Log::error('[social-tokens] Uncatalogued credential check error', [
@@ -129,10 +139,12 @@ class CheckStaticCredentials extends Command
         }
 
         // Phase 2: too many rejections at once is the provider's incident, not
-        // every user's: flag nothing and alert the operator.
+        // every user's: flag nothing and alert the operator. Judged over the
+        // whole run, then per provider, so a provider-wide rejection is caught
+        // even when the other providers' healthy credentials dilute it.
         ['min_checked' => $minChecked, 'max_terminal_ratio' => $maxRatio] = Settings::staticCheckBreaker();
 
-        if ($checked > 0 && $checked >= $minChecked && count($terminal) / $checked > $maxRatio) {
+        if ($this->tripsBreaker($checked, count($terminal), $minChecked, $maxRatio)) {
             Log::critical('[social-tokens] check-static aborted: too many credentials rejected at once', [
                 'checked' => $checked,
                 'terminal' => count($terminal),
@@ -144,6 +156,30 @@ class CheckStaticCredentials extends Command
 
             return self::FAILURE;
         }
+
+        $terminalByProvider = array_count_values(array_column($terminal, 'provider'));
+        $tripped = [];
+
+        foreach ($terminalByProvider as $provider => $rejected) {
+            $provider = (string) $provider;
+
+            if (! $this->tripsBreaker($checkedByProvider[$provider] ?? 0, $rejected, $minChecked, $maxRatio)) {
+                continue;
+            }
+
+            $tripped[$provider] = true;
+
+            Log::critical("[social-tokens] check-static skipped {$provider}: too many of its credentials rejected at once", [
+                'provider' => $provider,
+                'checked' => $checkedByProvider[$provider],
+                'terminal' => $rejected,
+                'max_terminal_ratio' => $maxRatio,
+            ]);
+
+            $this->error("Aborted for {$provider}: {$rejected} of {$checkedByProvider[$provider]} {$provider} credentials were rejected at once; none of them was flagged.");
+        }
+
+        $terminal = array_filter($terminal, fn (array $verdict) => ! isset($tripped[$verdict['provider']]));
 
         $flagged = ['static' => 0, 'renewable' => 0];
 
@@ -177,7 +213,13 @@ class CheckStaticCredentials extends Command
             $this->warn("{$errors} credential(s) could not be checked; see the log.");
         }
 
-        return self::SUCCESS;
+        return $tripped === [] ? self::SUCCESS : self::FAILURE;
+    }
+
+    /** More than $maxRatio of at least $minChecked checked credentials came back terminal. */
+    protected function tripsBreaker(int $checked, int $terminal, int $minChecked, float $maxRatio): bool
+    {
+        return $checked > 0 && $checked >= $minChecked && $terminal / $checked > $maxRatio;
     }
 
     /**

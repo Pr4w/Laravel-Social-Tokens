@@ -232,6 +232,21 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   listener whose push fails) no longer skips the provider call: the row was
   already revoked, so a retried `disconnect()` would never have made it, and
   the grant stayed valid at the provider.
+- `social-tokens:check-static` applies its safety breaker to each provider as
+  well as to the whole run. It divided one provider's rejections by every
+  checked credential, so a provider-wide rejection on a smaller provider (every
+  LinkedIn member token answering `active: false` after a LinkedIn app switch,
+  among thousands of healthy Facebook Pages) stayed under 20% and flagged all of
+  that provider's credentials, one `CredentialNeedsReconnect` each. That
+  provider's credentials are now left alone, with no strike recorded, and a
+  critical log names it (`check-static skipped {provider}`); the other
+  providers' verdicts still apply, and the command exits with a failure code.
+- `social-tokens:check-static` only checks credentials an active account still
+  uses. A Facebook Page the user no longer manages has its account flagged at
+  the next connect, but its page token stays active and Meta then rejects it:
+  those rejections counted towards the breaker every day, so a few lost Pages
+  could keep it tripped and genuinely dead Pages were never flagged; otherwise
+  the lost Page got a redundant `CredentialNeedsReconnect`.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
