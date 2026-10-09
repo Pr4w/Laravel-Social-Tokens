@@ -405,7 +405,8 @@ cannot be checked (e.g. it cannot be decrypted after an `APP_KEY` change) is
 logged and skipped.
 
 A custom connector opts in by implementing `Contracts\ChecksCredential`. Its
-plain `terminalFailure()` needs two consecutive runs to flag; return
+plain `terminalFailure()` needs two consecutive runs to flag (a
+`reportRejected()` check only records the first strike); return
 `terminalFailure($reason, ['definitive' => true])` to flag on the first.
 
 Renewals run under a per-credential lock so a scheduled job and a synchronous
@@ -439,8 +440,9 @@ try {
 }
 ```
 
-When the provider rejects a token at publish time, report it, so every account
-sharing that credential stops posting (and your app is told once):
+When Meta, Threads or LinkedIn rejects a token at publish time, report it, so
+every account sharing that credential stops posting (and your app is told
+once):
 
 ```php
 try {
@@ -449,16 +451,36 @@ try {
     app(SocialTokens::class)->reportRejected(
         $account,
         $e->safeMessage(),                 // no secrets in the reason
-        terminal: $e->isDeadToken(),       // Meta 190/102 or a session subcode, OAuth invalid_grant/invalid_token
+        terminal: $e->provesTokenIsDead(), // see below: rarely true
         rejectedToken: $token,             // ignored if the user reconnected meanwhile
     );
 }
 ```
 
-With `terminal: false` (an ambiguous 401), the package first asks the provider
-whether the token still works, and flags only if it confirms. To catch revoked
-tokens between two renewals without waiting for a failed post, set
-`SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
+- `terminal: true` flags the credential at once, with no provider call. Pass
+  it only when the error itself proves the credential is dead: a Meta code 190
+  or 102 **with a session subcode** (458, 459, 460, 463, 464, 467, 492: password
+  changed, app removed, user logged out), or, for LinkedIn without refresh
+  tokens, `REVOKED_ACCESS_TOKEN` or `EXPIRED_ACCESS_TOKEN`.
+- `terminal: false` is for anything ambiguous: a 401, or a bare Meta 190/102
+  with no subcode, which Meta also sends to valid tokens during an incident.
+  The package asks the provider whether the token still works and flags the
+  credential only on a definitive answer (a session subcode, LinkedIn's
+  `revoked`). A plain rejection counts as one strike against the token, which
+  the next `check-static` run confirms if the provider still rejects it:
+  Facebook Page tokens are always checked, renewable credentials when
+  `SOCIAL_TOKENS_CHECK_RENEWABLE=true`. Repeated reports never confirm each
+  other: publish retries seconds apart would all see the same incident.
+- Google, TikTok, X, and LinkedIn with refresh tokens: do not report a 401
+  `invalid_token`. It usually means the access token expired while the refresh
+  token still works. Call `validAccessTokenFor()` again (it renews an expired
+  token, or tells you to reconnect) and retry; a dead refresh token is caught
+  by the renewal itself (`invalid_grant`), which flags the credential. These
+  connectors cannot check a token, so `terminal: false` does nothing for them
+  and returns `false`, and `terminal: true` would flag a healthy credential.
+
+To catch revoked tokens between two renewals without waiting for a failed post,
+set `SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
 checks renewable Meta, Threads and LinkedIn credentials.
 
 LinkedIn's token introspection uses the configured client (`services.linkedin`,

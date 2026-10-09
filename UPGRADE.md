@@ -212,6 +212,49 @@ invalidate the token.
   the revocation has happened by then, so do not report the disconnect as
   failed or undo anything on the strength of it.
 
+### Review your `reportRejected()` calls
+
+2.x's README told you to pass `terminal: true` for any Meta 190/102 and for an
+OAuth `invalid_grant` / `invalid_token`. Both flag healthy credentials, so
+change the `terminal:` argument where you report a publish rejection:
+
+1. Keep `terminal: true` only for an error that proves the credential dead: a
+   Meta (Facebook, Instagram, Threads) code 190 or 102 **with** an
+   `error_subcode` of 458, 459, 460, 463, 464, 467 or 492, or, for LinkedIn
+   without refresh tokens, `REVOKED_ACCESS_TOKEN` or `EXPIRED_ACCESS_TOKEN`.
+2. Pass `terminal: false` for a Meta 190/102 **without** a subcode, and for any
+   other ambiguous 401 from Meta, Threads or LinkedIn.
+3. Stop reporting a 401 `invalid_token` from Google, TikTok, X or LinkedIn
+   with refresh tokens: call `validAccessTokenFor($account)` again, which
+   renews the expired access token, and retry the publish. A refresh token
+   that really died is flagged by the renewal itself.
+
+`reportRejected(terminal: false)` itself changed too. It flags only when the
+provider's answer is definitive (a Meta session subcode, LinkedIn's
+`revoked`). A bare 190/102 now records one strike against the token and the
+call returns `false` where 2.x returned `true`: the credential is flagged by
+the next `check-static` run if Meta still rejects the token. That run checks
+Facebook Page tokens always, and renewable credentials (the Meta user token
+behind Instagram, Threads) only with `SOCIAL_TOKENS_CHECK_RENEWABLE=true`, so
+turn it on if you relied on these reports to cut off renewable credentials.
+Calling it again does not confirm the strike: retries seconds apart would see
+the same Meta incident.
+
+Credentials 2.x flagged because of an `invalid_token` report on Google, TikTok
+or X may still have a working refresh token. To give them a chance before
+asking those users to reconnect, reactivate them and let the dispatcher renew
+them at once (a refresh token that really died is flagged again, with a new
+`CredentialNeedsReconnect`). Match `last_error` against the reason your app
+reported:
+
+```php
+SocialToken::query()
+    ->whereIn('provider', ['google', 'tiktok', 'x'])
+    ->where('status', 'needs_reconnect')
+    ->where('last_error', 'like', '%invalid_token%')
+    ->update(['status' => 'active', 'last_error' => null, 'renew_at' => now()]);
+```
+
 ### Checks and rejection reports flag fewer credentials
 
 Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`

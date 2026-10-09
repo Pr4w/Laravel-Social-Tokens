@@ -101,6 +101,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   exception (see Fixed, and
   [UPGRADE](UPGRADE.md#revocation-is-recorded-before-the-provider-call),
   [If you wrote a connector](UPGRADE.md#if-you-wrote-a-connector)).
+- `reportRejected(terminal: false)` flags only on a definitive answer from the
+  provider (a Meta session subcode, LinkedIn's `revoked`), the standard
+  `check-static` has applied since 1.2. A bare Meta 190/102, which Meta also
+  sends to valid tokens during an incident, is now one strike against the
+  token and the call returns `false`; the next `check-static` run flags the
+  credential if Meta still rejects it, and reports never confirm each other.
+  It used to flag at once, with no breaker, so every credential that
+  published during such an incident was flagged. A report naming a token the
+  credential no longer holds now returns `false` without asking the provider
+  ([UPGRADE](UPGRADE.md#review-your-reportrejected-calls)).
 - Graph calls the package makes with a user or Page token now send
   `appsecret_proof` by default (see Added). Meta accepts it whether or not
   "Require App Secret" is on, but it only matches tokens issued to the
@@ -280,6 +290,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `reportRejected(terminal: false)` alert instead of logging per credential.
   A plain code 1 ("An unknown error has occurred.") is still a transient
   error.
+- README and the `reportRejected()` docblock: `terminal: true` is for an error
+  that proves the credential dead (a Meta session subcode; LinkedIn
+  `REVOKED_ACCESS_TOKEN` / `EXPIRED_ACCESS_TOKEN` without refresh tokens). They
+  said any Meta 190/102 and any OAuth `invalid_grant`/`invalid_token`. On
+  Google, TikTok, X or LinkedIn with refresh tokens, a 401 `invalid_token`
+  usually means the access token expired while the refresh token still works,
+  so following the README flagged a healthy credential; apps should call
+  `validAccessTokenFor()` again instead. They also now say that
+  `terminal: false` does nothing for a connector that cannot check a token
+  (Google, TikTok, X).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

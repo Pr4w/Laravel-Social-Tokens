@@ -16,7 +16,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * Implement it only where a rejected access token means the credential cannot
  * recover without the user (Meta, Threads, LinkedIn) — not for providers whose
  * short-lived access tokens say nothing about the refresh token (TikTok, Google).
- * A plain terminalFailure() needs two consecutive checks to flag; add
+ * A plain terminalFailure() needs two consecutive check-static runs to flag
+ * (reportRejected() only records the first strike); add
  * ['definitive' => true] to its context to flag on the first.
  */
 interface ChecksCredential
