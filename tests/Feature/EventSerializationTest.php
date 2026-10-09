@@ -10,6 +10,7 @@ use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
 use Pr4w\SocialTokens\Events\AccountRevoked;
+use Pr4w\SocialTokens\Events\CredentialDataAccessExpiring;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
@@ -88,6 +89,7 @@ it('serialises every event with model identifiers, never the models', function (
     'AccountConnected' => fn ($account) => new AccountConnected($account),
     'AccountNeedsReconnect' => fn ($account) => new AccountNeedsReconnect($account, 'gone'),
     'AccountRevoked' => fn ($account) => new AccountRevoked($account),
+    'CredentialDataAccessExpiring' => fn ($account, $token) => new CredentialDataAccessExpiring($token, now()->addDay()),
     'CredentialExpiringSoon' => fn ($account, $token) => new CredentialExpiringSoon($token, now()->addDay(), 'soon'),
     'CredentialNeedsReconnect' => fn ($account, $token) => new CredentialNeedsReconnect($token, 'gone'),
     'CredentialRenewed' => fn ($account, $token) => new CredentialRenewed($token),

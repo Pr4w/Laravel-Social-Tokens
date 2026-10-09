@@ -26,9 +26,20 @@ final class RenewalResult
         public readonly bool $unknown = false,
         public readonly array $context = [],
         public readonly bool $clientError = false,
+        public readonly bool $neverExpires = false,
+        public readonly ?CarbonInterface $dataAccessExpiresAt = null,
     ) {}
 
     /**
+     * $neverExpires: the provider says the access token does not expire (Meta's
+     * debug_token `expires_at: 0`), as opposed to an expiry it did not report.
+     * Only read with no $expiresAt. Such a credential is stored without a
+     * renewal date (static), where check-static keeps an eye on it.
+     *
+     * $dataAccessExpiresAt: when the provider stops sharing the user's data
+     * with the app although the token still works (Meta's
+     * data_access_expires_at). Stored when given; null keeps the stored one.
+     *
      * @param  array<string, mixed>  $profile
      */
     public static function success(
@@ -37,6 +48,8 @@ final class RenewalResult
         #[\SensitiveParameter] ?string $refreshToken = null,
         ?CarbonInterface $refreshExpiresAt = null,
         array $profile = [],
+        bool $neverExpires = false,
+        ?CarbonInterface $dataAccessExpiresAt = null,
     ): self {
         return new self(
             outcome: RenewalOutcome::Success,
@@ -45,6 +58,8 @@ final class RenewalResult
             expiresAt: $expiresAt,
             refreshExpiresAt: $refreshExpiresAt,
             profile: $profile,
+            neverExpires: $neverExpires && $expiresAt === null,
+            dataAccessExpiresAt: $dataAccessExpiresAt,
         );
     }
 

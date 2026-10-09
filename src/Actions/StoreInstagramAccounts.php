@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Actions;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Pr4w\SocialTokens\Actions\Concerns\PersistsMetaUserCredential;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
@@ -24,6 +25,8 @@ use RuntimeException;
  */
 class StoreInstagramAccounts
 {
+    use PersistsMetaUserCredential;
+
     private const PAGE_FIELDS = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
 
     public function __construct(protected ConnectorRegistry $registry) {}
@@ -92,13 +95,11 @@ class StoreInstagramAccounts
             }
         }
 
-        // Per-account granted scopes (Meta grants granularly). Best effort.
-        $scopesByAccount = $facebook->grantedScopesByAccount($userToken, $accountIds);
-
-        // Unknown (debug_token failed): keep whatever scopes are stored.
-        if ($scopesByAccount instanceof RenewalResult) {
-            $scopesByAccount = null;
-        }
+        // Per-account granted scopes (Meta grants granularly) and the user
+        // token's lifetime, from one debug_token call. Best effort: unknown
+        // (the call failed) keeps whatever scopes are stored.
+        $debug = $this->debugUserToken($facebook, $userToken);
+        $scopesByAccount = $debug === null ? null : FacebookConnector::grantedScopesFrom($debug, $accountIds);
 
         $scopesFor = fn (string $id): array => $scopesByAccount === null ? [] : ['scopes' => $scopesByAccount[$id] ?? []];
 
@@ -109,14 +110,12 @@ class StoreInstagramAccounts
         // page-only connection leaves no orphaned credential behind.
         $credential = $managedIgIds === []
             ? null
-            : SocialToken::persistCredential(
+            : $this->persistUserCredential(
+                $facebook,
                 ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
-                [
-                    'access_token' => $userToken,
-                    'refresh_token' => null,
-                    'expires_at' => $expiresAt,
-                    'renew_at' => SocialToken::renewAtFor($expiresAt, $facebook), // never null: an unknown expiry is checked back
-                ],
+                $userToken,
+                $expiresAt,
+                $debug,
             );
 
         $accounts = collect();

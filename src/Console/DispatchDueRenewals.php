@@ -9,8 +9,15 @@ use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
 
+/**
+ * Dispatches one renewal job per credential whose renew_at has passed. Each
+ * run also announces the Meta data access deadlines that came within their
+ * lead time (CredentialDataAccessExpiring): a token that never expires has no
+ * renewal to carry that warning.
+ */
 class DispatchDueRenewals extends Command
 {
     protected $signature = 'social-tokens:dispatch-renewals';
@@ -19,6 +26,8 @@ class DispatchDueRenewals extends Command
 
     public function handle(ConnectorRegistry $registry): int
     {
+        $this->warnDataAccessExpiring();
+
         $count = 0;
         $deferred = 0;
         $failed = 0;
@@ -83,6 +92,38 @@ class DispatchDueRenewals extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Fire CredentialDataAccessExpiring once for each credential whose data
+     * access lapses within the configured lead. Warn-only: nothing is flagged.
+     * A listener that throws is reported and does not stop the run, nor the
+     * renewals after it; that credential is not warned again.
+     */
+    protected function warnDataAccessExpiring(): void
+    {
+        $lead = Settings::dataAccessWarningLead();
+
+        if ($lead === null) {
+            return;
+        }
+
+        $warned = 0;
+
+        SocialToken::query()
+            ->dataAccessExpiringBefore(now()->add($lead))
+            ->lazyById()
+            ->each(function (SocialToken $token) use (&$warned) {
+                try {
+                    $warned += (int) $token->warnDataAccessExpiring();
+                } catch (Throwable $e) {
+                    report($e);
+                }
+            });
+
+        if ($warned > 0) {
+            $this->info("Warned about {$warned} credential(s) whose data access lapses soon.");
+        }
     }
 
     /**

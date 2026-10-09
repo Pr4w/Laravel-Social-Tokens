@@ -435,6 +435,31 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   token, the issue date is kept, and so are the expiry and the schedule when
   no `expiresAt` is given, or the stored one (a warning already sent is not
   sent again).
+- **A Meta user token that never expires is no longer extended every week.**
+  Some Facebook Login configurations issue user tokens that `debug_token`
+  reports with `expires_at: 0`. `fb_exchange_token` returns them without
+  `expires_in`, so the credential behind the user's Instagram accounts was
+  stored with an unknown expiry and checked back after one lead time, forever:
+  a pointless `fb_exchange_token` call and a "Renewal returned no expiry"
+  warning every seven days. The package already called `debug_token` at every
+  Facebook and Instagram connection, for the scopes, and threw its lifetime
+  away. It now reads it there and after each renewal: a token that never
+  expires is stored static (no `renew_at`; `check-static` asks Meta about it
+  daily), and an expiry the exchange left out is taken from `debug_token`.
+  When the exchange reports an expiry, that one wins. Credentials stored by
+  2.x become static at their next renewal, within a week of the upgrade.
+- **Meta's data access deadline is tracked and announced.** Meta stops sharing
+  a user's data with the app 90 days after the user was last active
+  (`data_access_expires_at`), although the token keeps working and renewing;
+  only a new login moves it. Nothing in the package read it, so a credential
+  could lose data access while it looked healthy, with no warning. It is now
+  stored on the credential (`social_tokens.data_access_expires_at`, migration
+  `2025_01_01_000009_add_data_access_expiry_to_social_tokens`) at connect and
+  after each renewal, and `social-tokens:dispatch-renewals` fires
+  `CredentialDataAccessExpiring` once, seven days before it, for a credential
+  an active account posts with (the Instagram accounts). It is a warning only:
+  Meta does not say which calls a lapse blocks for an app with business
+  permissions, so the credential is not flagged.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -501,6 +526,23 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `appsecret_proof` signing. The two connectors carried a copy each of the
   call and of the version default, so a fix made to one missed the other.
   `FacebookConnector::extendUserToken()` keeps its array shape.
+- `Events\CredentialDataAccessExpiring($token, $dataAccessExpiresAt)`, fired
+  once per deadline (see Fixed), and the `data_access_warning` config block
+  (`enabled`, `SOCIAL_TOKENS_DATA_ACCESS_WARNING`, default on; `lead_days`,
+  default 7).
+- `social_tokens.data_access_expires_at` and `data_access_warned_at`, with
+  `SocialToken::isDataAccessExpired()`, `SocialToken::warnDataAccessExpiring()`
+  and the `dataAccessExpiringBefore($date)` scope. Storing a new
+  `data_access_expires_at` re-arms the warning.
+- `RenewalResult::success()` takes `neverExpires:` (the provider says the token
+  does not expire: the credential is stored static) and `dataAccessExpiresAt:`;
+  both are readable on the result.
+- `MetaGraphConnector::debugToken($userToken)` (debug_token's `data`),
+  `MetaGraphConnector::tokenLifetime($data)` (`never_expires`, `expires_at`,
+  `data_access_expires_at`, in the app's timezone),
+  `withTokenLifetime($result)`, and
+  `FacebookConnector::grantedScopesFrom($data, $accountIds)`, which
+  `grantedScopesByAccount()` now uses.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -529,6 +571,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   an `expires_in` that is not a number means an unknown expiry. A
   `graph_version` set to an empty string takes the default version instead of
   building a URL without one.
+- A Meta user credential's renewal makes a second call, `debug_token` on the
+  new token, to read its lifetime (see Fixed). A failure of that call leaves
+  the renewal as it was, the stored data access deadline included.
 
 ## [2.0.0]
 

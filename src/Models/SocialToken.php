@@ -16,6 +16,7 @@ use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Events\CredentialDataAccessExpiring;
 use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
@@ -46,6 +47,8 @@ use Pr4w\SocialTokens\Support\Settings;
  * @property ?CarbonInterface $refresh_expires_at
  * @property ?CarbonInterface $renew_at
  * @property ?CarbonInterface $last_renewed_at
+ * @property ?CarbonInterface $data_access_expires_at
+ * @property ?CarbonInterface $data_access_warned_at
  * @property array<int, string>|null $scopes
  * @property ?string $last_error
  * @property int $failed_checks
@@ -85,6 +88,8 @@ class SocialToken extends Model
             'refresh_expires_at' => 'datetime',
             'renew_at' => 'datetime',
             'last_renewed_at' => 'datetime',
+            'data_access_expires_at' => 'datetime',
+            'data_access_warned_at' => 'datetime',
             'scopes' => 'array',
             'status' => AccountStatus::class,
         ];
@@ -93,6 +98,17 @@ class SocialToken extends Model
     public function getTable()
     {
         return config('social-tokens.tokens_table', 'social_tokens');
+    }
+
+    protected static function booted(): void
+    {
+        // A new data access deadline (a new login) re-arms its warning,
+        // whichever writer stores it.
+        static::saving(function (SocialToken $token) {
+            if ($token->isDirty('data_access_expires_at') && ! $token->isDirty('data_access_warned_at')) {
+                $token->data_access_warned_at = null;
+            }
+        });
     }
 
     // Relationships ---------------------------------------------------------
@@ -154,6 +170,26 @@ class SocialToken extends Model
             ->where('status', AccountStatus::Active->value)
             ->whereNotNull('renew_at')
             ->where('renew_at', '<=', now());
+    }
+
+    /**
+     * Credentials whose data access (Meta's data_access_expires_at) lapses
+     * before $before and that have not been warned about it, among those an
+     * active account posts with: the Instagram accounts' Meta user token, not
+     * the one behind a Facebook-only connection, whose Pages post with their
+     * own tokens.
+     *
+     * @param  Builder<SocialToken>  $query
+     * @return Builder<SocialToken>
+     */
+    public function scopeDataAccessExpiringBefore(Builder $query, CarbonInterface $before): Builder
+    {
+        return $query
+            ->where('status', AccountStatus::Active->value)
+            ->whereNotNull('data_access_expires_at')
+            ->where('data_access_expires_at', '<=', $before)
+            ->whereNull('data_access_warned_at')
+            ->whereHas('accounts', fn (Builder $account) => $account->where('status', AccountStatus::Active->value));
     }
 
     /**
@@ -378,6 +414,46 @@ class SocialToken extends Model
         return $this->refresh_expires_at !== null && $this->refresh_expires_at->isPast();
     }
 
+    /**
+     * The provider has stopped sharing the user's data with the app (Meta's
+     * data access, 90 days after the user was last active), although the token
+     * may still work. Only a new login brings it back. False when unknown.
+     */
+    public function isDataAccessExpired(): bool
+    {
+        return $this->data_access_expires_at !== null && ! $this->data_access_expires_at->isFuture();
+    }
+
+    /**
+     * Fire CredentialDataAccessExpiring for the stored deadline, once: only
+     * the call that records the warning fires it. A new deadline stored later
+     * (a new login) re-arms it. Returns whether this call warned.
+     */
+    public function warnDataAccessExpiring(): bool
+    {
+        $deadline = $this->data_access_expires_at;
+
+        if (! $this->exists || $deadline === null) {
+            return false;
+        }
+
+        $warnedAt = now();
+
+        $changed = $this->newQuery()
+            ->whereKey($this->getKey())
+            ->whereNull('data_access_warned_at')
+            ->where('data_access_expires_at', $this->getRawOriginal('data_access_expires_at'))
+            ->update(['data_access_warned_at' => $this->fromDateTime($warnedAt)]) > 0;
+
+        if ($changed) {
+            $this->forceFill(['data_access_warned_at' => $warnedAt])->syncOriginalAttribute('data_access_warned_at');
+
+            event(new CredentialDataAccessExpiring($this, $deadline));
+        }
+
+        return $changed;
+    }
+
     /** The refresh token still works but dies within $lead: time to warn the user. */
     public function isRefreshTokenExpiring(CarbonInterval $lead): bool
     {
@@ -512,6 +588,13 @@ class SocialToken extends Model
             $this->renew_at = $notExtended
                 ? $result->expiresAt->copy()
                 : static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at, $this->renewalStrategyWith($connector));
+        } elseif ($result->neverExpires) {
+            // The provider says the token does not expire (a Meta user token
+            // from some Facebook Login configurations): nothing to renew, short
+            // of a refresh token's own end. Static, so check-static keeps an
+            // eye on it.
+            $this->expires_at = null;
+            $this->renew_at = $this->refresh_expires_at?->copy()->sub($connector->leadTime());
         } else {
             // A renewable credential came back without an expiry. Keeping the
             // old expires_at would be stale, and a null renew_at would turn it
@@ -520,6 +603,10 @@ class SocialToken extends Model
             $this->expires_at = null;
             $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at, $this->renewalStrategyWith($connector))
                 ?? now()->add($connector->leadTime());
+        }
+
+        if ($result->dataAccessExpiresAt !== null) {
+            $this->data_access_expires_at = $result->dataAccessExpiresAt;
         }
 
         // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
@@ -538,7 +625,7 @@ class SocialToken extends Model
     /** Events and logs of a stored renewal, once its write is committed or joined the caller's transaction. */
     protected function announceRenewal(RenewalResult $result, ProviderConnector $connector, bool $notExtended): void
     {
-        if ($result->expiresAt === null && Settings::logUnknownErrors()) {
+        if ($result->expiresAt === null && ! $result->neverExpires && Settings::logUnknownErrors()) {
             Log::warning('[social-tokens] Renewal returned no expiry', [
                 'provider' => $this->provider,
                 'token_id' => $this->getKey(),

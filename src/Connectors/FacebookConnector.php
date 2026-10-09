@@ -91,42 +91,23 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential
      */
     public function grantedScopesByAccount(#[\SensitiveParameter] string $userToken, array $accountIds): array|RenewalResult
     {
-        $appToken = $this->appAccessToken();
+        $data = $this->debugToken($userToken);
 
-        if ($appToken instanceof RenewalResult) {
-            return $appToken;
-        }
+        return $data instanceof RenewalResult ? $data : static::grantedScopesFrom($data, $accountIds);
+    }
 
-        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($this->graphUrl('debug_token'), [
-            'input_token' => $userToken,
-            'access_token' => $appToken,
-        ]));
-
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
-
-        // A failed call (top-level error, 5xx, no `data`) is a failure, never
-        // "no scopes granted": the caller keeps the scopes it already stored.
-        $body = $response->json();
-        $body = is_array($body) ? $body : [];
-
-        if (! empty($body['error'])) {
-            return MetaErrorMapper::map($body['error']);
-        }
-
-        $data = $body['data'] ?? null;
-
-        if ($response->failed() || ! is_array($data)) {
-            return RenewalResult::unknownFailure('Malformed debug_token response.', ['status' => $response->status()]);
-        }
-
-        if (! empty($data['error'])) {
-            return MetaErrorMapper::map($data['error']);
-        }
-
-        $allScopes = $data['scopes'] ?? [];
-        $granular = $data['granular_scopes'] ?? [];
+    /**
+     * grantedScopesByAccount() from a debug_token reply already fetched, so a
+     * connection reads the scopes and the token's lifetime from one call.
+     *
+     * @param  array<string, mixed>  $data  debugToken()'s result.
+     * @param  array<int, string>  $accountIds
+     * @return array<string, array<int, string>> [account_id => scopes]
+     */
+    public static function grantedScopesFrom(array $data, array $accountIds): array
+    {
+        $allScopes = is_array($data['scopes'] ?? null) ? $data['scopes'] : [];
+        $granular = is_array($data['granular_scopes'] ?? null) ? $data['granular_scopes'] : [];
 
         $result = [];
 

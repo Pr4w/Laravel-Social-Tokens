@@ -54,6 +54,12 @@ files (existing files are left alone).
   run again after a failure, and commits its data changes in chunks rather
   than as one transaction.
 
+- `2025_01_01_000009_add_data_access_expiry_to_social_tokens` adds two
+  nullable timestamps to `social_tokens`, `data_access_expires_at` and
+  `data_access_warned_at` (see
+  [Meta data access](#meta-data-access-and-tokens-that-never-expire)). It can
+  be run again after a failure.
+
 The two 000006 migrations are named to run before
 `2025_01_01_000007_scope_identity_to_owner`, which needs them when you come
 from 1.x; 000008 runs after it. On a 2.x install, which already ran 000007,
@@ -161,6 +167,73 @@ have it, and Meta accepts a valid proof whether or not the setting is on.
    (or `connector('instagram')`) gives the value to send as
    `appsecret_proof`. Then deploy, and turn the setting on in the Meta app's
    advanced settings.
+
+### Meta data access and tokens that never expire
+
+The package now reads Meta's `debug_token` lifetime of a Facebook Login user
+token (the credential behind Instagram accounts) at connect and after each
+renewal. Nothing is required; what changes:
+
+- **A token that never expires stops renewing.** A credential whose token
+  Meta reports with `expires_at: 0` was extended every week in 2.x (an
+  unknown expiry is checked back after one lead time), with a "Renewal
+  returned no expiry" warning each time. At its next renewal, within a week
+  of the upgrade, it becomes static: `renew_at` null, no more weekly
+  `CredentialRenewed`, and `social-tokens:check-static` asks Meta about it
+  every day instead. If you set `check_static_schedule` to `null`, schedule
+  `check-static` yourself, or nothing notices such a token dying before a
+  publish fails.
+- **Data access is announced.** `social-tokens:dispatch-renewals` fires
+  `CredentialDataAccessExpiring` once, seven days before Meta stops sharing
+  the user's data with your app (90 days after the user was last active in
+  it). Listen for it and ask the user to reconnect: only a new login moves the
+  date. The credential is not flagged.
+- **One more Graph call per renewal** of a Meta user credential
+  (`debug_token`, with the app access token).
+
+If you keep a published `config/social-tokens.php`, add the block to be able to
+change the warning (it is on, with a 7-day lead, when the block is missing):
+
+```php
+'data_access_warning' => [
+    'enabled' => env('SOCIAL_TOKENS_DATA_ACCESS_WARNING', true),
+    'lead_days' => 7,
+],
+```
+
+To learn the deadlines now rather than at each credential's next renewal or
+reconnect, run once in `php artisan tinker` (one `debug_token` call per Meta
+user credential behind Instagram accounts). Do run it if a credential stored
+before 1.2 has no `renew_at` (a token that never expires, stored as static):
+nothing renews it, so only a reconnect would read its deadline. A deadline
+that is close or already past is announced at the next dispatcher run:
+
+```php
+use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
+use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\SocialTokens;
+
+$facebook = app(SocialTokens::class)->connector('facebook');
+
+SocialToken::where('provider', 'facebook')->where('status', 'active')
+    ->whereHas('accounts', fn ($account) => $account->where('provider', 'instagram')) // not the Page tokens
+    ->each(function (SocialToken $token) use ($facebook) {
+        $data = $facebook->debugToken($token->access_token);
+
+        if (! is_array($data)) {
+            return; // Meta did not answer: the next renewal reads it
+        }
+
+        $lifetime = MetaGraphConnector::tokenLifetime($data);
+        $token->data_access_expires_at = $lifetime['data_access_expires_at'] ?? $token->data_access_expires_at;
+
+        if ($token->expires_at === null && $lifetime['never_expires']) {
+            $token->renew_at = null; // never expires: static
+        }
+
+        $token->save();
+    });
+```
 
 ### Check your published config
 

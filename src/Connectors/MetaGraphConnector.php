@@ -2,8 +2,10 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
+use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Carbon;
 use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -53,7 +55,8 @@ abstract class MetaGraphConnector extends AbstractConnector
     }
 
     /**
-     * Refresh the Meta user credential: extend the stored user token in place.
+     * Refresh the Meta user credential: extend the stored user token in place,
+     * then read its lifetime from debug_token (withTokenLifetime()).
      * Single-phase: Page tokens are static and are not re-derived here.
      */
     public function refreshCredential(SocialToken $token): RenewalResult
@@ -62,7 +65,120 @@ abstract class MetaGraphConnector extends AbstractConnector
             return RenewalResult::terminalFailure('Missing user token.');
         }
 
-        return $this->exchangeUserToken($token->access_token);
+        $result = $this->exchangeUserToken($token->access_token);
+
+        return $result->succeeded() ? $this->withTokenLifetime($result) : $result;
+    }
+
+    /**
+     * A successful exchange completed with what debug_token says about the new
+     * token: whether it never expires, its expiry when the exchange gave none,
+     * and when its data access lapses. fb_exchange_token reports none of that:
+     * a token that never expires came back with "no expiry", and was renewed
+     * every week for nothing. Best effort: the exchange stands if
+     * debug_token fails.
+     */
+    public function withTokenLifetime(RenewalResult $result): RenewalResult
+    {
+        if (! $result->succeeded() || $result->accessToken === null) {
+            return $result;
+        }
+
+        $data = $this->debugToken($result->accessToken);
+
+        if ($data instanceof RenewalResult) {
+            return $result;
+        }
+
+        $lifetime = static::tokenLifetime($data);
+
+        return RenewalResult::success(
+            accessToken: $result->accessToken,
+            expiresAt: $result->expiresAt ?? $lifetime['expires_at'],
+            refreshToken: $result->refreshToken,
+            refreshExpiresAt: $result->refreshExpiresAt,
+            profile: $result->profile,
+            neverExpires: $lifetime['never_expires'],
+            dataAccessExpiresAt: $lifetime['data_access_expires_at'] ?? $result->dataAccessExpiresAt,
+        );
+    }
+
+    /**
+     * debug_token's `data` about a user token: its scopes, its expiry and its
+     * data access expiry. A failed call (top-level error, 5xx, no `data`) is a
+     * failure, never an empty answer: callers keep what they already stored.
+     *
+     * @return array<string, mixed>|RenewalResult
+     */
+    public function debugToken(#[\SensitiveParameter] string $userToken): array|RenewalResult
+    {
+        $appToken = $this->appAccessToken();
+
+        if ($appToken instanceof RenewalResult) {
+            return $appToken;
+        }
+
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($this->graphUrl('debug_token'), [
+            'input_token' => $userToken,
+            'access_token' => $appToken,
+        ]));
+
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        if (! empty($body['error'])) {
+            return MetaErrorMapper::map($body['error']);
+        }
+
+        $data = $body['data'] ?? null;
+
+        if ($response->failed() || ! is_array($data)) {
+            return RenewalResult::unknownFailure('Malformed debug_token response.', ['status' => $response->status()]);
+        }
+
+        if (! empty($data['error'])) {
+            return MetaErrorMapper::map($data['error']);
+        }
+
+        return $data;
+    }
+
+    /**
+     * A token's lifetime in a debug_token reply. `expires_at` 0 means the
+     * token never expires (never_expires, expires_at null); a missing or
+     * unreadable value is unknown (both off). `data_access_expires_at` is
+     * when Meta stops sharing the user's data with the app, 90 days after the
+     * user was last active, whatever the token's own expiry.
+     *
+     * @param  array<string, mixed>  $data  debugToken()'s result.
+     * @return array{never_expires: bool, expires_at: ?CarbonInterface, data_access_expires_at: ?CarbonInterface}
+     */
+    public static function tokenLifetime(array $data): array
+    {
+        $expiresAt = $data['expires_at'] ?? null;
+        $dataAccess = $data['data_access_expires_at'] ?? null;
+
+        return [
+            'never_expires' => is_numeric($expiresAt) && (int) $expiresAt === 0,
+            'expires_at' => self::moment($expiresAt),
+            'data_access_expires_at' => self::moment($dataAccess),
+        ];
+    }
+
+    /**
+     * A Unix timestamp as a date in the app's timezone, like now(): Eloquent
+     * writes a date in its own timezone, so a UTC one would be stored hours
+     * off in an app that is not on UTC.
+     */
+    private static function moment(mixed $timestamp): ?CarbonInterface
+    {
+        return is_numeric($timestamp) && (int) $timestamp > 0
+            ? Carbon::createFromTimestamp((int) $timestamp, date_default_timezone_get())
+            : null;
     }
 
     /**

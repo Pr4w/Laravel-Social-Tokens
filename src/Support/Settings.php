@@ -2,6 +2,8 @@
 
 namespace Pr4w\SocialTokens\Support;
 
+use Carbon\CarbonInterval;
+
 /**
  * Typed reads of the package config, normalised in one place. A published
  * config may hold any form Laravel accepts elsewhere (`'backoff' => 60`, a
@@ -65,6 +67,23 @@ final class Settings
     public static function checkRenewable(): bool
     {
         return self::bool('check_renewable', false);
+    }
+
+    /**
+     * How long before a credential's data access lapses (Meta's
+     * data_access_expires_at) CredentialDataAccessExpiring fires, or null when
+     * `data_access_warning.enabled` is off. A negative lead counts as 0.
+     */
+    public static function dataAccessWarningLead(): ?CarbonInterval
+    {
+        $warning = config('social-tokens.data_access_warning');
+        $warning = is_array($warning) ? $warning : [];
+
+        if (! self::flag($warning['enabled'] ?? true, true)) {
+            return null;
+        }
+
+        return CarbonInterval::days(max(0, self::int($warning['lead_days'] ?? null, 7)));
     }
 
     /**

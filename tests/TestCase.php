@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Tests;
 
+use Illuminate\Support\Facades\Http;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Pr4w\SocialTokens\SocialTokensServiceProvider;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
@@ -11,6 +12,10 @@ abstract class TestCase extends Orchestra
     protected function setUp(): void
     {
         parent::setUp();
+
+        // A request no test faked must never reach a real provider: it would
+        // make the suite depend on the network (and on Meta's mood).
+        Http::preventStrayRequests();
 
         // Run every package migration (sorted by filename) plus the test
         // fixtures against the in-memory sqlite database.

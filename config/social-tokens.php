@@ -79,6 +79,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Meta data access
+    |--------------------------------------------------------------------------
+    |
+    | A Facebook Login user token (the one Instagram accounts post with) has
+    | two clocks: the token's own expiry, which renewals extend (or none at
+    | all), and data access, which lapses 90 days after the user was last
+    | active in your app and only comes back with a new login. The package
+    | stores the second (data_access_expires_at) from debug_token at connect
+    | and after each renewal, and the dispatcher fires
+    | CredentialDataAccessExpiring once, `lead_days` before it, for a
+    | credential an active account posts with. Meta does not say whether a
+    | lapse stops publishing with business permissions, so nothing is flagged:
+    | ask the user to reconnect.
+    |
+    */
+    'data_access_warning' => [
+        'enabled' => env('SOCIAL_TOKENS_DATA_ACCESS_WARNING', true),
+        'lead_days' => 7,
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |

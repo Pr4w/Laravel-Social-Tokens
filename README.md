@@ -31,7 +31,7 @@ refresh token + cron" design breaks on at least one of them:
 | TikTok | 24h | refresh_token grant, refresh token rotates | `RotatingRefreshToken` |
 | X (Twitter) | 2h | refresh_token grant, single-use refresh token rotates | `RotatingRefreshToken` |
 | Facebook | Page token, no expiry | page token stored static; the shared user token is extended | `ExtendLongLived` |
-| Instagram | 60 days | extend the long lived user token, no refresh token | `ExtendLongLived` |
+| Instagram | 60 days, or no expiry | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
 
@@ -457,9 +457,9 @@ reports it, unless you pass it: `StoreConnection` and
 `StoreAccountFromSocialite` take `refreshExpiresAt:`, as does
 `StoreLinkedInOrganizations`.
 
-Static credentials (Facebook page tokens) are never renewed, but die when the
-user changes their password, removes the app or loses the Page's admin role. A
-daily `social-tokens:check-static` run asks Meta about each one that an active
+Static credentials (Facebook page tokens, and Meta user tokens that never
+expire) are never renewed, but die when the user changes their password,
+removes the app or loses the Page's admin role. A daily `social-tokens:check-static` run asks Meta about each one that an active
 account still uses, and flags the dead ones `needs_reconnect` (set
 `check_static_schedule` to `null` to disable; rejection reports then wait for
 a run you start, see [Posting](#posting)). A credential whose accounts are
@@ -521,6 +521,36 @@ deadlock does, and any error aborts a PostgreSQL transaction), so the
 a nested one), which rolls back or retries. Renewing a TikTok or X credential
 inside a transaction logs a warning (`Renewing a single-use refresh token inside
 a database transaction`).
+
+### Meta: tokens that never expire, and data access
+
+A Facebook Login user token (the one a user's Instagram accounts post with) has
+two clocks, and `debug_token` reports both. The package reads them at connect
+and after each renewal:
+
+- **The token's own expiry.** Usually 60 days, extended at each renewal. Some
+  Facebook Login configurations issue tokens that never expire (`expires_at:
+  0`): such a credential is stored *static*, with no `renew_at`, and
+  `check-static` asks Meta about it every day instead of extending it every
+  week. A credential stored by 2.x becomes static at its next renewal.
+- **Data access** (`data_access_expires_at` on the credential). Meta stops
+  sharing the user's data with your app 90 days after the user was last
+  active in it, although the token keeps working and renewing; only a new
+  login through your app moves the date. `social-tokens:dispatch-renewals`
+  fires `CredentialDataAccessExpiring` once, seven days before it (or as soon
+  as it learns of a date already close or past), for a credential an active
+  account posts with. Ask the user to reconnect. Meta does not say which
+  calls a lapse blocks for an app with business permissions (Instagram
+  publishing included; the `pages_*` permissions are documented as not
+  expiring), so the package only warns: the credential is not flagged and
+  stays usable. If Meta then rejects a call, report it with
+  `reportRejected()`. Tune or turn off the warning in `data_access_warning`
+  (`SOCIAL_TOKENS_DATA_ACCESS_WARNING=false`).
+
+```php
+$account->credential->data_access_expires_at; // null when unknown
+$account->credential->isDataAccessExpired();
+```
 
 ## Posting
 
@@ -638,8 +668,8 @@ Eager-load `credential` when listing accounts (`SocialAccount::with('credential'
 to avoid one query per row.
 
 Listen for `AccountConnected`, `CredentialRenewed`, `CredentialExpiringSoon`,
-`CredentialNeedsReconnect`, `CredentialRevoked`, `AccountNeedsReconnect` and
-`AccountRevoked` to drive
+`CredentialDataAccessExpiring`, `CredentialNeedsReconnect`, `CredentialRevoked`,
+`AccountNeedsReconnect` and `AccountRevoked` to drive
 notifications and a reconnect button in your panel. A dead credential fires
 `CredentialNeedsReconnect` once, not once per account: notify the user from that
 event, listing the affected accounts through `$event->token->accounts`, so a user

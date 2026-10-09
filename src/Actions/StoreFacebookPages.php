@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Actions;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Pr4w\SocialTokens\Actions\Concerns\PersistsMetaUserCredential;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
@@ -29,6 +30,8 @@ use RuntimeException;
  */
 class StoreFacebookPages
 {
+    use PersistsMetaUserCredential;
+
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
@@ -82,26 +85,22 @@ class StoreFacebookPages
             throw new RuntimeException('Could not list Facebook pages: '.$pages->reason);
         }
 
-        // Per-account granted scopes (Meta grants granularly). Best effort.
+        // Per-account granted scopes (Meta grants granularly) and the user
+        // token's lifetime, from one debug_token call. Best effort: unknown
+        // (the call failed) keeps whatever scopes are stored.
         $pageIds = collect($pages)->pluck('id')->filter()->map(fn ($id) => (string) $id)->all();
-        $scopesByAccount = $connector->grantedScopesByAccount($userToken, $pageIds);
+        $debug = $this->debugUserToken($connector, $userToken);
+        $scopesByAccount = $debug === null ? null : FacebookConnector::grantedScopesFrom($debug, $pageIds);
 
-        // Unknown (debug_token failed): keep whatever scopes are stored.
-        if ($scopesByAccount instanceof RenewalResult) {
-            $scopesByAccount = null;
-        }
-
-        // 4a. The renewable Meta user credential (shared with Instagram). Only
-        // when the user manages a Page, so no credential is left orphaned.
+        // 4a. The Meta user credential (shared with Instagram). Only when the
+        // user manages a Page, so no credential is left orphaned.
         if ($pages !== []) {
-            SocialToken::persistCredential(
+            $this->persistUserCredential(
+                $connector,
                 ['provider' => 'facebook', 'provider_holder_id' => $userId] + SocialAccount::ownerKey($owner),
-                [
-                    'access_token' => $userToken,
-                    'refresh_token' => null,
-                    'expires_at' => $expiresAt,
-                    'renew_at' => SocialToken::renewAtFor($expiresAt, $connector),
-                ],
+                $userToken,
+                $expiresAt,
+                $debug,
             );
         }
 
