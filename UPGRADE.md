@@ -137,8 +137,8 @@ have it, and Meta accepts a valid proof whether or not the setting is on.
 2. If your database still holds Facebook Page or user tokens issued by
    **another** Meta app than the one in `services.facebook` (you switched
    apps), their proof cannot match: `social-tokens:check-static` then logs
-   one critical `facebook rejected the app's OAuth client during
-   check-static` per run ("Invalid appsecret_proof", with the number of
+   one critical "facebook rejected the app's OAuth client during
+   check-static" per run ("Invalid appsecret_proof", with the number of
    credentials) instead of checking them. Set `META_APPSECRET_PROOF=false`
    until those users have reconnected.
 3. To turn on Require App Secret, first sign your own Graph calls made with
@@ -263,8 +263,8 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
 - `social-tokens:check-static` applies its breaker to each provider: when more
   than `max_terminal_ratio` (20%) of at least `min_checked` (10) credentials of
   one provider are rejected in a run, none of that provider's credentials is
-  flagged and the run logs `[social-tokens] check-static skipped {provider}:
-  too many of its credentials rejected at once` (critical, with `provider`,
+  flagged and the run logs "[social-tokens] check-static skipped {provider}:
+  too many of its credentials rejected at once" (critical, with `provider`,
   `checked`, `terminal`). The other providers are still flagged, and the
   command exits with a failure code. If you alert on `check-static aborted`,
   alert on this message too. The run-wide breaker is unchanged.
@@ -297,12 +297,12 @@ Nothing to change in your code. Some credentials 2.x flagged `needs_reconnect`
   and flags the ones LinkedIn reports revoked.
 - A Meta answer about the app's own credentials (a wrong or rotated app
   secret, a wrong app id, a refused `appsecret_proof`) no longer counts as a
-  transient renewal error: it logs the critical `facebook rejected the app's
-  OAuth client: check its client_id/client_secret` and pauses that
-  provider's renewals for 15 minutes, like
-  `invalid_client` on the other providers. Route that log line to whoever
-  holds the Meta app secrets. After rotating the secret, restart your queue
-  workers (`php artisan queue:restart`) so they read it.
+  transient renewal error. Like `invalid_client` on the other providers, it
+  logs the critical "facebook rejected the app's OAuth client: check its
+  client_id/client_secret" and pauses that provider's renewals for 15
+  minutes. Route that log line to whoever holds the Meta app secrets. After
+  rotating the secret, restart your queue workers
+  (`php artisan queue:restart`) so they read it.
 
 ### If you wrote a connector
 
