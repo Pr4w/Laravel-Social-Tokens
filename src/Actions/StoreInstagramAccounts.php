@@ -236,7 +236,8 @@ class StoreInstagramAccounts implements StoresConnections
             }
         }
 
-        // 5. Reconcile Instagram accounts this user no longer manages.
+        // 5. Reconcile Instagram accounts this user no longer manages, under
+        // every owner: Meta grants access per user, not per connection.
         SocialAccount::query()
             ->where('provider', 'instagram')
             ->where('provider_holder_id', $userId)

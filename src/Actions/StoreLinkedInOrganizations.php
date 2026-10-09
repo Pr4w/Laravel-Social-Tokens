@@ -191,9 +191,10 @@ class StoreLinkedInOrganizations
         });
 
         // Reconcile: organizations this member no longer administers (absent from
-        // the response) are flagged. Scoped to provider_holder_id, so other
-        // members' orgs are never touched; the member's personal row carries
-        // that holder id too and is excluded by its provider_user_id.
+        // the response) are flagged, under every owner: LinkedIn grants access
+        // per member. Scoped to provider_holder_id, so other members' orgs are
+        // never touched; the member's personal row carries that holder id too
+        // and is excluded by its provider_user_id.
         $managedIds = collect($organizations)->pluck('id')->filter()->values()->all();
 
         SocialAccount::query()

@@ -13,9 +13,15 @@
  *
  * Target behaviour (v2.0, breaking): each owner keeps its own account row,
  * backed by its own credential (the grant that owner's user gave), and a
- * connection, reconciliation or revocation for one owner never re-parents,
- * overwrites or kills another owner's row. Reconnecting for the same owner,
- * or without any owner, still updates the existing row in place.
+ * connection or revocation for one owner never re-parents, overwrites or
+ * kills another owner's row. Reconnecting for the same owner, or without any
+ * owner, still updates the existing row in place.
+ *
+ * Reconciliation follows the external user, not the owner: the tests below
+ * connect a different Facebook user or LinkedIn member per owner, so one
+ * user's lost Page leaves the other owner's row alone. When the same user is
+ * connected under two owners, both owners' rows are flagged
+ * (tests/Feature/Actions/CrossOwnerReconciliationTest.php).
  */
 
 use Illuminate\Database\Eloquent\Model;

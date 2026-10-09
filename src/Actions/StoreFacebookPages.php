@@ -198,8 +198,9 @@ class StoreFacebookPages implements StoresConnections
         }
 
         // 5. Reconcile: any still-active page account for THIS user that they no
-        // longer manage is flagged. Scoped to the user id, so a co-owner's pages
-        // are never touched.
+        // longer manage is flagged. Scoped to the Facebook user, not the owner:
+        // another user's Pages are never touched, and this user's are flagged
+        // under every owner, since Meta grants access per user.
         $managedIds = collect($pages)->pluck('id')->filter()->values()->all();
 
         SocialAccount::query()
