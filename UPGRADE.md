@@ -69,6 +69,12 @@ forms are now normalised instead of failing or being misread:
   The package logs `The connector driver for provider [...] does not name a
   ProviderConnector class` once per process: search your log for it after
   deploying.
+- `dispatch_schedule` and `check_static_schedule` accept a cron expression
+  (`'*/10 * * * *'`, `'@hourly'`) besides a frequency method without
+  arguments. Any other value, including a scheduler macro, no longer throws:
+  it logs an error naming the setting and keeps the default (every 15 minutes,
+  daily). If you used a macro, set the key to `null` and schedule the command
+  yourself.
 
 ## From 1.x to 2.0
 

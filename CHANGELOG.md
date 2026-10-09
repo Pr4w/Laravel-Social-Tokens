@@ -106,6 +106,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `ConnectorRegistry::has()` and `configured()` now mean "resolvable", so such
   a provider is handled like `driver => null`, with one error log per process.
   Connecting still throws.
+- An invalid `dispatch_schedule` or `check_static_schedule` (a cron
+  expression, a misspelt method, a method that needs an argument such as
+  `dailyAt`) threw while the host resolved its Schedule. Apps whose
+  `routes/console.php` or `withSchedule()` schedule their own tasks resolve it
+  in every artisan process, so `queue:work`, `migrate` and the whole scheduler
+  died with it. Both settings now accept a cron expression as well as a
+  frequency method without arguments; anything else logs an error and keeps
+  the default schedule. A non-frequency method such as `runInBackground` no
+  longer schedules the command every minute.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

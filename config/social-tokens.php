@@ -32,6 +32,10 @@ return [
     | lead time, so it must run clearly more often than the shortest lead time
     | you support, queue latency included: Google renews 25 minutes early.
     |
+    | Either a scheduler frequency method that takes no argument
+    | ('everyTenMinutes', 'hourly') or a cron expression ('5,20,35,50 * * * *').
+    | Anything else logs an error and keeps the default.
+    |
     | Set to null to disable (e.g. to schedule social-tokens:dispatch-renewals
     | yourself). Both scheduled commands run withoutOverlapping()->onOneServer(),
     | which needs a cache store shared by your servers.
@@ -47,7 +51,8 @@ return [
     | Static credentials (Facebook page tokens) never expire, but die when the
     | user changes their password, removes the app or loses the Page's admin
     | role. This schedule asks the provider about each one (one light call per
-    | credential) and flags the dead ones. Set to null to disable.
+    | credential) and flags the dead ones. Same forms as dispatch_schedule; set
+    | to null to disable.
     |
     */
     'check_static_schedule' => 'daily',
