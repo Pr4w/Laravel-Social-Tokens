@@ -19,6 +19,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `#[\SensitiveParameter]`, the Socialite user passed to `StoreConnection` and
   `StoreAccountFromSocialite` included: traces show a `SensitiveParameterValue`
   in its place.
+- **Queued listeners no longer copy whole models into the queue.** The seven
+  events lacked `SerializesModels`, so a `ShouldQueue` listener had the event
+  PHP-serialised with every attribute and loaded relation: the credential's
+  token ciphertext, and on `AccountConnected` the owner and `connectedBy`
+  models (your User's password hash, `remember_token`, email). It sat in Redis
+  or the jobs table, in Horizon, and in `failed_jobs` for good. Every event
+  now uses `SerializesModels`: the payload holds the class and key, and the
+  listener re-reads the row when it runs (see Changed (breaking), and
+  [UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
 
 ### Changed (breaking)
 - `provider` is `varchar(50)` on `social_accounts` and `social_tokens` on MySQL,
@@ -57,6 +66,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   method that only picks the days such as `weekdays`) logs an error and keeps
   the default schedule (see Fixed, and
   [UPGRADE](UPGRADE.md#check-your-published-config)).
+- A queued listener of a package event receives the account or credential as
+  it is in the database when the listener runs, not a copy taken at dispatch
+  (see Security). It fails with `ModelNotFoundException` if the row was
+  deleted in between, or not yet committed when the event fired inside your
+  own transaction ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
+- `SocialAccount::connectedBy()` is a relation named `connectedBy`, after its
+  method (it was named `connected_by`). Code reading the loaded relation by
+  its old name (`getRelation('connected_by')`, `relationLoaded('connected_by')`)
+  must use `connectedBy`; `toArray()` still shows it as `connected_by` (see
+  Fixed).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -164,6 +183,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   errors are logged with the "raw payload". Since 1.2 the logged context is
   redacted (error codes, HTTP status, the response's keys) and never holds the
   response body, which may carry tokens; the comment now says so.
+- `SocialAccount::with('connectedBy')` loaded the relation under another name,
+  so reading `$account->connectedBy` queried again for every row, and the
+  model `associate()` had just set was not reused either. A queued event's
+  restore skipped it the same way.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`

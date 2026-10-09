@@ -80,9 +80,10 @@ class SocialAccount extends Model
      */
     public function connectedBy(): MorphTo
     {
-        // Explicit name: the columns are connected_by_*, which the default
-        // guess (derived from the method name) would not match.
-        return $this->morphTo('connected_by');
+        // The relation is named after the method, so associate(), with() and
+        // the queued events' restore all use the key `connectedBy` reads; the
+        // columns are connected_by_*.
+        return $this->morphTo(__FUNCTION__, 'connected_by_type', 'connected_by_id');
     }
 
     // Owner -----------------------------------------------------------------

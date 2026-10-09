@@ -458,6 +458,13 @@ credential, so `check-static` fires one event per dead Page. Group those
 notifications yourself if you need to, e.g. by the accounts'
 `provider_holder_id` (the Facebook user) or by owner.
 
+The events use `SerializesModels`: a queued (`ShouldQueue`) listener receives
+the account or credential re-read from the database when it runs, so neither
+your owner model nor the token ciphertext is copied into the queue. It fails
+with `ModelNotFoundException` if the row was deleted meanwhile; if you fire the
+connection inside your own transaction, make the listener
+`ShouldQueueAfterCommit`.
+
 To disconnect **one** account, call `disconnect()`. Accounts that share its
 credential (the other Instagram accounts of the same Facebook user, a LinkedIn
 member's personal profile and organizations) keep posting. The credential itself

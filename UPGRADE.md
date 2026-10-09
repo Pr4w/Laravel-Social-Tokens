@@ -82,6 +82,42 @@ the queue rejects (Redis, SQS or the cache lock store down) still ends the run,
 as in 2.x: it is reported once, the command prints `Could not queue a renewal
 job` and exits with a failure code.
 
+### Queued listeners re-read the models
+
+Every package event (`AccountConnected`, `AccountNeedsReconnect`,
+`AccountRevoked`, `CredentialExpiringSoon`, `CredentialNeedsReconnect`,
+`CredentialRenewed`, `CredentialRevoked`) now uses `SerializesModels`, like
+Laravel's own events. Synchronous listeners and `Event::fake()` assertions see
+no difference. A listener that implements `ShouldQueue` gets
+`$event->account` / `$event->token` fetched again from the database when it
+runs, with the relations that were loaded at dispatch (`ownable`,
+`connectedBy`), instead of a serialised copy that also carried your owner
+model and the token ciphertext into the queue.
+
+What to check:
+
+- **Rows deleted right after the event.** If your app deletes a
+  `SocialAccount` or `SocialToken` soon after the event fires (for example
+  after `disconnect()`, which fires `AccountRevoked`), a queued listener that
+  runs later fails with `ModelNotFoundException` and lands in `failed_jobs`.
+  `$deleteWhenMissingModels` on a listener class is not honoured by Laravel
+  for queued listeners. Delete the rows from that listener itself, or later,
+  or keep the data the listener needs in your own event.
+- **Events fired inside your own transaction.** If your OAuth callback wraps
+  `StoreConnection::handle()` in `DB::transaction()`, a queued listener can
+  run before the commit and not find the new account. Implement
+  `Illuminate\Contracts\Queue\ShouldQueueAfterCommit` on the listener (or set
+  `public $afterCommit = true;`).
+- **Payloads queued by 2.x** still run after the upgrade: a model serialised
+  whole is restored as it was.
+
+`SocialAccount::connectedBy()` is now a relation named `connectedBy`, after
+its method; it was named `connected_by`. If your code reads it by the old name
+(`$account->getRelation('connected_by')`, `relationLoaded('connected_by')`,
+`setRelation('connected_by', ...)`), use `connectedBy`. `$account->connectedBy`,
+`with('connectedBy')` and `toArray()` (key `connected_by`) need no change;
+eager loading now actually avoids the extra query per row.
+
 ### Check your published config
 
 No change is needed for a config that kept the shipped forms. Values in other

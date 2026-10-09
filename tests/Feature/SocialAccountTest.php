@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
@@ -7,6 +8,7 @@ use Pr4w\SocialTokens\Events\AccountRevoked;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Tests\Fixtures\Owner;
 
 function account(array $attrs = []): SocialAccount
 {
@@ -28,6 +30,22 @@ it('belongs to the credential it posts with', function () {
     $account = account(['social_token_id' => $token->getKey()]);
 
     expect($account->credential->is($token))->toBeTrue();
+});
+
+it('eager-loads and associates who connected the account under the relation it reads', function () {
+    $owner = Owner::create(['name' => 'Connector']);
+    $account = account();
+    $account->connectedBy()->associate($owner)->save();
+
+    expect($account->relationLoaded('connectedBy'))->toBeTrue();
+
+    DB::enableQueryLog();
+    $loaded = SocialAccount::with('connectedBy')->get();
+    $queries = count(DB::getQueryLog());
+
+    expect($loaded->first()->connectedBy->is($owner))->toBeTrue()
+        ->and(DB::getQueryLog())->toHaveCount($queries) // no lazy load after with()
+        ->and($loaded->first()->toArray())->toHaveKey('connected_by');
 });
 
 it('marks an account for reconnection and fires an event', function () {

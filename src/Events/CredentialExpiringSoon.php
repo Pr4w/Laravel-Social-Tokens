@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Events;
 
 use Carbon\CarbonInterface;
 use Illuminate\Foundation\Events\Dispatchable;
+use Illuminate\Queue\SerializesModels;
 use Pr4w\SocialTokens\Models\SocialToken;
 
 /**
@@ -16,7 +17,7 @@ use Pr4w\SocialTokens\Models\SocialToken;
  */
 class CredentialExpiringSoon
 {
-    use Dispatchable;
+    use Dispatchable, SerializesModels;
 
     public function __construct(
         public readonly SocialToken $token,
