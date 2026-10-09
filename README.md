@@ -634,8 +634,10 @@ has everything it needs — and skip or warn on the ones that fall short.
 or `debug_token` failed) and a list when known — `[]` means none granted.
 `grantedScopes()` treats unknown as none; call `$account->scopesKnown()` first if
 you want to treat unknown differently. An unknown value never overwrites a known
-list, and lists are normalised (trimmed, no blanks or duplicates). Threads never
-reports scopes, so its rows stay `null` unless you write them. The account's
+list, and lists are normalised: one scope per element (a comma- or
+space-separated string, as LinkedIn and TikTok send them, is split), no blanks
+or duplicates. Threads never reports scopes, so its rows stay `null` unless you
+write them. The account's
 `profile` is merged, not replaced: keys you store there yourself survive a
 reconnect. A Facebook Page listed without an `access_token` (the user has no
 posting task on it) is not stored.

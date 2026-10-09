@@ -370,6 +370,35 @@ refreshed twice or renewed over a reconnect. Check three things:
 
 There is nothing to migrate.
 
+### LinkedIn scopes are split
+
+`SocialToken::normaliseScopes()` now splits an element holding several
+scopes on commas and whitespace. LinkedIn lists the granted scopes
+comma-separated and Socialite's LinkedIn drivers split them on spaces, so a
+LinkedIn profile stored through `StoreConnection` or `StoreAccountFromSocialite`
+got one element holding them all (`['email,openid,profile,w_member_social']`),
+on the account and on its credential: `hasScope('w_member_social')` answered
+`false`. New connections are stored one scope per element. Rows stored
+before keep the joined element until the member reconnects; to fix them now,
+run once:
+
+```php
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Models\SocialToken;
+
+foreach ([SocialAccount::class, SocialToken::class] as $model) {
+    $model::query()->where('provider', 'linkedin')->whereNotNull('scopes')->each(function ($row) {
+        if (($scopes = SocialToken::normaliseScopes($row->scopes)) !== null) {
+            $row->forceFill(['scopes' => $scopes])->saveQuietly();
+        }
+    });
+}
+```
+
+If your own code splits a scope string before handing it to the package
+(`explode(',', $token['scope'])` for `StoreLinkedInOrganizations`), it can
+keep doing so, or pass the string as a single element.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret

@@ -40,8 +40,8 @@ class StoreLinkedInOrganizations
      * @param  string|null  $refreshToken  Member refresh token, if your app has MDP.
      * @param  CarbonInterface|null  $expiresAt  Access token expiry.
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
-     * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's `scope`, split on commas);
-     *                                           null means unknown and keeps the stored ones.
+     * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's comma-separated `scope`, split
+     *                                           or as one element); null means unknown and keeps the stored ones.
      * @return Collection<int, SocialAccount> One row per administered organization.
      *
      * @throws RuntimeException when the organizations cannot be listed.

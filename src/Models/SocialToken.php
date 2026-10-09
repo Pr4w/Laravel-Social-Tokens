@@ -222,21 +222,29 @@ class SocialToken extends Model
     // Scopes ------------------------------------------------------------------
 
     /**
-     * The one shape for stored scopes: trimmed strings, no blanks, no
-     * duplicates, order kept. An empty result is null: "unknown", which never
-     * overwrites a known list (a known-empty list comes from the provider).
+     * The one shape for stored scopes: one scope per string, no blanks, no
+     * duplicates, order kept. An element holding several scopes is split on
+     * commas and whitespace: LinkedIn and TikTok send theirs comma-separated,
+     * and Socialite's LinkedIn drivers split them on spaces, which leaves them
+     * joined. An empty result is null: "unknown", which never overwrites a
+     * known list (a known-empty list comes from the provider).
      *
      * @param  array<int, mixed>|null  $scopes
      * @return array<int, string>|null
      */
     public static function normaliseScopes(?array $scopes): ?array
     {
-        $scopes = array_values(array_unique(array_filter(
-            array_map(fn ($scope) => is_string($scope) ? trim($scope) : '', $scopes ?? []),
-            fn (string $scope) => $scope !== '',
-        )));
+        $split = [];
 
-        return $scopes === [] ? null : $scopes;
+        foreach ($scopes ?? [] as $scope) {
+            if (is_string($scope)) {
+                array_push($split, ...(preg_split('/[\s,]+/', $scope, -1, PREG_SPLIT_NO_EMPTY) ?: []));
+            }
+        }
+
+        $split = array_values(array_unique($split));
+
+        return $split === [] ? null : $split;
     }
 
     /** Whether the granted scopes are known (null means unknown, [] means none granted). */
@@ -449,7 +457,7 @@ class SocialToken extends Model
         // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
         // Google spaces): keep the credential's list current.
         if (is_string($result->profile['scope'] ?? null)) {
-            $scopes = static::normaliseScopes(preg_split('/[\s,]+/', trim($result->profile['scope'])) ?: []);
+            $scopes = static::normaliseScopes([$result->profile['scope']]);
 
             if ($scopes !== null) {
                 $this->scopes = $scopes;

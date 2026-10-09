@@ -368,6 +368,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   listed `file` as suitable; a file lock only holds on one host, so a worker
   server and a web server could both refresh the same TikTok or X token. The
   `array` store only locks within one process: it is for tests.
+- LinkedIn scopes stored through `StoreConnection` or
+  `StoreAccountFromSocialite` are one scope per element. LinkedIn lists them
+  comma-separated and Socialite's LinkedIn drivers split on spaces, so the
+  account and its credential held a single joined element
+  (`['email,openid,profile,w_member_social']`): `hasScope('w_member_social')`
+  was false and `missingScopes()` reported every scope.
+  `SocialToken::normaliseScopes()` now splits each element on commas and
+  whitespace, as renewals already did. Rows stored before keep the joined
+  element until the member reconnects
+  ([UPGRADE](UPGRADE.md#linkedin-scopes-are-split) has a one-off fix).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
