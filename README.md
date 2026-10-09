@@ -227,6 +227,8 @@ and Facebook share a single Meta app:
 'tiktok'   => ['client_id' => env('TIKTOK_CLIENT_KEY'),  'client_secret' => env('TIKTOK_CLIENT_SECRET'),   'redirect' => env('TIKTOK_REDIRECT')],
 'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'),   'client_secret' => env('GOOGLE_CLIENT_SECRET'),   'redirect' => env('GOOGLE_REDIRECT')],
 'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET'), 'redirect' => env('LINKEDIN_REDIRECT')],
+// The same LinkedIn app, for Socialite's OpenID Connect driver (see "Connecting an account").
+'linkedin-openid' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET'), 'redirect' => env('LINKEDIN_REDIRECT')],
 'x'        => ['client_id' => env('X_CLIENT_ID'),        'client_secret' => env('X_CLIENT_SECRET'),        'redirect' => env('X_REDIRECT')],
 ```
 
@@ -247,6 +249,15 @@ drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 `Socialite::driver('tiktok')` resolves. Their credentials still go in the same
 `services.php` entries above.
 
+Two connector keys log in through a Socialite driver of another name:
+Instagram through a Facebook Page uses the `facebook` driver, and the LinkedIn
+personal profile `linkedin-openid` (Sign In with LinkedIn using OpenID
+Connect), which reads `services.linkedin-openid`: declare it for the same
+LinkedIn app as `linkedin`, which the connector reads, or point the `linkedin`
+connector at it with `'credentials' => 'linkedin-openid'`. Socialite's
+`linkedin` driver always asks for `r_liteprofile` and `r_emailaddress`, which
+LinkedIn no longer grants to new apps.
+
 X uses Socialite's own `x` driver (laravel/socialite 5.16+), with the **OAuth 2.0**
 Client ID and Secret of a "Web App" (confidential client) whose User
 authentication settings allow Read and write. OAuth 1.0a is not supported.
@@ -257,7 +268,12 @@ Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
 handles TikTok, Google, X, Instagram (through a Facebook Page, or with Instagram
 Login), Threads and Facebook, and the LinkedIn personal profile (for LinkedIn
-organizations, see below).
+organizations, see below). The routes below take the **connector key** from the
+URL: that is what `StoreConnection` needs, and it names the Socialite driver
+too, except for the keys in `$drivers`. Each key comes back to its own
+callback, so a Facebook login for Instagram is not taken for a Facebook one:
+register every `/oauth/{provider}/callback` URL with the provider (both the
+`facebook` and `instagram` ones in the Meta app).
 
 Which scopes to request is your app's decision (they drive the consent screen
 and your provider app review), so you supply them at redirect — the package does
@@ -272,11 +288,23 @@ $scopes = [
     'tiktok' => ['user.info.basic', 'video.publish'],
     'google' => ['openid', 'https://www.googleapis.com/auth/youtube.upload'],
     'x' => ['tweet.read', 'tweet.write', 'users.read', 'media.write', 'offline.access'],
+    'facebook' => ['pages_show_list', 'pages_manage_posts', 'business_management'],
+    'instagram' => ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'business_management'],
+    'linkedin' => ['w_member_social'], // added to the driver's openid, profile and email
     // ...one entry per provider you support
 ];
 
-Route::get('/oauth/{provider}/redirect', function (string $provider) use ($scopes) {
-    $driver = Socialite::driver($provider)->scopes($scopes[$provider] ?? []);
+// The connector keys whose Socialite driver has another name.
+$drivers = [
+    'instagram' => 'facebook',
+    'linkedin' => 'linkedin-openid',
+    // 'instagram_login' => your Business Login for Instagram driver
+];
+
+Route::get('/oauth/{provider}/redirect', function (string $provider) use ($scopes, $drivers) {
+    $driver = Socialite::driver($drivers[$provider] ?? $provider)
+        ->redirectUrl(url("/oauth/{$provider}/callback"))
+        ->scopes($scopes[$provider] ?? []);
 
     // Google only issues a refresh token for offline access, and only on the
     // consent screen: without these, the credential cannot be renewed.
@@ -287,11 +315,13 @@ Route::get('/oauth/{provider}/redirect', function (string $provider) use ($scope
     return $driver->redirect();
 });
 
-Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnection $store) {
-    $user = Socialite::driver($provider)->user();
+Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnection $store) use ($drivers) {
+    $user = Socialite::driver($drivers[$provider] ?? $provider)
+        ->redirectUrl(url("/oauth/{$provider}/callback")) // the token request repeats it
+        ->user();
 
     $accounts = $store->handle(
-        provider: $provider,
+        provider: $provider, // the connector key, never the driver's name
         user: $user,
         owner: auth()->user(), // or a Team, Workspace, or null
     );
@@ -390,7 +420,7 @@ Instagram Login calls (`graph.instagram.com`) are not signed.
   a reconnect flags targets that user no longer manages — scoped to that user, so
   another Facebook user's rows are never touched (see "Owners" for rows of the
   same user under another owner). (Instagram and Facebook authenticate via the
-  Facebook driver.)
+  Facebook driver: see `$drivers` above.)
 
 Need finer control? `StoreConnection` delegates to lower-level actions you can
 call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages`
@@ -401,11 +431,14 @@ connector picks the action: one whose connections fan out implements
 
 ### LinkedIn: company pages
 
-LinkedIn's token exchange is app-side (Socialite's driver can't fetch the profile
-with the non-OIDC posting scopes). `StoreConnection` stores only the member's
-personal profile (one row, through `StoreAccountFromSocialite`); it does not fan
-out to organizations. You obtain the member token yourself, then fan out to the
-organizations they administer with `StoreLinkedInOrganizations`:
+`StoreConnection` stores only the member's personal profile (one row, through
+`StoreAccountFromSocialite`, from the `linkedin-openid` driver as above); it
+does not fan out to organizations. Their scopes (`w_organization_social`,
+`r_organization_admin`) come with the Community Management API, often on a
+LinkedIn app of its own, and Socialite's LinkedIn drivers fetch the member
+through sign-in scopes that authorization may not carry. So the token exchange
+for the organizations is yours: obtain the member token and id, then fan out to
+the organizations they administer with `StoreLinkedInOrganizations`:
 
 ```php
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;

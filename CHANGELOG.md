@@ -308,6 +308,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 
 ### Fixed
+- README: the OAuth routes used the connector key from the URL as the
+  Socialite driver name, which broke two keys. `/oauth/instagram/redirect`
+  threw "Driver [instagram] not supported" (Instagram through a Page logs in
+  with the `facebook` driver), and `linkedin` resolved Socialite's legacy
+  driver, which always asks for `r_liteprofile` and `r_emailaddress`, refused
+  to LinkedIn apps created since 2023. The routes now map those keys to their
+  driver (`linkedin-openid` for the profile, reading
+  `services.linkedin-openid`), hand `StoreConnection` the connector key, and
+  send each key back to its own callback, so that a Facebook login for
+  Instagram is not stored as a Facebook one. The LinkedIn organizations
+  paragraph no longer contradicts the profile's flow.
 - UPGRADE and README: attaching an owner-less row with
   `$account->ownable()->associate($owner)`, as 2.0's notes advised, saved
   nothing until `save()`, then moved the account without its credential: the
