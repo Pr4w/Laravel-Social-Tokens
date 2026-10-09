@@ -1,16 +1,19 @@
 <?php
 
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Tests\Fixtures\SocialiteProvidersUser;
 use Pr4w\SocialTokens\Tests\TestCase;
 
 uses(TestCase::class)->in(__DIR__);
 
 /**
- * Build a Socialite user with sensible defaults, overridable per test.
+ * Build a Socialite user with sensible defaults, overridable per test. Given an
+ * accessTokenResponseBody, the user of a SocialiteProviders driver; otherwise
+ * core Socialite's, which has none.
  */
 function socialiteUser(array $attrs = []): SocialiteUser
 {
-    $user = new SocialiteUser;
+    $user = array_key_exists('accessTokenResponseBody', $attrs) ? new SocialiteProvidersUser : new SocialiteUser;
 
     // Socialite users are ArrayAccess over this raw array; data_get() touches it.
     $user->setRaw($attrs['raw'] ?? []);
@@ -27,7 +30,10 @@ function socialiteUser(array $attrs = []): SocialiteUser
     $user->refreshToken = $attrs['refreshToken'] ?? null;
     $user->expiresIn = $attrs['expiresIn'] ?? 3600;
     $user->approvedScopes = $attrs['approvedScopes'] ?? [];
-    $user->accessTokenResponseBody = $attrs['accessTokenResponseBody'] ?? [];
+
+    if ($user instanceof SocialiteProvidersUser) {
+        $user->accessTokenResponseBody = $attrs['accessTokenResponseBody'];
+    }
 
     return $user;
 }

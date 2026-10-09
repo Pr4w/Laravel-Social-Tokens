@@ -145,7 +145,7 @@ class SocialTokens
                     );
                 }
 
-                if ($connector->renewalStrategy() === RenewalStrategy::RotatingRefreshToken
+                if ($token->renewalStrategyWith($connector) === RenewalStrategy::RotatingRefreshToken
                     && $token->getConnection()->transactionLevel() > 0) {
                     Log::warning('[social-tokens] Renewing a single-use refresh token inside a database transaction', [
                         'provider' => $token->provider,
@@ -292,7 +292,7 @@ class SocialTokens
 
         $connector = $this->registry->for($token->provider);
 
-        if (! $connector->renewalStrategy()->canRenewUnattended() || $token->isRefreshTokenExpired()) {
+        if (! $token->renewalStrategyWith($connector)->canRenewUnattended() || $token->isRefreshTokenExpired()) {
             // Cannot be renewed, but still valid: hand it out rather than cut it
             // off early (the renewal job warns the user ahead of the expiry).
             if ($token->access_token !== null && ! $token->isAccessTokenExpired()) {

@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Actions;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Laravel\Socialite\Two\User as SocialiteUser;
@@ -31,6 +32,9 @@ class StoreConnection
     ) {}
 
     /**
+     * @param  CarbonInterface|null  $refreshExpiresAt  The refresh token's expiry, when you know it
+     *                                                  (see StoreAccountFromSocialite). Not used by the
+     *                                                  Facebook and Instagram fan-outs.
      * @return Collection<int, SocialAccount>
      */
     public function handle(
@@ -39,6 +43,7 @@ class StoreConnection
         ?Model $owner = null,
         ?Model $connectedBy = null,
         bool $longLived = true,
+        ?CarbonInterface $refreshExpiresAt = null,
     ): Collection {
         // Throws InvalidArgumentException for a provider without a connector.
         $connector = $this->registry->for($provider);
@@ -67,7 +72,7 @@ class StoreConnection
 
         // Every other provider yields a single account.
         return collect([
-            $this->single->handle($provider, $user, $owner, $connectedBy, $longLived),
+            $this->single->handle($provider, $user, $owner, $connectedBy, $longLived, $refreshExpiresAt),
         ]);
     }
 }

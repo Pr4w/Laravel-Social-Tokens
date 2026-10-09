@@ -30,6 +30,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  *    expiry; the credential keeps posting until then, and is flagged
  *    needs_reconnect only once it has actually expired
  *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
+ *    for every credential that holds a refresh token, ReauthOnly for the others
  */
 class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 {
@@ -57,6 +58,27 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
         return ($this->config['refresh_enabled'] ?? false)
             ? RenewalStrategy::StableRefreshToken
             : RenewalStrategy::ReauthOnly;
+    }
+
+    /**
+     * LinkedIn issues refresh tokens per app, so refresh_enabled cannot vouch
+     * for every credential: one stored without a refresh token (from an app
+     * without programmatic refresh tokens, a manual exchange that left it
+     * out, a row from before the switch) cannot be refreshed. It is renewed
+     * as ReauthOnly: warned ahead of its expiry and flagged once expired,
+     * instead of refused and flagged when its window opens, five days early.
+     * A refresh token stored while refresh_enabled is off stays unused.
+     *
+     * Read from the stored ciphertext: deciding never decrypts the token.
+     */
+    public function renewalStrategyFor(SocialToken $token): RenewalStrategy
+    {
+        $strategy = $this->renewalStrategy();
+        $refreshToken = $token->getAttributes()['refresh_token'] ?? null;
+
+        return $strategy->canRenewUnattended() && ($refreshToken === null || $refreshToken === '')
+            ? RenewalStrategy::ReauthOnly
+            : $strategy;
     }
 
     public function leadTime(): CarbonInterval
@@ -115,7 +137,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 
         return match (true) {
             $status === 'revoked' => RenewalResult::terminalFailure('LinkedIn token revoked.', ['definitive' => true]),
-            $status === 'expired' && ! $this->renewalStrategy()->canRenewUnattended() => RenewalResult::terminalFailure('LinkedIn token expired.', ['definitive' => true]),
+            $status === 'expired' && ! $this->renewalStrategyFor($token)->canRenewUnattended() => RenewalResult::terminalFailure('LinkedIn token expired.', ['definitive' => true]),
             $status === 'expired' => RenewalResult::transientFailure('LinkedIn access token expired; renewal refreshes it.'),
             default => RenewalResult::unknownFailure(
                 'LinkedIn token introspection answered inactive without a reason; if every LinkedIn credential does, the tokens were issued to another LinkedIn app than the configured client (services.linkedin or connectors.linkedin.client_id).',

@@ -112,9 +112,12 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         $connector = $registry->for($token->provider);
 
         // No unattended renewal is possible: the expected path for LinkedIn
-        // without MDP, or once a refresh token has outlived its own lifetime.
+        // without refresh tokens (for the whole app, or for this credential),
+        // or once a refresh token has outlived its own lifetime.
         $blocker = match (true) {
-            ! $connector->renewalStrategy()->canRenewUnattended() => 'Provider requires manual re-authorisation.',
+            ! $token->renewalStrategyWith($connector)->canRenewUnattended() => $connector->renewalStrategy()->canRenewUnattended()
+                ? 'No refresh token (re-authorisation required).'
+                : 'Provider requires manual re-authorisation.',
             $token->isRefreshTokenExpired() => 'Refresh token has expired.',
             default => null,
         };
@@ -293,7 +296,7 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
             return true; // a config problem, not something the user can fix by reconnecting
         }
 
-        $strategy = $registry->for($token->provider)->renewalStrategy();
+        $strategy = $token->renewalStrategyWith($registry->for($token->provider));
 
         return $strategy->canRenewUnattended()
             && ! $strategy->requiresLiveAccessToken()

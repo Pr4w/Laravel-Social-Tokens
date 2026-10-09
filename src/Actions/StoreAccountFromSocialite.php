@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Actions;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -24,12 +25,21 @@ class StoreAccountFromSocialite
 {
     public function __construct(protected ConnectorRegistry $registry) {}
 
+    /**
+     * @param  CarbonInterface|null  $refreshExpiresAt  The refresh token's expiry, when you know it.
+     *                                                  It is not on the Socialite contract: without it, it is
+     *                                                  read from the token response of a driver that exposes
+     *                                                  one (SocialiteProviders' accessTokenResponseBody), and
+     *                                                  stays unknown with core Socialite's drivers (LinkedIn)
+     *                                                  until the first renewal reports it.
+     */
     public function handle(
         string $provider,
         #[\SensitiveParameter] SocialiteUser $user,
         ?Model $owner = null,
         ?Model $connectedBy = null,
         bool $longLived = true,
+        ?CarbonInterface $refreshExpiresAt = null,
     ): SocialAccount {
         // Throws for a provider without a connector, before anything is written:
         // stored without one, the account would look static and break at expiry.
@@ -39,12 +49,13 @@ class StoreAccountFromSocialite
         $refreshToken = $user->refreshToken ?: null;
         $expiresAt = $user->expiresIn ? now()->addSeconds((int) $user->expiresIn) : null;
 
-        // The refresh token lifetime is not on the Socialite contract; read it
-        // from the raw token response when the driver exposes it (TikTok names
-        // it refresh_expires_in, LinkedIn refresh_token_expires_in).
-        $refreshExpiresIn = data_get($user, 'accessTokenResponseBody.refresh_expires_in')
-            ?? data_get($user, 'accessTokenResponseBody.refresh_token_expires_in');
-        $refreshExpiresAt = $refreshExpiresIn ? now()->addSeconds((int) $refreshExpiresIn) : null;
+        // Otherwise from the token response, when the driver exposes it (TikTok
+        // names it refresh_expires_in, LinkedIn refresh_token_expires_in).
+        if ($refreshExpiresAt === null) {
+            $refreshExpiresIn = data_get($user, 'accessTokenResponseBody.refresh_expires_in')
+                ?? data_get($user, 'accessTokenResponseBody.refresh_token_expires_in');
+            $refreshExpiresAt = $refreshExpiresIn ? now()->addSeconds((int) $refreshExpiresIn) : null;
+        }
 
         // Upgrade to a long-lived token where the provider needs a distinct
         // connect-time exchange (Threads). Providers whose connect token is
@@ -83,8 +94,6 @@ class StoreAccountFromSocialite
             }
         }
 
-        $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
-
         // Unknown scopes (none reported) never overwrite a known list.
         $scopes = SocialToken::normaliseScopes($user->approvedScopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
@@ -100,8 +109,8 @@ class StoreAccountFromSocialite
                 'refresh_token' => $refreshToken,
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
-                'renew_at' => $renewAt,
             ] + $withScopes,
+            $connector, // schedules renew_at
         );
 
         $account = SocialAccount::query()->updateOrCreate(

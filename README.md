@@ -315,6 +315,7 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
     owner: auth()->user(),
     refreshToken: $token['refresh_token'] ?? null,
     expiresAt: isset($token['expires_in']) ? now()->addSeconds($token['expires_in']) : null,
+    refreshExpiresAt: isset($token['refresh_token_expires_in']) ? now()->addSeconds($token['refresh_token_expires_in']) : null,
     scopes: explode(',', $token['scope'] ?? ''), // an empty string is stored as "unknown"
 );
 ```
@@ -386,6 +387,23 @@ refresh token dies (LinkedIn's live 365 days and are never extended), with the
 date the credential really stops working, so the member can re-authorise in
 time. A reconnect that brings a new refresh token re-arms it; storing a profile
 without a refresh token never erases a known one.
+
+LinkedIn issues refresh tokens per app, so `refresh_enabled` cannot vouch for
+every credential: one stored without a refresh token (from an app without
+programmatic refresh tokens, or a row from before you turned the option on) is
+renewed as if refresh were off, warned ahead of its expiry and flagged once it
+has expired. A custom connector makes the same per-credential call by
+overriding `renewalStrategyFor(SocialToken $token)`; ask
+`$token->renewalStrategyWith($connector)` rather than
+`$connector->renewalStrategy()` when you decide about a stored credential.
+
+The refresh token's own expiry is not on the Socialite contract. TikTok's
+SocialiteProviders driver exposes the token response and it is read from
+there; core Socialite's LinkedIn drivers drop LinkedIn's
+`refresh_token_expires_in`, so it stays unknown until the first renewal
+reports it, unless you pass it: `StoreConnection` and
+`StoreAccountFromSocialite` take `refreshExpiresAt:`, as does
+`StoreLinkedInOrganizations`.
 
 Static credentials (Facebook page tokens) are never renewed, but die when the
 user changes their password, removes the app or loses the Page's admin role. A
@@ -660,7 +678,9 @@ traces record call arguments, and error trackers collect them.
 
 Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when the
 credential is refreshed under another provider's key (Instagram returns
-`facebook`), `exchangeForLongLived()` for a short-to-long token swap at connect,
+`facebook`), `renewalStrategyFor(SocialToken)` when a credential can lack what
+`renewalStrategy()` needs (LinkedIn's without a refresh token renew as
+`ReauthOnly`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
 `revoke()` must not throw: read the token and send the request inside a
 `try`, and log a failure with `$this->logRevokeFailure($token, $e)`.

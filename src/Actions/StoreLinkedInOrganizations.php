@@ -62,6 +62,7 @@ class StoreLinkedInOrganizations
             throw new RuntimeException('The "linkedin" connector must be a LinkedInConnector to seed organizations.');
         }
 
+        $refreshToken = $refreshToken ?: null;
         $organizations = $connector->fetchOrganizations($accessToken);
 
         if ($organizations instanceof RenewalResult) {
@@ -84,8 +85,6 @@ class StoreLinkedInOrganizations
             }
         }
 
-        $renewAt = SocialToken::renewAtFor($expiresAt, $connector, $refreshExpiresAt);
-
         // Unknown scopes (null) never overwrite a known list.
         $scopes = SocialToken::normaliseScopes($scopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
@@ -98,8 +97,8 @@ class StoreLinkedInOrganizations
                 'refresh_token' => $refreshToken,
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
-                'renew_at' => $renewAt,
             ] + $withScopes,
+            $connector, // schedules renew_at
         );
 
         // One row per organization, keyed on the organization id.

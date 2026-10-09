@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\Log;
+use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
@@ -178,14 +179,28 @@ class SocialToken extends Model
      * A row another request created under the same keys meanwhile is updated
      * instead, as createOrFirst() would.
      *
+     * With $connector, and no renew_at in $values, renew_at is scheduled from
+     * the stored expiries with the strategy of the credential as it will be
+     * stored (renewAtFor(), renewalStrategyWith()): what it holds can change
+     * how it renews (a LinkedIn credential without a refresh token).
+     *
      * @param  array<string, mixed>  $keys
      * @param  array<string, mixed>  $values
      */
-    public static function persistCredential(array $keys, #[\SensitiveParameter] array $values): static
+    public static function persistCredential(array $keys, #[\SensitiveParameter] array $values, ?ProviderConnector $connector = null): static
     {
         $values += static::issuedState();
 
         $token = static::query()->firstOrNew($keys)->forceFill($values);
+
+        if ($connector !== null && ! array_key_exists('renew_at', $values)) {
+            $values['renew_at'] = $token->renew_at = static::renewAtFor(
+                $token->expires_at,
+                $connector,
+                $token->refresh_expires_at,
+                $token->renewalStrategyWith($connector),
+            );
+        }
 
         try {
             // A savepoint inside the caller's transaction: on PostgreSQL a failed
@@ -262,11 +277,15 @@ class SocialToken extends Model
      * refresh token dies). An unknown expiry on a renewable credential is
      * checked back after one lead time, never left static; a credential that
      * cannot renew unattended with an unknown expiry stays unscheduled.
+     *
+     * $strategy is the credential's own (renewalStrategyWith()), when it may
+     * differ from the connector's renewalStrategy().
      */
     public static function renewAtFor(
         ?CarbonInterface $expiresAt,
         ?ProviderConnector $connector,
         ?CarbonInterface $refreshExpiresAt = null,
+        ?RenewalStrategy $strategy = null,
     ): ?CarbonInterface {
         if ($connector === null) {
             return null;
@@ -276,7 +295,7 @@ class SocialToken extends Model
 
         if ($expiresAt !== null) {
             $renewAt = $expiresAt->copy()->sub($lead);
-        } elseif ($connector->renewalStrategy()->canRenewUnattended()) {
+        } elseif (($strategy ?? $connector->renewalStrategy())->canRenewUnattended()) {
             $renewAt = now()->add($lead);
         } else {
             return null;
@@ -287,6 +306,18 @@ class SocialToken extends Model
         }
 
         return $renewAt;
+    }
+
+    /**
+     * How this credential is kept alive: the connector's strategy, narrowed to
+     * this credential where the connector does so
+     * (AbstractConnector::renewalStrategyFor()).
+     */
+    public function renewalStrategyWith(ProviderConnector $connector): RenewalStrategy
+    {
+        return $connector instanceof AbstractConnector
+            ? $connector->renewalStrategyFor($this)
+            : $connector->renewalStrategy();
     }
 
     // State -----------------------------------------------------------------
@@ -444,14 +475,15 @@ class SocialToken extends Model
             // where the token is flagged if nobody reconnected.
             $this->renew_at = $notExtended
                 ? $result->expiresAt->copy()
-                : static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at);
+                : static::renewAtFor($result->expiresAt, $connector, $this->refresh_expires_at, $this->renewalStrategyWith($connector));
         } else {
             // A renewable credential came back without an expiry. Keeping the
             // old expires_at would be stale, and a null renew_at would turn it
             // static and never renew it again — so mark the expiry unknown and
             // check back after one lead time.
             $this->expires_at = null;
-            $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at) ?? now()->add($connector->leadTime());
+            $this->renew_at = static::renewAtFor(null, $connector, $this->refresh_expires_at, $this->renewalStrategyWith($connector))
+                ?? now()->add($connector->leadTime());
         }
 
         // Providers that echo the granted scopes (TikTok and LinkedIn use commas,
@@ -479,7 +511,7 @@ class SocialToken extends Model
 
         event(new CredentialRenewed($this));
 
-        $strategy = $connector->renewalStrategy();
+        $strategy = $this->renewalStrategyWith($connector);
 
         if ($result->expiresAt !== null && $strategy === RenewalStrategy::ExtendLongLived) {
             // Record what the provider granted: whether Meta really extends a

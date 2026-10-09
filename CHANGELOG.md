@@ -378,6 +378,25 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   whitespace, as renewals already did. Rows stored before keep the joined
   element until the member reconnects
   ([UPGRADE](UPGRADE.md#linkedin-scopes-are-split) has a one-off fix).
+- With `refresh_enabled` on, a LinkedIn credential stored without a refresh
+  token (from an app without programmatic refresh tokens, a manual exchange
+  that left it out, a row from before the option was turned on) is no longer
+  flagged five days before its token expires. The renewal job sent it to the
+  refresh call, got "No refresh token" and flagged it at once, with no
+  `CredentialExpiringSoon`: the early cut-off 1.1 removed for LinkedIn without
+  refresh tokens. The strategy is now decided per credential: such a
+  credential is warned when its window opens, keeps posting, and is flagged
+  once it has expired, by the job, `validAccessTokenFor()` and a renewal that
+  ran out of retries alike. Its unknown expiry no longer schedules a check
+  that would flag it, and LinkedIn introspection answering `expired` for it is
+  a definitive verdict.
+- The 1.2 entry saying `StoreAccountFromSocialite` reads LinkedIn's
+  `refresh_token_expires_in` holds only for a driver that exposes the token
+  response (`accessTokenResponseBody`, SocialiteProviders). Core Socialite's
+  `linkedin` and `linkedin-openid` drivers drop it, and so did the README's
+  `StoreLinkedInOrganizations` example, so the refresh token's expiry stayed
+  unknown until the first renewal. Both actions take it explicitly now
+  (`refreshExpiresAt:`, see Added), and the README example passes it.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -408,15 +427,25 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `appSecretProof($token)` on both connectors signs your own Graph calls.
 - `Support\Settings::flag()`: reads a boolean config value the way the
   package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
-- `SocialToken::persistCredential($keys, $values)`: `updateOrCreate()` for a
-  token the provider has just issued, which encrypts it before the write so a
-  failed write leaves no plaintext token in the exception trace (see
-  Security). Unless `$values` says otherwise, the credential comes back
-  active, with no `last_error`, no `check-static` strike and `last_renewed_at`
-  set to now. The `Store*` actions use it; use it too if you store credentials
-  yourself.
+- `SocialToken::persistCredential($keys, $values, $connector = null)`:
+  `updateOrCreate()` for a token the provider has just issued, which encrypts
+  it before the write so a failed write leaves no plaintext token in the
+  exception trace (see Security). Unless `$values` says otherwise, the
+  credential comes back active, with no `last_error`, no `check-static` strike
+  and `last_renewed_at` set to now; given the connector, `renew_at` is
+  scheduled for the credential as stored, with its own strategy. The `Store*`
+  actions use it; use it too if you store credentials yourself.
 - `SocialToken::tryApplyRenewal($result, $connector)`: `applyRenewal()` that
   returns whether it stored the renewal (see Changed (breaking)).
+- `AbstractConnector::renewalStrategyFor(SocialToken $token)`: the strategy for
+  one credential, `renewalStrategy()` by default. `LinkedInConnector` returns
+  `ReauthOnly` for a credential without a refresh token (see Fixed).
+  `SocialToken::renewalStrategyWith($connector)` asks it of any connector, and
+  `SocialToken::renewAtFor()` takes the credential's strategy as a fourth
+  argument.
+- `refreshExpiresAt:` on `StoreConnection::handle()` and
+  `StoreAccountFromSocialite::handle()`: the refresh token's expiry, which
+  core Socialite's drivers do not expose (see Fixed).
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -611,7 +640,9 @@ Identity is scoped to the owner. **Breaking:** see [UPGRADE.md](UPGRADE.md).
   a known refresh token or its expiry with null (storing the LinkedIn personal
   profile, or re-syncing organizations, without one wiped it from the shared
   credential), and `StoreAccountFromSocialite` also reads LinkedIn's
-  `refresh_token_expires_in`.
+  `refresh_token_expires_in` (from a driver that exposes the token response,
+  such as SocialiteProviders'; core Socialite's LinkedIn drivers do not, see
+  3.0).
 - `MetaErrorMapper::map()` accepts any value: a response whose `error` is a
   string (OAuth 2 style) used to throw a `TypeError` out of every Meta call; it
   is now an unknown, retried and logged failure. Terminal and transient Meta

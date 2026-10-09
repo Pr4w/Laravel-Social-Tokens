@@ -9,6 +9,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
+use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
@@ -62,6 +63,18 @@ abstract class AbstractConnector implements ProviderConnector
     protected function isAboutRefreshToken(string $description): bool
     {
         return (bool) preg_match('/refresh[\s_-]?token/i', $description);
+    }
+
+    /**
+     * How one stored credential is kept alive. The package asks this, not
+     * renewalStrategy(), wherever it decides about a credential: the renewal
+     * job, validAccessTokenFor(), the schedule a connect or a renewal writes.
+     * Defaults to renewalStrategy(); override where a credential can lack what
+     * that strategy needs (LinkedIn issues refresh tokens per app).
+     */
+    public function renewalStrategyFor(SocialToken $token): RenewalStrategy
+    {
+        return $this->renewalStrategy();
     }
 
     public function leadTime(): CarbonInterval

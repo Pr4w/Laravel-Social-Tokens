@@ -399,6 +399,33 @@ If your own code splits a scope string before handing it to the package
 (`explode(',', $token['scope'])` for `StoreLinkedInOrganizations`), it can
 keep doing so, or pass the string as a single element.
 
+### LinkedIn credentials without a refresh token
+
+Nothing to change unless you set `LINKEDIN_REFRESH_ENABLED=true`. With it, a
+LinkedIn credential that holds no refresh token is now renewed as if refresh
+were off: when its window opens (5 days before expiry)
+`CredentialExpiringSoon` fires, it keeps posting, and it is flagged
+`needs_reconnect` (reason `No refresh token (re-authorisation required).`)
+only once its token has expired. 2.x flagged it at once, five days early,
+with no warning. If you prompt members to reconnect from
+`CredentialNeedsReconnect` only, listen for `CredentialExpiringSoon` too.
+LinkedIn introspection (`check-static` with `check_renewable`,
+`reportRejected(terminal: false)`) answering `expired` for such a credential
+now flags it, as it does with refresh off.
+
+To list the credentials concerned:
+
+```php
+SocialToken::query()->where('provider', 'linkedin')->whereNull('refresh_token')->where('status', 'active')->get();
+```
+
+The refresh token's own expiry (365 days) is not on the Socialite contract,
+and core Socialite's LinkedIn drivers drop it. If you exchange the code
+yourself, pass it: `refreshExpiresAt:` on `StoreConnection::handle()` and
+`StoreAccountFromSocialite::handle()` (new), and on
+`StoreLinkedInOrganizations::handle()` (the README example now does). Without
+it, the first renewal records it.
+
 ### If you wrote a connector
 
 - Mark every parameter of your connector that carries a token or a secret
@@ -413,6 +440,12 @@ keep doing so, or pass the string as a single element.
   disconnect, but it is still a bug. Read the token inside the `try` as well:
   reading `$token->access_token` decrypts it, and throws after an `APP_KEY`
   change. Log a failure with `$this->logRevokeFailure($token, $e)`.
+- If whether a credential can be renewed depends on what it holds, override
+  `renewalStrategyFor(SocialToken $token)` (it defaults to
+  `renewalStrategy()`). The package now asks it wherever it decides about a
+  stored credential. If your own code decides with
+  `$connector->renewalStrategy()` about a stored credential, ask
+  `$token->renewalStrategyWith($connector)` instead.
 - Your connector's `revoke()` now runs after `CredentialRevoked` and
   `AccountRevoked` have fired, on a copy of the credential taken before them,
   and the stored status is already `revoked`. Do not rely on the status

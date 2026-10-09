@@ -29,12 +29,13 @@ function linkedInIntrospectionAnswers(array $body): void
     Http::fake(['www.linkedin.com/oauth/v2/introspectToken' => Http::response($body)]);
 }
 
-function linkedInIntrospectionCredential(): SocialToken
+function linkedInIntrospectionCredential(?string $refreshToken = null): SocialToken
 {
     $token = SocialToken::create([
         'provider' => 'linkedin',
         'provider_holder_id' => 'member-'.uniqid('', true),
         'access_token' => 'member-token',
+        'refresh_token' => $refreshToken,
         'expires_at' => now()->addDays(50),
         'renew_at' => now()->addDays(45),
         'status' => AccountStatus::Active,
@@ -99,7 +100,7 @@ it('leaves an expired access token to the refresh when refresh tokens are enable
     app()->forgetInstance(ConnectorRegistry::class);
     linkedInIntrospectionAnswers(['active' => false, 'status' => 'expired']);
 
-    $result = linkedInIntrospectionCheck(linkedInIntrospectionCredential());
+    $result = linkedInIntrospectionCheck(linkedInIntrospectionCredential('member-refresh'));
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient);
 });
