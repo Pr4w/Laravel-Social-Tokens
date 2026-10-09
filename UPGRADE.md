@@ -259,6 +259,37 @@ Nothing changes for Instagram accounts connected through a Facebook Page
    select Instagram accounts, and publish to them through
    `graph.instagram.com`.
 
+### Meta deauthorize and data deletion callbacks (optional)
+
+3.0 can answer Meta's Deauthorize and Data Deletion Request callbacks (and
+Threads' Uninstall and Delete). Nothing changes until you turn them on; to do
+so:
+
+1. If you keep a published `config/social-tokens.php`, add the block (without
+   it the routes stay off):
+
+   ```php
+   'callbacks' => [
+       'enabled' => env('SOCIAL_TOKENS_CALLBACKS', false),
+       'prefix' => 'social-tokens/meta',
+       'middleware' => [],
+       'deletion_status_url' => env('SOCIAL_TOKENS_DELETION_STATUS_URL'),
+   ],
+   ```
+
+2. Set `SOCIAL_TOKENS_CALLBACKS=true`, then `php artisan route:cache` again if
+   you cache routes.
+3. Listen for `Pr4w\SocialTokens\Events\ExternalUserDataDeleted` and delete or
+   anonymise the accounts it lists (`$event->accountIds`, kept revoked and
+   without a credential) and whatever else your app keeps about the user: the
+   package deletes the tokens only.
+4. In the Meta App Dashboard, replace the callback URLs you had (or a Data
+   Deletion Instructions URL) with
+   `https://your-app/social-tokens/meta/facebook/deauthorize` and
+   `.../facebook/delete` (`threads`, `instagram_login` for those apps). If an
+   existing route of yours already handles them, keep it and call
+   `revokeExternalUser()` / `purgeExternalUser()` from it instead.
+
 ### Check your published config
 
 No change is needed for a config that kept the shipped forms. Values in other

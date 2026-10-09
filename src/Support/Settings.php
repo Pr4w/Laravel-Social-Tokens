@@ -87,6 +87,31 @@ final class Settings
     }
 
     /**
+     * The Meta callbacks' routes (`callbacks`): off unless enabled, under
+     * `social-tokens/meta`, with no middleware unless listed (Meta sends no
+     * CSRF token), and the deletion status page the package serves unless
+     * `deletion_status_url` names one.
+     *
+     * @return array{enabled: bool, prefix: string, middleware: list<string>, deletion_status_url: ?string}
+     */
+    public static function callbacks(): array
+    {
+        $callbacks = config('social-tokens.callbacks');
+        $callbacks = is_array($callbacks) ? $callbacks : [];
+
+        $prefix = $callbacks['prefix'] ?? null;
+        $middleware = $callbacks['middleware'] ?? [];
+        $statusUrl = $callbacks['deletion_status_url'] ?? null;
+
+        return [
+            'enabled' => self::flag($callbacks['enabled'] ?? false, false),
+            'prefix' => is_string($prefix) ? trim($prefix, '/') : 'social-tokens/meta',
+            'middleware' => array_values(array_filter(is_array($middleware) ? $middleware : [$middleware], is_string(...))),
+            'deletion_status_url' => is_string($statusUrl) && $statusUrl !== '' ? $statusUrl : null,
+        ];
+    }
+
+    /**
      * The static check's safety breaker. At least one credential must have
      * been checked before the ratio means anything (a minimum of 0 would
      * divide by zero on a run that checked none).

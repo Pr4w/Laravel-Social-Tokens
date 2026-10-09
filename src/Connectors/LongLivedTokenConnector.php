@@ -3,7 +3,9 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Pr4w\SocialTokens\Connectors\Concerns\ParsesSignedRequests;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
+use Pr4w\SocialTokens\Contracts\VerifiesSignedRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -17,10 +19,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * (graph.instagram.com) differ only in their host and grant names.
  *
  * Errors come in Graph's shape and go through MetaErrorMapper. These hosts
- * are not signed with appsecret_proof.
+ * are not signed with appsecret_proof. The app's Uninstall (Deauthorize) and
+ * Delete callbacks are verified with its secret (VerifiesSignedRequests).
  */
-abstract class LongLivedTokenConnector extends AbstractConnector implements ChecksCredential
+abstract class LongLivedTokenConnector extends AbstractConnector implements ChecksCredential, VerifiesSignedRequests
 {
+    use ParsesSignedRequests;
+
     /** The refresh grant refuses a token less than 24 hours old (Meta docs). */
     public const MINIMUM_TOKEN_AGE_HOURS = 24;
 

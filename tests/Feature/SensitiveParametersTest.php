@@ -23,6 +23,7 @@ use Pr4w\SocialTokens\Connectors\XConnector;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
+use Pr4w\SocialTokens\Support\MetaSignedRequest;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /*
@@ -255,6 +256,8 @@ it('marks every parameter carrying a token or a secret as sensitive', function (
     [LongLivedTokenConnector::class, 'tokenCall', 'query'],
     [InstagramLoginConnector::class, 'exchangeForLongLived', 'accessToken'],
     [LinkedInConnector::class, 'fetchOrganizations', 'accessToken'],
+    [MetaSignedRequest::class, 'parse', 'secret'],
+    [MetaSignedRequest::class, 'make', 'secret'],
     [SocialToken::class, 'markNeedsReconnectOnce', 'checkedToken'],
     [SocialTokens::class, 'reportRejected', 'rejectedToken'],
     [RenewalResult::class, 'success', 'accessToken'],

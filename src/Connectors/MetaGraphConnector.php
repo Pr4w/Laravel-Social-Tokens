@@ -6,7 +6,9 @@ use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
+use Pr4w\SocialTokens\Connectors\Concerns\ParsesSignedRequests;
 use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
+use Pr4w\SocialTokens\Contracts\VerifiesSignedRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -20,10 +22,13 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * default live here once, so the two connectors cannot drift apart.
  *
  * Graph calls made with a user or Page token carry appsecret_proof (see
- * SignsGraphRequests), so the Meta app can require it.
+ * SignsGraphRequests), so the Meta app can require it. The app's
+ * Deauthorize and Data Deletion callbacks are verified with its secret
+ * (VerifiesSignedRequests).
  */
-abstract class MetaGraphConnector extends AbstractConnector
+abstract class MetaGraphConnector extends AbstractConnector implements VerifiesSignedRequests
 {
+    use ParsesSignedRequests;
     use SignsGraphRequests;
 
     /** The Graph API version used when the connector's block sets none. */

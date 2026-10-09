@@ -102,6 +102,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Meta deauthorize and data deletion callbacks
+    |--------------------------------------------------------------------------
+    |
+    | Meta posts a signed_request to your app when a user removes it
+    | (Deauthorize callback) and when they ask for their data to be deleted
+    | (Data Deletion Request callback); Instagram Login apps have the same
+    | two, Threads apps call them Uninstall and Delete. When enabled, the
+    | package registers, for the connector key {provider} (facebook, which
+    | covers the Instagram accounts reached through a Page, instagram_login,
+    | threads):
+    |
+    |   POST {prefix}/{provider}/deauthorize       revoke that user's credentials and accounts
+    |   POST {prefix}/{provider}/delete            delete their tokens, answer {url, confirmation_code}
+    |   GET  {prefix}/{provider}/deletion/{code}   the status page that url points to
+    |
+    | Each request is verified with that connector's app secret. The routes
+    | carry only the middleware listed here (Meta sends no CSRF token, so not
+    | the web group). Set deletion_status_url to serve the status page
+    | yourself: {code} and {provider} in it are replaced, or the code is
+    | appended as ?code=.
+    |
+    */
+    'callbacks' => [
+        'enabled' => env('SOCIAL_TOKENS_CALLBACKS', false),
+        'prefix' => 'social-tokens/meta',
+        'middleware' => [],
+        'deletion_status_url' => env('SOCIAL_TOKENS_DELETION_STATUS_URL'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Logging
     |--------------------------------------------------------------------------
     |

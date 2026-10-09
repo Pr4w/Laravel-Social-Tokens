@@ -748,6 +748,61 @@ still called, then the listener's exception reaches you.
 `$account->markRevoked()` only flags the account locally: no provider call, and
 the credential is left as is.
 
+### When a user removes your app (Meta, Threads)
+
+Meta posts a `signed_request` to your app's **Deauthorize** callback when a
+user removes it, and to its **Data Deletion Request** callback when they ask
+for their data to be deleted; Instagram Login apps have the same two, and
+Threads apps call them **Uninstall** and **Delete**. The package can answer
+them. Turn the routes on (`SOCIAL_TOKENS_CALLBACKS=true`, off by default) and
+paste the URLs in the App Dashboard, `{provider}` being the connector key
+(`facebook`, which also covers the Instagram accounts reached through a Page,
+`instagram_login`, `threads`):
+
+```
+POST https://your-app.test/social-tokens/meta/{provider}/deauthorize
+POST https://your-app.test/social-tokens/meta/{provider}/delete
+```
+
+Each request is verified with that connector's app secret (HMAC-SHA256,
+compared in constant time); one that does not verify gets a 400 and changes
+nothing. The routes carry no middleware by default (Meta sends no CSRF token):
+add some, a throttle for instance, in `callbacks.middleware`, and move them with
+`callbacks.prefix`.
+
+- **Deauthorize / Uninstall** revokes every credential and account of that
+  user, under every owner: their user credential, their Pages' own
+  credentials and accounts, their Instagram accounts
+  (`SocialTokens::revokeExternalUser()`). The provider is not called: the
+  grant is already gone. `CredentialRevoked` and `AccountRevoked` fire once
+  per row, and a reconnect makes the rows active again.
+- **Data deletion / Delete** deletes their tokens
+  (`SocialTokens::purgeExternalUser()`): the credentials are deleted, and the
+  accounts are revoked and kept, without a credential, since your own tables
+  may point at them. Then `ExternalUserDataDeleted` fires with the provider,
+  the user id, the confirmation code and the account ids: **delete or
+  anonymise those accounts, and whatever else you keep about the user, in a
+  listener.** Meta gets the `{url, confirmation_code}` answer it expects; the
+  url is a status page the package serves
+  (`GET {prefix}/{provider}/deletion/{code}`, which recognises only the codes
+  it signed with your `APP_KEY`), or yours, with
+  `SOCIAL_TOKENS_DELETION_STATUS_URL` (`{code}` and `{provider}` are replaced,
+  or `?code=` is appended).
+
+To place the routes yourself, leave `enabled` off and call
+`Pr4w\SocialTokens\Support\CallbackRoutes::register()` from your routes file, or
+call the actions from your own controllers:
+`app(HandleDeauthorizeCallback::class)->handle($provider, $signedRequest)` and
+`app(HandleDataDeletionCallback::class)->handle($provider, $signedRequest)`.
+The callbacks find rows by the `user_id` Meta signs, so the holder ids must be
+those: the app-scoped ids Socialite's Facebook and Threads drivers return. For
+Instagram Login, check that your driver's user id is the one Meta sends (a
+callback for an id the package does not hold changes nothing). Other
+providers' push signals
+(TikTok's `authorization.removed` webhook, Google's RISC `tokens-revoked`
+events) work the same way: verify them as the provider documents, then call
+`revokeExternalUser($provider, $externalId)`.
+
 ## Scopes
 
 The scopes granted to each account are recorded on the row, so you can check —

@@ -13,7 +13,9 @@ use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
+use Pr4w\SocialTokens\Support\CallbackRoutes;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\Settings;
 use ReflectionMethod;
 use Throwable;
 
@@ -53,6 +55,8 @@ class SocialTokensServiceProvider extends ServiceProvider
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
+        $this->registerCallbackRoutes();
+
         $this->app->afterResolving(Schedule::class, function (Schedule $schedule) {
             // Read here, not in boot(): each schedule:run resolves a fresh
             // Schedule. A falsy frequency disables that entry (the command stays
@@ -70,6 +74,18 @@ class SocialTokensServiceProvider extends ServiceProvider
                     ->runInBackground(); // N sequential provider calls must not delay the app's own tasks
             }
         });
+    }
+
+    /**
+     * The Meta deauthorize and data deletion callbacks, only when
+     * `callbacks.enabled` is on (off by default): a package should not answer
+     * on an app's URLs unasked. Cached routes already hold them.
+     */
+    protected function registerCallbackRoutes(): void
+    {
+        if (Settings::callbacks()['enabled'] && ! $this->app->routesAreCached()) {
+            CallbackRoutes::register();
+        }
     }
 
     /**

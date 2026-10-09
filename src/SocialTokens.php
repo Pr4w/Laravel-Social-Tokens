@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens;
 
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\DetectsConcurrencyErrors;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
@@ -446,6 +447,130 @@ class SocialTokens
 
         if (! $stillConnected) {
             $this->revoke($token); // account transitions are idempotent: no second AccountRevoked
+        }
+    }
+
+    /**
+     * Revoke, locally, everything one external user's grant backs, under every
+     * owner: the credentials they hold, the accounts recorded under them
+     * (provider_holder_id: a Facebook user's Pages and Instagram accounts),
+     * the credentials those accounts post with (each Page's own token), and
+     * every account posting with one of those credentials. For when the
+     * provider says the user removed the app (Meta's Deauthorize callback,
+     * Threads' Uninstall): the grant is already gone there, so the provider is
+     * not called. CredentialRevoked and AccountRevoked fire as for revoke(),
+     * once per row that changes. A later reconnect makes the rows active again.
+     *
+     * $provider is a connector key. A connector whose credentials live under
+     * another key covers that key's accounts too: 'facebook' (or 'instagram')
+     * reaches the user's Facebook Pages and their Instagram accounts. Every
+     * row is revoked even when a listener throws; the first exception is
+     * rethrown after.
+     *
+     * @return EloquentCollection<int, SocialAccount> The accounts found, revoked.
+     */
+    public function revokeExternalUser(string $provider, string $externalId): EloquentCollection
+    {
+        [$credentials, $accounts] = $this->externalUserRows($provider, $externalId);
+
+        $this->revokeEach([...$credentials->all(), ...$accounts->all()]);
+
+        return $accounts;
+    }
+
+    /**
+     * Delete one external user's tokens, under every owner: the credentials
+     * revokeExternalUser() would revoke are deleted, and the accounts it
+     * would revoke are revoked (AccountRevoked fires) and keep their rows,
+     * without a credential, since your own tables may point at them. No
+     * CredentialRevoked fires for a deleted credential. The tokens are
+     * deleted even when a listener throws; the first exception is rethrown
+     * after.
+     *
+     * For a data deletion request, the account rows (name, avatar, profile)
+     * and whatever your app keeps about these accounts are yours to delete or
+     * anonymise: the returned accounts say which.
+     *
+     * @return EloquentCollection<int, SocialAccount> The accounts found, revoked and without a credential.
+     */
+    public function purgeExternalUser(string $provider, string $externalId): EloquentCollection
+    {
+        [$credentials, $accounts] = $this->externalUserRows($provider, $externalId);
+
+        try {
+            $this->revokeEach($accounts->all());
+        } finally {
+            if ($credentials->isNotEmpty()) {
+                // Explicitly, rather than through the foreign key: SQLite
+                // enforces it only when foreign keys are on.
+                SocialAccount::query()->whereIn('social_token_id', $credentials->modelKeys())->update(['social_token_id' => null]);
+                SocialToken::query()->whereKey($credentials->modelKeys())->delete();
+
+                $accounts->each(fn (SocialAccount $account) => $account->setAttribute('social_token_id', null)
+                    ->syncOriginalAttribute('social_token_id')
+                    ->unsetRelation('credential'));
+            }
+        }
+
+        return $accounts;
+    }
+
+    /**
+     * The rows one external user's grant backs, across owners (see
+     * revokeExternalUser()).
+     *
+     * @return array{0: EloquentCollection<int, SocialToken>, 1: EloquentCollection<int, SocialAccount>}
+     */
+    protected function externalUserRows(string $provider, string $externalId): array
+    {
+        $credentialProvider = $this->registry->has($provider)
+            ? $this->registry->for($provider)->credentialProvider()
+            : $provider;
+
+        $accountProviders = collect($this->registry->configured())
+            ->filter(fn (string $key) => $this->registry->for($key)->credentialProvider() === $credentialProvider)
+            ->merge([$provider, $credentialProvider])
+            ->unique()
+            ->values()
+            ->all();
+
+        $held = SocialAccount::query()
+            ->whereIn('provider', $accountProviders)
+            ->where('provider_holder_id', $externalId)
+            ->get();
+
+        $credentials = SocialToken::query()
+            ->where(fn ($query) => $query->where('provider', $credentialProvider)->where('provider_holder_id', $externalId))
+            ->orWhereIn('id', $held->pluck('social_token_id')->filter()->unique()->values()->all())
+            ->get();
+
+        $accounts = $held->merge(
+            SocialAccount::query()->whereIn('social_token_id', $credentials->modelKeys())->get()
+        )->values();
+
+        return [$credentials, $accounts];
+    }
+
+    /**
+     * markRevoked() on every row, whatever a listener throws; the first
+     * exception is rethrown once all have been tried.
+     *
+     * @param  array<int, SocialToken|SocialAccount>  $rows
+     */
+    protected function revokeEach(array $rows): void
+    {
+        $failure = null;
+
+        foreach ($rows as $row) {
+            try {
+                $row->markRevoked();
+            } catch (Throwable $e) {
+                $failure ??= $e;
+            }
+        }
+
+        if ($failure !== null) {
+            throw $failure;
         }
     }
 
