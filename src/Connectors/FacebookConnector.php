@@ -100,7 +100,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      *
      * @return array{token: string, expiresAt: ?Carbon}|RenewalResult
      */
-    public function extendUserToken(string $userToken): array|RenewalResult
+    public function extendUserToken(#[\SensitiveParameter] string $userToken): array|RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
 
@@ -147,7 +147,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      * @param  array<int, string>  $accountIds
      * @return array<string, array<int, string>>|RenewalResult [account_id => scopes]
      */
-    public function grantedScopesByAccount(string $userToken, array $accountIds): array|RenewalResult
+    public function grantedScopesByAccount(#[\SensitiveParameter] string $userToken, array $accountIds): array|RenewalResult
     {
         $appToken = $this->appAccessToken();
 
@@ -231,7 +231,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      * The Facebook user id behind a token (the credential holder). Used to key a
      * user's page rows so a reconnect can reconcile the ones they no longer manage.
      */
-    public function fetchUserId(string $userToken): string|RenewalResult
+    public function fetchUserId(#[\SensitiveParameter] string $userToken): string|RenewalResult
     {
         $response = $this->fetchMe($userToken);
 
@@ -261,7 +261,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     /**
      * GET /me?fields=id with the given token, transport outcomes normalised.
      */
-    protected function fetchMe(string $token): Response|RenewalResult
+    protected function fetchMe(#[\SensitiveParameter] string $token): Response|RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
 
@@ -283,7 +283,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
-    public function fetchPages(string $userToken, string $fields = 'id,name,access_token,picture{url}'): array|RenewalResult
+    public function fetchPages(#[\SensitiveParameter] string $userToken, string $fields = 'id,name,access_token,picture{url}'): array|RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
         $url = "https://graph.facebook.com/{$version}/me/accounts";

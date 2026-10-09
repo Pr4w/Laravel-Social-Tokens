@@ -129,6 +129,15 @@ forms are now normalised instead of failing or being misread:
   codes, the HTTP status and the response's keys, never the body. Correct the
   comment in your copy so nobody adds the body back.
 
+### If you wrote a connector
+
+- Mark every parameter of your connector that carries a token or a secret
+  `#[\SensitiveParameter]` (PHP 8.2+), as the built-in connectors now do.
+  The attribute on `ProviderConnector::exchangeForLongLived()` is not
+  inherited by your implementation. Without it, an exception thrown while the
+  method is on the stack records the token in its trace, where an error
+  tracker can collect it.
+
 ## From 1.x to 2.0
 
 2.0 scopes identity to the **owner** you pass when connecting. An account is

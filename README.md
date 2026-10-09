@@ -517,7 +517,9 @@ complete references. For anything else, extend `AbstractConnector` and implement
 characters, since it is stored in the `provider` columns. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
 configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx
-and 429 come back as transient failures.
+and 429 come back as transient failures. Mark every parameter that carries a
+token or a secret `#[\SensitiveParameter]`, as the package does: exception
+traces record call arguments, and error trackers collect them.
 
 Optional hooks (defaulted in `AbstractConnector`): `credentialProvider()` when the
 credential is refreshed under another provider's key (Instagram returns

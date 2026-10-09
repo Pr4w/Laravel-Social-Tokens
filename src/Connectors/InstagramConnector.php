@@ -58,12 +58,12 @@ class InstagramConnector extends AbstractConnector
         return CarbonInterval::days(7);
     }
 
-    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
         return $this->extend($accessToken);
     }
 
-    private function extend(string $accessToken): RenewalResult
+    private function extend(#[\SensitiveParameter] string $accessToken): RenewalResult
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
         $url = "https://graph.facebook.com/{$version}/oauth/access_token";

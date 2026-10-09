@@ -38,7 +38,7 @@ class StoreFacebookPages
      *                          cannot be resolved, or the pages cannot be listed.
      */
     public function handle(
-        string $userToken,
+        #[\SensitiveParameter] string $userToken,
         ?Model $owner = null,
         ?Model $connectedBy = null,
         ?string $userId = null,

@@ -54,7 +54,7 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
         return $this->refreshWithToken($token->access_token);
     }
 
-    private function refreshWithToken(?string $accessToken): RenewalResult
+    private function refreshWithToken(#[\SensitiveParameter] ?string $accessToken): RenewalResult
     {
         if (empty($accessToken)) {
             return RenewalResult::terminalFailure('Missing access token.');
@@ -129,7 +129,7 @@ class ThreadsConnector extends AbstractConnector implements ChecksCredential
      * ~60 day long lived one. Uses the th_exchange_token grant (client credentials
      * required), distinct from the th_refresh_token grant used by renew().
      */
-    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
         $response = $this->attempt(fn () => $this->http()->acceptJson()->get(self::EXCHANGE_URL, [
             'grant_type' => 'th_exchange_token',

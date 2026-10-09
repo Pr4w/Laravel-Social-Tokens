@@ -17,8 +17,8 @@ final class RenewalResult
      */
     private function __construct(
         public readonly RenewalOutcome $outcome,
-        public readonly ?string $accessToken = null,
-        public readonly ?string $refreshToken = null,   // null means keep the existing one
+        #[\SensitiveParameter] public readonly ?string $accessToken = null,
+        #[\SensitiveParameter] public readonly ?string $refreshToken = null,   // null means keep the existing one
         public readonly ?CarbonInterface $expiresAt = null,
         public readonly ?CarbonInterface $refreshExpiresAt = null,
         public readonly array $profile = [],
@@ -32,9 +32,9 @@ final class RenewalResult
      * @param  array<string, mixed>  $profile
      */
     public static function success(
-        string $accessToken,
+        #[\SensitiveParameter] string $accessToken,
         ?CarbonInterface $expiresAt = null,
-        ?string $refreshToken = null,
+        #[\SensitiveParameter] ?string $refreshToken = null,
         ?CarbonInterface $refreshExpiresAt = null,
         array $profile = [],
     ): self {

@@ -35,7 +35,7 @@ class StoreConnection
      */
     public function handle(
         string $provider,
-        SocialiteUser $user,
+        #[\SensitiveParameter] SocialiteUser $user,
         ?Model $owner = null,
         ?Model $connectedBy = null,
         bool $longLived = true,

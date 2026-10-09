@@ -287,8 +287,12 @@ class SocialTokens
      * when the connector implements ChecksCredential, and the credential is
      * flagged only if it confirms. Pass a reason without secrets.
      */
-    public function reportRejected(SocialAccount $account, string $reason, bool $terminal = true, ?string $rejectedToken = null): bool
-    {
+    public function reportRejected(
+        SocialAccount $account,
+        string $reason,
+        bool $terminal = true,
+        #[\SensitiveParameter] ?string $rejectedToken = null,
+    ): bool {
         // Fresh from the database: the caller's loaded relation may be stale.
         $token = $account->social_token_id !== null ? SocialToken::query()->find($account->social_token_id) : null;
 

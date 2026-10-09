@@ -58,7 +58,7 @@ class FakeConnector extends AbstractConnector
             ?? RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
     }
 
-    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
         return static::$exchangeResult;
     }

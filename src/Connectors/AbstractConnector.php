@@ -74,7 +74,7 @@ abstract class AbstractConnector implements ProviderConnector
         // No-op by default. Override where the provider exposes a revoke endpoint.
     }
 
-    public function exchangeForLongLived(string $accessToken): ?RenewalResult
+    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
         // Most providers' connect token is already long lived. Override where a
         // distinct short-to-long exchange is required at connect.
@@ -100,7 +100,7 @@ abstract class AbstractConnector implements ProviderConnector
      * there. Keep scheme, host and path for debugging; drop the whole query
      * (an allow-list: a secret parameter added later cannot leak either).
      */
-    public static function redactQueryStrings(string $message): string
+    public static function redactQueryStrings(#[\SensitiveParameter] string $message): string
     {
         return preg_replace('~(https?://[^\s?#]+)\?[^\s#]*~i', '$1?[redacted]', $message) ?? '[redacted]';
     }

@@ -58,7 +58,7 @@ class XConnector extends OAuth2Connector
     }
 
     /** The client authenticates with Basic: only its id goes in the body. */
-    protected function refreshParameters(string $refreshToken): array
+    protected function refreshParameters(#[\SensitiveParameter] string $refreshToken): array
     {
         return [
             'grant_type' => 'refresh_token',

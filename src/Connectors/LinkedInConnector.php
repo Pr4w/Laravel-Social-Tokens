@@ -141,7 +141,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
-    public function fetchOrganizations(string $accessToken): array|RenewalResult
+    public function fetchOrganizations(#[\SensitiveParameter] string $accessToken): array|RenewalResult
     {
         $elements = [];
         $start = 0;

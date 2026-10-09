@@ -32,7 +32,7 @@ abstract class OAuth2Connector extends AbstractConnector
      *
      * @return array<string, mixed>
      */
-    protected function refreshParameters(string $refreshToken): array
+    protected function refreshParameters(#[\SensitiveParameter] string $refreshToken): array
     {
         return [
             'grant_type' => 'refresh_token',

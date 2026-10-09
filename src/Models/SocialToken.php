@@ -383,7 +383,7 @@ class SocialToken extends Model
      * is flagged only if it still holds that token (a rejection of a token a
      * reconnect already replaced says nothing about the new one).
      */
-    public function markNeedsReconnectOnce(?string $reason = null, ?string $checkedToken = null): bool
+    public function markNeedsReconnectOnce(?string $reason = null, #[\SensitiveParameter] ?string $checkedToken = null): bool
     {
         if ($checkedToken !== null && $this->exists) {
             // Tokens are encrypted with a random IV: compare the decrypted value

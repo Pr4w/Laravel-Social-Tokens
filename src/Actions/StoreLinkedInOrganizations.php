@@ -47,11 +47,11 @@ class StoreLinkedInOrganizations
      * @throws RuntimeException when the organizations cannot be listed.
      */
     public function handle(
-        string $accessToken,
+        #[\SensitiveParameter] string $accessToken,
         string $memberId,
         ?Model $owner = null,
         ?Model $connectedBy = null,
-        ?string $refreshToken = null,
+        #[\SensitiveParameter] ?string $refreshToken = null,
         ?CarbonInterface $expiresAt = null,
         ?CarbonInterface $refreshExpiresAt = null,
         ?array $scopes = null,

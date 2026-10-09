@@ -42,7 +42,7 @@ class TikTokConnector extends OAuth2Connector
     }
 
     /** TikTok names the client id `client_key`. */
-    protected function refreshParameters(string $refreshToken): array
+    protected function refreshParameters(#[\SensitiveParameter] string $refreshToken): array
     {
         return [
             'client_key' => $this->clientId(),

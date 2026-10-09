@@ -10,6 +10,10 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 /**
  * The per-provider brain. All provider specific behaviour lives behind this
  * interface so the rest of the package never knows a TikTok from a LinkedIn.
+ *
+ * Mark every parameter that carries a token or a secret #[\SensitiveParameter],
+ * in implementations too (the attribute is not inherited): exception traces
+ * record call arguments, and error trackers collect them.
  */
 interface ProviderConnector
 {
@@ -42,7 +46,7 @@ interface ProviderConnector
      * Returns null when the connect token is already durable (most providers).
      * Must not write to the database.
      */
-    public function exchangeForLongLived(string $accessToken): ?RenewalResult;
+    public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult;
 
     /** Revoke the credential on the provider side, if supported. */
     public function revoke(SocialToken $token): void;

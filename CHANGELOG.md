@@ -7,6 +7,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 **Breaking:** see [UPGRADE.md, From 2.x to 3.0](UPGRADE.md#from-2x-to-30).
 
+### Security
+- **Tokens no longer reach exception traces.** PHP records call arguments in
+  a trace unless `zend.exception_ignore_args` is On (it is Off without a
+  php.ini, as in the official Docker images), and error trackers such as
+  Sentry and Flare collect them. When `StoreFacebookPages`,
+  `StoreInstagramAccounts` or `StoreLinkedInOrganizations` threw (a Graph or
+  LinkedIn 5xx while listing Pages or organizations), the trace held the
+  extended 60-day Meta user token, or the LinkedIn member and refresh tokens.
+  Every parameter that carries a token or a secret is now
+  `#[\SensitiveParameter]`, the Socialite user passed to `StoreConnection` and
+  `StoreAccountFromSocialite` included: traces show a `SensitiveParameterValue`
+  in its place.
+
 ### Changed (breaking)
 - `provider` is `varchar(50)` on `social_accounts` and `social_tokens` on MySQL,
   MariaDB and PostgreSQL (migration `2025_01_01_000006_shorten_provider_columns`).
