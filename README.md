@@ -317,9 +317,11 @@ Instagram Login calls (`graph.instagram.com`) are not signed.
 
 - **Long-lived tokens.** Threads and Instagram Login hand back a short-lived
   token, which is upgraded to its long-lived (~60 day) form before storing so
-  the row is renewable.
-  LinkedIn, TikTok and Google are already durable and stored as-is. Pass
-  `longLived: false` to skip the upgrade.
+  the row is renewable, and so is the Facebook user token behind Facebook and
+  Instagram (`fb_exchange_token`). LinkedIn, TikTok, Google and X are already
+  durable and stored as-is. Pass `longLived: false` to skip the upgrade, only
+  with a token that already is long-lived: Facebook Page tokens minted from a
+  short-lived user token stop working within hours.
 - **Instagram & Facebook fan-out.** These publish per Instagram account / per
   Page. A connect fans out to one account row per target, each pointing at a
   credential: Instagram accounts **share one renewable** Meta user credential
@@ -339,7 +341,10 @@ Instagram Login calls (`graph.instagram.com`) are not signed.
 
 Need finer control? `StoreConnection` delegates to lower-level actions you can
 call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages`
-(page fan-out), and `StoreInstagramAccounts` (Instagram-account fan-out).
+(page fan-out), and `StoreInstagramAccounts` (Instagram-account fan-out). The
+connector picks the action: one whose connections fan out implements
+`Contracts\FansOutConnections` and names its own, and
+`StoreAccountFromSocialite` refuses it (`InvalidArgumentException`).
 
 ### LinkedIn: company pages
 
@@ -880,7 +885,10 @@ credential is refreshed under another provider's key (Instagram returns
 `renewalStrategy()` needs (LinkedIn's without a refresh token renew as
 `ReauthOnly`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
-`revoke()` must not throw: read the token and send the request inside a
+A connector whose connections yield several accounts also implements
+`Contracts\FansOutConnections`: its `connectionAction()` names the action
+(implementing `Contracts\StoresConnections`) that `StoreConnection` hands them
+to. `revoke()` must not throw: read the token and send the request inside a
 `try`, and log a failure with `$this->logRevokeFailure($token, $e)`, and an
 answer that does not confirm the revocation with
 `$this->logUnconfirmedRevoke($token, $response)`. It receives a copy of the

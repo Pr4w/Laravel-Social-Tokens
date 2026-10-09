@@ -416,6 +416,40 @@ revocation endpoint still gets the tokens, from a copy taken before.
 A provider answer that does not confirm a Google or TikTok revocation is now
 logged: `[social-tokens] {provider} did not confirm the token revocation`.
 
+### Store connections through the connector
+
+`StoreConnection` now asks the connector which action stores a connection
+(`Contracts\FansOutConnections`), and passes every option to it.
+
+1. **`longLived: false` reaches Facebook and Instagram.** 2.x ignored it for
+   those two providers and always exchanged the user token for a long-lived
+   one. If one generic callback passes `longLived: false` for every provider,
+   stop passing it for `facebook` and `instagram`, unless the token you hand
+   over is already long-lived (you exchanged it yourself): Page tokens minted
+   from a short-lived user token stop working within hours, and are stored as
+   never expiring.
+2. **`StoreAccountFromSocialite` refuses fan-out providers.** Called with
+   `facebook` or `instagram`, it now throws `InvalidArgumentException` and
+   writes nothing. Call `StoreConnection` (or `StoreFacebookPages` /
+   `StoreInstagramAccounts`) instead. If you did call it for those providers,
+   it stored the Facebook user as an account, which nothing can post with.
+   Find those rows (a Page's or an Instagram account's id is never its
+   Facebook user's id) and delete them, or let your app decide:
+
+   ```php
+   SocialAccount::query()->whereIn('provider', ['facebook', 'instagram'])
+       ->whereColumn('provider_user_id', 'provider_holder_id')->get();
+   ```
+
+3. **If you construct `StoreConnection` yourself**, its constructor now takes
+   the `ConnectorRegistry`, the container and `StoreAccountFromSocialite`.
+   Resolve it from the container instead.
+4. **A connector whose connections fan out** (one of your own, or a subclass of
+   `FacebookConnector` / `InstagramConnector` meant to store one account per
+   connection) implements `FansOutConnections::connectionAction()`, returning
+   the class of an action implementing `Contracts\StoresConnections`. A
+   subclass of the Meta connectors inherits theirs; override it to change it.
+
 ### Review your `reportRejected()` calls
 
 2.x's README told you to pass `terminal: true` for any Meta 190/102 and for an

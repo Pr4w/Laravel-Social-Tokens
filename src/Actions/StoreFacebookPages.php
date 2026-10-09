@@ -2,10 +2,13 @@
 
 namespace Pr4w\SocialTokens\Actions;
 
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Actions\Concerns\PersistsMetaUserCredential;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
+use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -28,13 +31,17 @@ use RuntimeException;
  * Call this from your OAuth callback for the "facebook" provider instead of
  * StoreAccountFromSocialite.
  */
-class StoreFacebookPages
+class StoreFacebookPages implements StoresConnections
 {
     use PersistsMetaUserCredential;
 
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
+     * $extend false: $userToken is already long-lived, a token the app holds
+     * (a re-sync), so no fb_exchange_token call, and the stored data access
+     * deadline is kept when debug_token does not give the new one.
+     *
      * @return Collection<int, SocialAccount> One row per managed page (may be empty).
      *
      * @throws RuntimeException when the token cannot be extended, the user id
@@ -46,6 +53,38 @@ class StoreFacebookPages
         ?Model $connectedBy = null,
         ?string $userId = null,
         bool $extend = true,
+    ): Collection {
+        return $this->store($userToken, $owner, $connectedBy, $userId, $extend, newLogin: $extend);
+    }
+
+    /**
+     * StoreConnection's entry point, for a login that just happened: with
+     * $longLived false the token is stored as given (no fb_exchange_token
+     * call), and it is a new login all the same.
+     *
+     * @return Collection<int, SocialAccount>
+     */
+    public function storeConnection(
+        string $provider,
+        #[\SensitiveParameter] SocialiteUser $user,
+        ?Model $owner = null,
+        ?Model $connectedBy = null,
+        bool $longLived = true,
+        ?CarbonInterface $refreshExpiresAt = null,
+    ): Collection {
+        return $this->store($user->token, $owner, $connectedBy, $user->getId(), extend: $longLived, newLogin: true);
+    }
+
+    /**
+     * @return Collection<int, SocialAccount>
+     */
+    protected function store(
+        #[\SensitiveParameter] string $userToken,
+        ?Model $owner,
+        ?Model $connectedBy,
+        ?string $userId,
+        bool $extend,
+        bool $newLogin,
     ): Collection {
         $connector = $this->registry->for('facebook');
 
@@ -101,7 +140,7 @@ class StoreFacebookPages
                 $userToken,
                 $expiresAt,
                 $debug,
-                newLogin: $extend,
+                $newLogin,
             );
         }
 

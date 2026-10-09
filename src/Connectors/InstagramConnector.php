@@ -2,6 +2,8 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
+use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
+use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -18,12 +20,18 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * An account with no Facebook Page uses the "Instagram API with Instagram
  * Login" instead (graph.instagram.com, ig_exchange_token and
  * ig_refresh_token): InstagramLoginConnector, under its own provider key.
- * Swapping the requests here would not do, since StoreConnection sends every
- * connection of this connector to the Facebook Page fan-out and its
+ * Swapping the requests here would not do, since this connector's
+ * connections go to the Facebook Page fan-out (connectionAction()) and its
  * credentials are renewed under "facebook".
  */
-class InstagramConnector extends MetaGraphConnector
+class InstagramConnector extends MetaGraphConnector implements FansOutConnections
 {
+    /** One account per Instagram account linked to a Page the user manages. */
+    public function connectionAction(): string
+    {
+        return StoreInstagramAccounts::class;
+    }
+
     /**
      * Instagram shares the Meta user credential, refreshed via the Facebook
      * connector (fb_exchange_token). So its credentials live under "facebook".

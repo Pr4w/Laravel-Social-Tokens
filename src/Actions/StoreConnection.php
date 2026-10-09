@@ -3,11 +3,14 @@
 namespace Pr4w\SocialTokens\Actions;
 
 use Carbon\CarbonInterface;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use Laravel\Socialite\Two\User as SocialiteUser;
-use Pr4w\SocialTokens\Connectors\FacebookConnector;
-use Pr4w\SocialTokens\Connectors\InstagramConnector;
+use LogicException;
+use Pr4w\SocialTokens\Contracts\FansOutConnections;
+use Pr4w\SocialTokens\Contracts\ProviderConnector;
+use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
@@ -19,23 +22,30 @@ use Pr4w\SocialTokens\Support\ConnectorRegistry;
  *
  * The return type is always a Collection because a connection can yield more
  * than one account — most providers give exactly one, Facebook gives one per
- * managed page. It delegates to StoreAccountFromSocialite and StoreFacebookPages,
- * which remain available if you need the lower-level path directly.
+ * managed page. Which action stores it is the connector's call: one that fans
+ * out (FansOutConnections) names its own (StoreFacebookPages,
+ * StoreInstagramAccounts), every other goes to StoreAccountFromSocialite.
+ * Those remain available if you need the lower-level path directly.
  */
 class StoreConnection
 {
     public function __construct(
         protected ConnectorRegistry $registry,
+        protected Container $container,
         protected StoreAccountFromSocialite $single,
-        protected StoreFacebookPages $facebookPages,
-        protected StoreInstagramAccounts $instagramAccounts,
     ) {}
 
     /**
+     * @param  bool  $longLived  Exchange the token for its long-lived form first, where the
+     *                           provider needs a distinct step (Threads, Instagram Login, and
+     *                           the Meta user token behind Facebook and Instagram). Pass false
+     *                           only with a token that already is long-lived.
      * @param  CarbonInterface|null  $refreshExpiresAt  The refresh token's expiry, when you know it
      *                                                  (see StoreAccountFromSocialite). Not used by the
      *                                                  Facebook and Instagram fan-outs.
      * @return Collection<int, SocialAccount>
+     *
+     * @throws LogicException when a fan-out connector names an action that cannot store connections.
      */
     public function handle(
         string $provider,
@@ -48,31 +58,33 @@ class StoreConnection
         // Throws InvalidArgumentException for a provider without a connector.
         $connector = $this->registry->for($provider);
 
-        // Instagram fans out to one account per linked Instagram Business account
-        // (plus the companion Facebook Pages). Authenticated via the Facebook
-        // driver, so $user carries the Facebook user token and id.
-        if ($connector instanceof InstagramConnector) {
-            return $this->instagramAccounts->handle(
-                userToken: $user->token,
-                owner: $owner,
-                connectedBy: $connectedBy,
-                userId: $user->getId(),
-            );
+        return $this->actionFor($connector)->storeConnection(
+            provider: $provider,
+            user: $user,
+            owner: $owner,
+            connectedBy: $connectedBy,
+            longLived: $longLived,
+            refreshExpiresAt: $refreshExpiresAt,
+        );
+    }
+
+    protected function actionFor(ProviderConnector $connector): StoresConnections
+    {
+        if (! $connector instanceof FansOutConnections) {
+            return $this->single;
         }
 
-        // Facebook fans out to one account per managed page.
-        if ($connector instanceof FacebookConnector) {
-            return $this->facebookPages->handle(
-                userToken: $user->token,
-                owner: $owner,
-                connectedBy: $connectedBy,
-                userId: $user->getId(),
-            );
+        $action = $this->container->make($connector->connectionAction());
+
+        if (! $action instanceof StoresConnections) {
+            throw new LogicException(sprintf(
+                '%s::connectionAction() must name a %s, not [%s].',
+                $connector::class,
+                StoresConnections::class,
+                get_debug_type($action),
+            ));
         }
 
-        // Every other provider yields a single account.
-        return collect([
-            $this->single->handle($provider, $user, $owner, $connectedBy, $longLived, $refreshExpiresAt),
-        ]);
+        return $action;
     }
 }

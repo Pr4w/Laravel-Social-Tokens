@@ -4,7 +4,11 @@ namespace Pr4w\SocialTokens\Actions;
 
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Collection;
+use InvalidArgumentException;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Contracts\FansOutConnections;
+use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -17,13 +21,31 @@ use RuntimeException;
  * It is the integration point Socialite itself does not provide (Socialite
  * fires no event on return).
  *
- * For a 1:1 provider (TikTok, Google, standalone) the credential and the account
- * are one-to-one: this creates a renewable SocialToken and a SocialAccount that
- * posts with it.
+ * For a 1:1 provider (TikTok, Google, X, Threads, Instagram Login, a LinkedIn
+ * personal profile) the credential and the account are one-to-one: this
+ * creates a renewable SocialToken and a SocialAccount that posts with it. A
+ * provider whose connections fan out (Facebook, Instagram through a Page) is
+ * refused: StoreConnection sends it to its own action.
  */
-class StoreAccountFromSocialite
+class StoreAccountFromSocialite implements StoresConnections
 {
     public function __construct(protected ConnectorRegistry $registry) {}
+
+    /**
+     * StoreConnection's entry point: the one account, in a collection.
+     *
+     * @return Collection<int, SocialAccount>
+     */
+    public function storeConnection(
+        string $provider,
+        #[\SensitiveParameter] SocialiteUser $user,
+        ?Model $owner = null,
+        ?Model $connectedBy = null,
+        bool $longLived = true,
+        ?CarbonInterface $refreshExpiresAt = null,
+    ): Collection {
+        return collect([$this->handle($provider, $user, $owner, $connectedBy, $longLived, $refreshExpiresAt)]);
+    }
 
     /**
      * @param  CarbonInterface|null  $refreshExpiresAt  The refresh token's expiry, when you know it.
@@ -32,6 +54,8 @@ class StoreAccountFromSocialite
      *                                                  one (SocialiteProviders' accessTokenResponseBody), and
      *                                                  stays unknown with core Socialite's drivers (LinkedIn)
      *                                                  until the first renewal reports it.
+     *
+     * @throws InvalidArgumentException for a provider without a connector, or one whose connections fan out.
      */
     public function handle(
         string $provider,
@@ -44,6 +68,18 @@ class StoreAccountFromSocialite
         // Throws for a provider without a connector, before anything is written:
         // stored without one, the account would look static and break at expiry.
         $connector = $this->registry->for($provider);
+
+        // Keyed on the Socialite user, a Facebook connection would become a
+        // Page-less account (an Instagram one with the Facebook user's id),
+        // and overwrite the shared Meta user credential with a short-lived
+        // token.
+        if ($connector instanceof FansOutConnections) {
+            throw new InvalidArgumentException(sprintf(
+                'Connections of [%s] fan out to several accounts: store them with StoreConnection, or %s.',
+                $provider,
+                class_basename($connector->connectionAction()),
+            ));
+        }
 
         $accessToken = $user->token;
         $refreshToken = $user->refreshToken ?: null;

@@ -245,6 +245,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   Page of the same user and owner is connected; 2.x revoked it then, although
   the Pages kept it renewed
   ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
+- `StoreConnection` passes `longLived` to the Facebook and Instagram fan-outs
+  (their `extend`): `longLived: false` now skips the `fb_exchange_token` call
+  there too, and stores the user token as given. 2.x ignored it on those two
+  providers and always extended. Pass it only with a token that already is
+  long-lived: Page tokens minted from a short-lived user token die with it,
+  within hours, although they are stored as never expiring
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+- `StoreAccountFromSocialite` throws `InvalidArgumentException`, writing
+  nothing, for a provider whose connections fan out (`facebook`, `instagram`,
+  any connector implementing `FansOutConnections`). It used to store the
+  Facebook user as a Page-less `facebook` account, or as an `instagram`
+  account carrying the Facebook user's id, and to overwrite the shared Meta
+  user credential with Socialite's short-lived token
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+- `StoreConnection` picks the action from the connector
+  (`FansOutConnections::connectionAction()`, see Added) instead of checking
+  for `FacebookConnector` and `InstagramConnector`; a subclass of either
+  inherits its action. Its constructor takes the `ConnectorRegistry`, the
+  container and `StoreAccountFromSocialite`, no longer the two Meta actions:
+  resolve it from the container.
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -539,6 +559,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   fan-out, and its credentials are renewed under `facebook`, so an Instagram
   Login token went to `graph.facebook.com` and was refused. That path is now
   its own connector (see Added).
+- `StoreConnection::handle('facebook' | 'instagram', $user, longLived: false)`
+  still called `fb_exchange_token`, and threw "Could not extend the Facebook
+  user token" when Meta refused it (see Changed (breaking)).
+- `StoreAccountFromSocialite` accepted the `facebook` and `instagram`
+  providers and stored rows nothing could post with, which the next fan-out
+  connection flagged as no longer managed (see Changed (breaking)).
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -684,6 +710,17 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   does it for a connector of your own.
 - Migration `2025_01_01_000010_clear_tokens_of_revoked_credentials` (see
   Security). It can be run again, and changes no `updated_at`.
+- `Contracts\FansOutConnections`, a connector capability: a connector whose
+  connections yield several accounts names the action that stores them
+  (`connectionAction()`). `FacebookConnector` names `StoreFacebookPages`,
+  `InstagramConnector` names `StoreInstagramAccounts`. `StoreConnection`
+  hands such a connection to that action; `StoreAccountFromSocialite`
+  refuses it.
+- `Contracts\StoresConnections`, the action `StoreConnection` calls:
+  `storeConnection($provider, $user, $owner, $connectedBy, $longLived,
+  $refreshExpiresAt)`, implemented by `StoreAccountFromSocialite`,
+  `StoreFacebookPages` and `StoreInstagramAccounts`. Every option reaches the
+  action.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
