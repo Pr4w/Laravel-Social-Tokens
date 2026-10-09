@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens\Actions;
 
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
@@ -12,13 +13,16 @@ use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\DeletionConfirmation;
 use RuntimeException;
+use Throwable;
 
 /**
  * Meta's Data Deletion Request callback (Facebook Login, Instagram Login) and
  * Threads' Delete callback: the user's tokens are deleted under every owner
  * (SocialTokens::purgeExternalUser()), ExternalUserDataDeleted lets the app
  * delete the rest, and Meta gets the {url, confirmation_code} answer it
- * expects, the url being a page where the user can check the request.
+ * expects, the url being a page where the user can check the request. Once
+ * the tokens are deleted, both happen even when an AccountRevoked listener
+ * throws; its exception is reported.
  *
  * Routed at POST {prefix}/{provider}/delete when `callbacks.enabled` is on;
  * call handle() from your own route otherwise.
@@ -45,7 +49,24 @@ class HandleDataDeletionCallback
         $code = DeletionConfirmation::issue($provider);
         $url = DeletionConfirmation::statusUrl($provider, $code);
 
-        $accounts = $this->tokens->purgeExternalUser($provider, $userId);
+        $deleted = null;
+
+        try {
+            $accounts = $this->tokens->purgeExternalUser($provider, $userId, function (Collection $accounts) use (&$deleted) {
+                $deleted = $accounts;
+            });
+        } catch (Throwable $e) {
+            // Unless the deletion itself failed, the tokens are gone: the app
+            // must still get the accounts to delete, and Meta its answer. A
+            // failing AccountRevoked listener (a notification's mail
+            // transport) is reported instead.
+            if (! $deleted instanceof Collection) {
+                throw $e;
+            }
+
+            report($e);
+            $accounts = $deleted;
+        }
 
         event(new ExternalUserDataDeleted($provider, $userId, $code, $accounts->modelKeys()));
 

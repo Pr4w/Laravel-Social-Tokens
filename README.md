@@ -787,8 +787,10 @@ add some, a throttle for instance, in `callbacks.middleware`, and move them with
   may point at them. Then `ExternalUserDataDeleted` fires with the provider,
   the user id, the confirmation code and the account ids: **delete or
   anonymise those accounts, and whatever else you keep about the user, in a
-  listener.** Meta gets the `{url, confirmation_code}` answer it expects; the
-  url is a status page the package serves
+  listener.** Meta gets the `{url, confirmation_code}` answer it expects. Once
+  the tokens are deleted, both happen even when an `AccountRevoked` listener
+  throws (its exception is reported); only a failed deletion answers a 500,
+  with no code. The url is a status page the package serves
   (`GET {prefix}/{provider}/deletion/{code}`, which recognises only the codes
   it signed with your `APP_KEY`), or yours, with
   `SOCIAL_TOKENS_DELETION_STATUS_URL` (`{provider}` is replaced, and so is
@@ -799,6 +801,9 @@ To place the routes yourself, leave `enabled` off and call
 call the actions from your own controllers:
 `app(HandleDeauthorizeCallback::class)->handle($provider, $signedRequest)` and
 `app(HandleDataDeletionCallback::class)->handle($provider, $signedRequest)`.
+Calling `purgeExternalUser()` yourself, pass it a closure as third argument to
+get the accounts even when a listener throws: it receives them as soon as the
+tokens are deleted, before the listener's exception is rethrown.
 The callbacks find rows by the `user_id` Meta signs, so the holder ids must be
 those: the app-scoped ids Socialite's Facebook and Threads drivers return. For
 Instagram Login, check that your driver's user id is the one Meta sends (a

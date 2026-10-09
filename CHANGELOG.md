@@ -613,14 +613,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     accounts), the credentials those accounts post with (the Pages' tokens)
     and every account posting with one of those. `facebook` and `instagram`
     reach the same rows. The provider is not called.
-  - `SocialTokens::purgeExternalUser($provider, $externalId)` deletes those
-    credentials and revokes those accounts, which keep their rows without a
-    credential.
+  - `SocialTokens::purgeExternalUser($provider, $externalId, $deleted = null)`
+    deletes those credentials and revokes those accounts, which keep their
+    rows without a credential. The `$deleted` closure receives the accounts as
+    soon as the tokens are deleted, even when a listener throws.
   - `Actions\HandleDeauthorizeCallback` (Deauthorize, Threads' Uninstall) and
     `Actions\HandleDataDeletionCallback` (Data Deletion Request, Threads'
     Delete), which verify the `signed_request` with the connector's app
     secret; the second answers `{url, confirmation_code}` and fires
-    `Events\ExternalUserDataDeleted` for the app to delete the rest.
+    `Events\ExternalUserDataDeleted` for the app to delete the rest, even
+    when an `AccountRevoked` listener throws (its exception is reported).
     `Actions\ShowDataDeletionStatus` serves the status page, recognising only
     codes signed with the app key (`Support\DeletionConfirmation`).
   - Their routes, `POST {prefix}/{provider}/deauthorize`,

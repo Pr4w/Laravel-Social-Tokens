@@ -10,7 +10,8 @@ use Illuminate\Foundation\Events\Dispatchable;
  * deleted their tokens (SocialTokens::purgeExternalUser()). The accounts in
  * $accountIds are revoked and kept, without a credential: delete or
  * anonymise them, and whatever else your app keeps about this user, here.
- * $confirmationCode is what Meta was answered, for your records.
+ * $confirmationCode is what Meta was answered, for your records. It fires
+ * once the tokens are deleted, even when an AccountRevoked listener threw.
  *
  * Carries ids, not models: a listener may delete the rows.
  */

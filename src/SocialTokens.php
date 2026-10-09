@@ -2,6 +2,7 @@
 
 namespace Pr4w\SocialTokens;
 
+use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -489,11 +490,17 @@ class SocialTokens
      *
      * For a data deletion request, the account rows (name, avatar, profile)
      * and whatever your app keeps about these accounts are yours to delete or
-     * anonymise: the returned accounts say which.
+     * anonymise: the returned accounts say which. When a listener throws,
+     * nothing is returned, so $deleted receives them as soon as the tokens
+     * are deleted, before that exception is rethrown: what must follow a
+     * deletion whatever a listener did (HandleDataDeletionCallback's answer
+     * to Meta) can rely on it. It is not called when the deletion itself
+     * fails.
      *
+     * @param  (Closure(EloquentCollection<int, SocialAccount>): void)|null  $deleted
      * @return EloquentCollection<int, SocialAccount> The accounts found, revoked and without a credential.
      */
-    public function purgeExternalUser(string $provider, string $externalId): EloquentCollection
+    public function purgeExternalUser(string $provider, string $externalId, ?Closure $deleted = null): EloquentCollection
     {
         [$credentials, $accounts] = $this->externalUserRows($provider, $externalId);
 
@@ -509,6 +516,10 @@ class SocialTokens
                 $accounts->each(fn (SocialAccount $account) => $account->setAttribute('social_token_id', null)
                     ->syncOriginalAttribute('social_token_id')
                     ->unsetRelation('credential'));
+            }
+
+            if ($deleted !== null) {
+                $deleted($accounts);
             }
         }
 

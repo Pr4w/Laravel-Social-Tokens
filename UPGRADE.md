@@ -299,13 +299,17 @@ so:
 3. Listen for `Pr4w\SocialTokens\Events\ExternalUserDataDeleted` and delete or
    anonymise the accounts it lists (`$event->accountIds`, kept revoked and
    without a credential) and whatever else your app keeps about the user: the
-   package deletes the tokens only.
+   package deletes the tokens only. The event fires, and Meta gets its answer,
+   even when one of your `AccountRevoked` listeners throws: its exception is
+   reported, not returned to Meta.
 4. In the Meta App Dashboard, replace the callback URLs you had (or a Data
    Deletion Instructions URL) with
    `https://your-app/social-tokens/meta/facebook/deauthorize` and
    `.../facebook/delete` (`threads`, `instagram_login` for those apps). If an
    existing route of yours already handles them, keep it and call
-   `revokeExternalUser()` / `purgeExternalUser()` from it instead.
+   `revokeExternalUser()` / `purgeExternalUser()` from it instead. A listener
+   exception is rethrown by both; pass `purgeExternalUser()` a closure as
+   third argument to receive the accounts once the tokens are deleted anyway.
 
 ### Check your published config
 

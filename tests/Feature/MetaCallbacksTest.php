@@ -1,6 +1,8 @@
 <?php
 
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Actions\HandleDataDeletionCallback;
@@ -14,6 +16,7 @@ use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\SocialTokensServiceProvider;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
+use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\DeletionConfirmation;
 use Pr4w\SocialTokens\Support\MetaSignedRequest;
 use Pr4w\SocialTokens\Tests\Fixtures\Owner;
@@ -174,13 +177,19 @@ it('deletes the tokens of an external user and keeps their accounts, revoked', f
     Event::assertNotDispatched(CredentialRevoked::class);
 });
 
-it('deletes the tokens even when an account listener throws', function () {
+it('deletes the tokens even when an account listener throws, and hands over the accounts first', function () {
     $rows = metaConnection('user-1');
     Event::listen(AccountRevoked::class, fn () => throw new RuntimeException('listener failed'));
+    $deleted = null;
 
-    expect(fn () => app(SocialTokens::class)->purgeExternalUser('facebook', 'user-1'))->toThrow(RuntimeException::class);
+    expect(function () use (&$deleted) {
+        app(SocialTokens::class)->purgeExternalUser('facebook', 'user-1', function ($accounts) use (&$deleted) {
+            $deleted = $accounts;
+        });
+    })->toThrow(RuntimeException::class, 'listener failed');
 
-    expect(SocialToken::query()->whereKey($rows['user']->getKey())->exists())->toBeFalse();
+    expect(SocialToken::query()->whereKey($rows['user']->getKey())->exists())->toBeFalse()
+        ->and($deleted?->modelKeys())->toEqualCanonicalizing([$rows['instagram']->getKey(), $rows['facebook']->getKey()]);
 });
 
 // The callback routes ----------------------------------------------------------
@@ -270,6 +279,42 @@ it('deletes the tokens of a data deletion request and answers with a status page
 
     $this->get("/social-tokens/meta/facebook/deletion/{$forged}")->assertNotFound();
     $this->get("/social-tokens/meta/threads/deletion/{$code}")->assertNotFound(); // signed for facebook only
+});
+
+it('still answers Meta and fires ExternalUserDataDeleted when an account listener throws', function () {
+    enableCallbacks();
+    Exceptions::fake();
+    Event::listen(AccountRevoked::class, fn () => throw new RuntimeException('mail server down'));
+    Event::fake([ExternalUserDataDeleted::class]);
+    $rows = metaConnection('user-1');
+
+    $response = $this->post('/social-tokens/meta/facebook/delete', ['signed_request' => signedFor('user-1')])
+        ->assertOk()
+        ->assertJsonStructure(['url', 'confirmation_code']);
+
+    expect(SocialToken::count())->toBe(0);
+
+    Event::assertDispatched(ExternalUserDataDeleted::class, fn ($event) => $event->confirmationCode === $response->json('confirmation_code')
+        && collect($event->accountIds)->sort()->values()->all() === collect([$rows['instagram']->getKey(), $rows['facebook']->getKey()])->sort()->values()->all());
+    Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === 'mail server down');
+});
+
+it('answers no confirmation when the tokens could not be deleted', function () {
+    Event::fake([ExternalUserDataDeleted::class]);
+    config()->set('social-tokens.callbacks.deletion_status_url', 'https://app.test/privacy/deletion');
+
+    app()->instance(SocialTokens::class, new class(app(ConnectorRegistry::class)) extends SocialTokens
+    {
+        public function purgeExternalUser(string $provider, string $externalId, ?Closure $deleted = null): EloquentCollection
+        {
+            throw new RuntimeException('database gone');
+        }
+    });
+
+    expect(fn () => app(HandleDataDeletionCallback::class)->handle('facebook', signedFor('user-1')))
+        ->toThrow(RuntimeException::class, 'database gone');
+
+    Event::assertNotDispatched(ExternalUserDataDeleted::class);
 });
 
 it('points the answer at the app\'s own status page', function (string $configured, string $expected) {
