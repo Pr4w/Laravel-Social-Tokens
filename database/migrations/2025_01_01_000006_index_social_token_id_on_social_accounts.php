@@ -20,8 +20,9 @@ return new class extends Migration
     {
         $accounts = config('social-tokens.table', 'social_accounts');
 
+        // An expression index lists no column.
         foreach (Schema::getIndexes($accounts) as $index) {
-            if ($index['columns'][0] === 'social_token_id') {
+            if (($index['columns'][0] ?? null) === 'social_token_id') {
                 return;
             }
         }

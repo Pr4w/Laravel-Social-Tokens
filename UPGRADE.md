@@ -29,10 +29,13 @@ files (existing files are left alone).
   and refuses, changing nothing, while a row holds a longer `provider`: rename
   that connector's key in `config/social-tokens.php`, update its rows
   (`UPDATE social_accounts SET provider = 'new-key' WHERE provider = 'old-key'`,
-  and the same on `social_tokens`), then migrate again. SQLite declares no
-  length, so the migration leaves it as is. On PostgreSQL and MySQL the change
-  rebuilds both tables and their indexes, locking each while it runs: short on
-  tables of this size.
+  and the same on `social_tokens`), then migrate again. Only MySQL, MariaDB
+  and PostgreSQL are changed: SQLite declares no length, and SQL Server has no
+  key-length cap (and cannot shrink an indexed column in place), so both are
+  left as is. On MySQL and PostgreSQL the change rebuilds both tables and their
+  indexes, locking each while it runs: short on tables of this size. Rolling
+  it back keeps `varchar(50)`, which 2.x reads fine (widening it again could
+  push the owner keys of a uuid install back over MySQL's limit).
 - `2025_01_01_000006_index_social_token_id_on_social_accounts` indexes
   `social_accounts.social_token_id` on PostgreSQL and SQLite, which do not index
   a foreign key column. On MySQL the foreign key already has an index, and the
@@ -50,11 +53,17 @@ external holder, owner)*. In 1.x, when a second owner connected an account a fir
 owner already had, the single row and its credential silently moved to the
 second owner. The first owner lost it, with no event.
 
-### 1. Update the package
+### 1. Update the package, straight to 3.0
 
 ```bash
-composer require pr4w/laravel-social-tokens:^2.0
+composer require pr4w/laravel-social-tokens:^3.0
 ```
+
+Go straight to 3.0 and follow [From 2.x to 3.0](#from-2x-to-30) too. The
+safeguards below exist only in 3.0's copy of
+`2025_01_01_000007_scope_identity_to_owner`: 2.0.0's cannot be resumed after a
+failure, fails on MySQL with uuid or ulid owners after dropping the old keys,
+and runs as one long transaction on PostgreSQL.
 
 ### 2. Run the migration, on a copy of production first
 
@@ -70,7 +79,8 @@ If you published the package migrations, publish them again first (see
 - adds `ownable_type` / `ownable_id` to `social_tokens`;
 - gives every credential the owner of the accounts it backs. A Meta user
   credential with no account pointing at it takes the owner of the Facebook Pages
-  that name it as their holder;
+  that name it as their holder. A credential backing no owned account, or with
+  no account pointing at it and no `provider_holder_id`, stays owner-less;
 - splits a credential that backs the accounts of several owners (possible in
   1.x after a partial reconnect) into one copy per owner, and repoints each
   owner's accounts to their copy. The copies keep the same encrypted tokens;
@@ -83,13 +93,24 @@ If you published the package migrations, publish them again first (see
 It can be rolled back only while no two owners share an external account. Once
 they do, `down()` refuses and says why.
 
-**MySQL:** InnoDB caps an index key at 3072 bytes. With 3.0's
-`2025_01_01_000006_shorten_provider_columns`, which runs first, the new unique
-keys fit with bigint, uuid and ulid owner ids alike. Before changing anything,
-the migration checks that they fit, and that owners with non-integer ids come
-with `Schema::morphUsingUuids()` / `Schema::morphUsingUlids()` (the credentials'
-owner columns take the accounts' key type). If either check fails it says why
-and changes nothing.
+**Checks first.** Before changing anything, the migration checks two things,
+and if either fails it says why and changes nothing:
+
+- **MySQL/MariaDB:** that the new unique keys fit InnoDB's 3072-byte limit.
+  With 3.0's `2025_01_01_000006_shorten_provider_columns`, which runs first,
+  they fit with bigint, uuid and ulid owner ids alike.
+- **Owner key type:** that the new `social_tokens.ownable_id` can hold every
+  owner id of your accounts. It takes the type of
+  `social_accounts.ownable_id`: integers stay integers, a uuid column (native
+  or `char(36)`) gives uuid, a `char(26)` column ulid. Any other string column
+  (a `varchar` you changed yourself) follows `Schema::morphUsingUuids()` /
+  `Schema::morphUsingUlids()`, and is refused while morph keys default to
+  integers (except on SQLite, which enforces no type).
+
+**Index names on a prefixed install:** with a table prefix and
+`prefix_indexes`, the new keys carry the prefix
+(`acme_social_accounts_owner_identity_unique`), like the indexes Laravel names
+itself. Adjust anything that refers to them by name.
 
 **If it fails partway** (a lost connection, a deploy timeout), fix the cause and
 run `php artisan migrate` again: every step is guarded and resumes where it

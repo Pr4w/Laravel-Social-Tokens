@@ -12,15 +12,25 @@ use Illuminate\Support\Facades\Schema;
  * columns already take 3060 of InnoDB's 3072 bytes.
  *
  * Named to sort before 2025_01_01_000007, which adds those keys: pending
- * migrations run in name order. A column without a declared length (SQLite,
- * which enforces none) is left alone.
+ * migrations run in name order.
+ *
+ * MySQL and MariaDB need it; PostgreSQL gets it too, for one limit across the
+ * supported servers. SQLite declares no length and enforces none, and SQL
+ * Server has no such cap and cannot shrink a column an index uses in place:
+ * both are left alone.
  */
 return new class extends Migration
 {
     private const LENGTH = 50;
 
+    private const DRIVERS = ['mysql', 'mariadb', 'pgsql'];
+
     public function up(): void
     {
+        if (! in_array(Schema::getConnection()->getDriverName(), self::DRIVERS, true)) {
+            return;
+        }
+
         $tables = array_filter($this->tables(), fn (string $table) => $this->length($table) > self::LENGTH);
 
         // Check every table before changing any.
@@ -31,15 +41,15 @@ return new class extends Migration
         }
     }
 
+    /**
+     * Keeps the shorter column. 2.x reads it fine, and widening it again could
+     * push the owner-scoped keys of a uuid or ulid install back over InnoDB's
+     * limit, failing the rollback (and up() leaves a column already at most 50
+     * characters as it is, so it may not have shortened anything).
+     */
     public function down(): void
     {
-        foreach ($this->tables() as $table) {
-            $length = $this->length($table);
-
-            if ($length !== null && $length < 255) {
-                Schema::table($table, fn (Blueprint $blueprint) => $blueprint->string('provider')->change());
-            }
-        }
+        //
     }
 
     /** @return list<string> */

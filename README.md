@@ -93,10 +93,10 @@ its own. To attach an owner-less row, `associate()` it yourself.
 The owner is a polymorphic relation (`ownable_type`, `ownable_id`), and both
 columns are part of the unique keys:
 
-- **Key type.** `ownable_id` follows Laravel's default morph key type when the
-  migrations run: integers, unless you call `Schema::morphUsingUuids()` or
-  `Schema::morphUsingUlids()` first (see [Install](#install)). A uuid owner
-  stored in an integer column fails on insert.
+- **Key type.** `ownable_id` is created as an integer unless you declare uuid
+  or ulid owners before the first `migrate` (see [Install](#install)). A uuid
+  owner stored in an integer column fails on insert. The credentials' owner
+  column takes the type of the accounts' one.
 - **Morph map.** Without one, `ownable_type` stores the owner's class name, so
   renaming or moving that class orphans its rows. Register an alias with
   `Relation::morphMap(['workspace' => Workspace::class])` before the first
@@ -115,14 +115,24 @@ php artisan vendor:publish --tag=social-tokens-migrations
 php artisan migrate
 ```
 
-**Owners with uuid or ulid keys:** declare it before the first `migrate`, in a
-service provider's `boot()`, so the owner columns are created to match:
+**Owners with uuid or ulid keys:** declare it before the first `migrate`, so
+the owner columns are created to match. Either app-wide, in a service
+provider's `boot()`:
 
 ```php
 use Illuminate\Support\Facades\Schema;
 
 Schema::morphUsingUuids(); // or Schema::morphUsingUlids()
 ```
+
+This applies to every morph column created afterwards, not just the owner:
+`connected_by` (the user passed as `connectedBy`), Sanctum's `tokenable`,
+notifications' `notifiable`. If your users keep integer keys, declare it for
+the owner only instead: publish the migrations and, in
+`2025_01_01_000000_create_social_accounts_table.php`, change
+`nullableMorphs('ownable')` to `nullableUuidMorphs('ownable')` (or
+`nullableUlidMorphs('ownable')`). The credentials' owner columns follow the
+accounts' ones.
 
 The migrations work on MySQL, PostgreSQL and SQLite, with integer, uuid or ulid
 owner keys. They load from the package whether or not you publish them; if you

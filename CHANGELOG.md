@@ -5,6 +5,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 ## [Unreleased]
 
+**Breaking:** see [UPGRADE.md, From 2.x to 3.0](UPGRADE.md#from-2x-to-30).
+
+### Changed (breaking)
+- `provider` is `varchar(50)` on `social_accounts` and `social_tokens` on MySQL,
+  MariaDB and PostgreSQL (migration `2025_01_01_000006_shorten_provider_columns`).
+  A connector key must be at most 50 characters; the migration refuses,
+  changing nothing, while a longer one is stored. SQLite declares no length and
+  SQL Server has no key-length cap, so both are left as is. Rolling the
+  migration back keeps `varchar(50)`, which 2.x reads fine.
+- Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade) no
+  longer runs as one transaction on PostgreSQL: a failure partway no longer
+  rolls everything back. Run `php artisan migrate` again; it resumes where it
+  stopped (see Fixed).
+- On an install with a table prefix and `prefix_indexes`, the owner-scoped
+  unique keys 000007 creates carry the prefix
+  (`acme_social_accounts_owner_identity_unique`, not
+  `social_accounts_owner_identity_unique`). Only 1.x installs migrating with
+  3.0 get the new names; keys 2.0.0 created keep theirs, and `down()` finds
+  either by its columns.
+
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
   the TikTok, Google and LinkedIn connectors with "Array to string conversion";
@@ -24,9 +44,20 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     credential is split in one transaction or not at all.
   - It checks before changing anything, and refuses with instructions: on
     MySQL/MariaDB, that the new unique keys fit InnoDB's 3072-byte limit; and
-    that non-integer owner ids come with `Schema::morphUsingUuids()` /
-    `morphUsingUlids()`. The credentials' owner columns take the accounts' key
-    type, so a backfill can no longer fail halfway on a type mismatch.
+    that the credentials' owner column can hold every owner id of the accounts,
+    so the backfill cannot fail halfway on a type mismatch.
+  - The credentials' owner column takes the key type of the accounts' own
+    column: a uuid column (native, or `char(36)`) gives uuid, a `char(26)`
+    column ulid, whatever the app's default morph key type. Owners declared
+    per column (`nullableUuidMorphs('ownable')` in a published copy of the
+    accounts migration) therefore work, and an app whose default changed since
+    its accounts table was created no longer gets a column too short for its
+    ids. Only another string column falls back to the default morph key type
+    (any string type on SQLite, which enforces none).
+  - A credential without a `provider_holder_id` that no account posts with
+    stays owner-less. It used to take the owner of every holder-less account of
+    its provider, plus a copy per extra owner. The package always sets a
+    holder: only rows an app wrote itself were affected.
   - It no longer runs as a single transaction on PostgreSQL. That held an ACCESS
     EXCLUSIVE lock on `social_tokens`, blocking every token read of the running
     app, until the last credential was backfilled. Schema steps now commit one
@@ -38,9 +69,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     their columns, so it also drops the names 2.0.0 created.
 - A fresh install on MySQL with uuid or ulid owner keys failed in migration
   000007 with "Specified key was too long": three utf8mb4 `varchar(255)` columns
-  left no room for the owner id. `provider` is now `varchar(50)` (see Changed),
+  left no room for the owner id. `provider` is now `varchar(50)` (see Changed
+  (breaking)),
   and the README Install section says to call `Schema::morphUsingUuids()` /
-  `morphUsingUlids()` before migrating.
+  `morphUsingUlids()`, or to declare the accounts' owner columns as uuid or
+  ulid, before migrating.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -67,10 +100,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   are known transient failures: still retried, no longer logged as uncatalogued.
 - OAuth token-endpoint failures carry the HTTP `status` in their context, and
   terminal ones carry `error` / `error_description` too.
-- `provider` is `varchar(50)` on `social_accounts` and `social_tokens`
-  (migration `2025_01_01_000006_shorten_provider_columns`; SQLite declares no
-  length and is left as is). A connector key must be at most 50 characters; the
-  migration refuses, changing nothing, while a longer one is stored.
 
 ## [2.0.0]
 

@@ -15,11 +15,11 @@ function tokenIdIndexMigration(): object
     return include __DIR__.'/../../../database/migrations/2025_01_01_000006_index_social_token_id_on_social_accounts.php';
 }
 
-/** Names of the indexes whose first column is social_token_id. */
+/** Names of the indexes whose first column is social_token_id (an expression index has none). */
 function tokenIdIndexes(): array
 {
     return collect(Schema::getIndexes('social_accounts'))
-        ->filter(fn (array $index) => $index['columns'][0] === 'social_token_id')
+        ->filter(fn (array $index) => ($index['columns'][0] ?? null) === 'social_token_id')
         ->pluck('name')
         ->all();
 }
@@ -56,6 +56,15 @@ it('adds nothing where an index already leads with social_token_id', function ()
     tokenIdIndexMigration()->down();
 
     expect(tokenIdIndexes())->toBe(['social_accounts_social_token_id_foreign']);
+});
+
+it('looks past an expression index, which lists no column', function () {
+    tokenIdIndexMigration()->down();
+    DB::statement('create index social_accounts_lower_name on social_accounts (lower(name))');
+
+    tokenIdIndexMigration()->up();
+
+    expect(tokenIdIndexes())->toBe(['social_accounts_social_token_id_index']);
 });
 
 it('drops its index on rollback, and can roll back twice', function () {

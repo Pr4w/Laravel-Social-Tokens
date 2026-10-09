@@ -6,6 +6,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Database\Schema\Builder as SchemaBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 
 /**
  * 2.0: identity is scoped to the owner.
@@ -136,6 +137,10 @@ return new class extends Migration
         $byToken = DB::table($accounts)->where('social_token_id', $tokenId);
         $viaHolder = ! $byToken->clone()->exists();
 
+        if ($viaHolder && $token->provider_holder_id === null) {
+            return; // an account without a holder names no credential: stays owner-less
+        }
+
         $source = $viaHolder
             ? DB::table($accounts)->where('provider', $token->provider)->where('provider_holder_id', $token->provider_holder_id)
             : $byToken;
@@ -174,12 +179,18 @@ return new class extends Migration
     }
 
     /**
-     * The owner's copy of a credential. The old unique key allowed no other row
-     * for this holder, so one that exists was copied by an earlier run.
+     * The owner's copy of a credential. The old unique key allowed one row per
+     * holder, so the owner's row for this holder was copied by an earlier run
+     * (and the new key allows no second one).
+     *
+     * That key let any number of holder-less rows through, so another one is
+     * a different grant, never a copy. Nothing needs reusing there: a holder-less
+     * credential is reached only through the accounts posting with it, which
+     * move to their copies in the same transaction.
      */
     private function copyFor(string $tokens, object $token, object $owner): int
     {
-        $existing = $this->whereOwner(DB::table($tokens), $owner)
+        $existing = $token->provider_holder_id === null ? null : $this->whereOwner(DB::table($tokens), $owner)
             ->where('provider', $token->provider)
             ->where('provider_holder_id', $token->provider_holder_id)
             ->value('id');
@@ -205,19 +216,57 @@ return new class extends Migration
 
     /**
      * The key type of the credentials' owner: the accounts' own, since the
-     * backfill copies their owners. Non-integer ids need the app's morph key
-     * type, which also decides between uuid and ulid.
+     * backfill copies their owners. Checked before anything changes: a wrong
+     * type fails the backfill after the column is added.
      */
     private function ownerMorphType(string $accounts): string
     {
-        $type = strtolower(Schema::getColumnType($accounts, 'ownable_id'));
+        $driver = Schema::getConnection()->getDriverName();
+        $column = collect(Schema::getColumns($accounts))->firstWhere('name', 'ownable_id')
+            ?? throw new RuntimeException("{$accounts} has no ownable_id column.");
 
-        if (preg_match('/^(tiny|small|medium|big)?int(eger|[248])?$/', $type) === 1) {
+        $morphType = $this->morphTypeOf($accounts, $column, $driver);
+
+        if ($morphType !== 'int') {
+            $this->ensureOwnerIdsFit($accounts, $morphType, $driver);
+        }
+
+        return $morphType;
+    }
+
+    /**
+     * Read from the column first, so uuid or ulid owners declared per column
+     * (nullableUuidMorphs('ownable')) work as well as app-wide ones. Only a
+     * string column Laravel's uuid and ulid types do not produce falls back to
+     * the app's morph key type.
+     *
+     * @param  array{type_name: string, type: string}  $column  as Schema::getColumns() describes it
+     */
+    private function morphTypeOf(string $accounts, array $column, string $driver): string
+    {
+        $typeName = strtolower($column['type_name']);
+        $type = strtolower($column['type']);
+
+        if (preg_match('/^(tiny|small|medium|big)?int(eger|[248])?$/', $typeName) === 1) {
             return 'int';
+        }
+
+        // Laravel's uuid column is native or char(36), its ulid column char(26).
+        if (in_array($typeName, ['uuid', 'uniqueidentifier'], true) || preg_match('/^n?char(?:acter)?\(36\)/', $type) === 1) {
+            return 'uuid';
+        }
+
+        if (preg_match('/^n?char(?:acter)?\(26\)/', $type) === 1) {
+            return 'ulid';
         }
 
         if (SchemaBuilder::$defaultMorphKeyType !== 'int') {
             return SchemaBuilder::$defaultMorphKeyType;
+        }
+
+        // SQLite declares uuid and ulid columns alike (varchar) and enforces neither.
+        if ($driver === 'sqlite') {
+            return 'uuid';
         }
 
         throw new RuntimeException(
@@ -225,6 +274,37 @@ return new class extends Migration
             .'Call Schema::morphUsingUuids() or Schema::morphUsingUlids(), matching your owner keys, in a service '
             .'provider, then migrate again. Nothing was changed.'
         );
+    }
+
+    /**
+     * Every owner id of the accounts must fit the credentials' owner column, or
+     * the backfill fails halfway. A native uuid column (PostgreSQL, MariaDB,
+     * SQL Server) takes nothing but uuids.
+     */
+    private function ensureOwnerIdsFit(string $accounts, string $morphType, string $driver): void
+    {
+        if ($driver === 'sqlite') {
+            return; // enforces no type or length
+        }
+
+        $fits = match (true) {
+            $morphType === 'ulid' => fn (string $id) => mb_strlen($id) <= 26,
+            in_array($driver, ['pgsql', 'mariadb', 'sqlsrv'], true) => fn (string $id) => Str::isUuid($id),
+            default => fn (string $id) => mb_strlen($id) <= 36,
+        };
+
+        $misfit = DB::table($accounts)->whereNotNull('ownable_id')->distinct()->pluck('ownable_id')
+            ->map(fn (mixed $id) => (string) $id)
+            ->first(fn (string $id) => ! $fits($id));
+
+        if ($misfit !== null) {
+            throw new RuntimeException(
+                "{$accounts}.ownable_id holds an owner id a {$morphType} column cannot store ('{$misfit}'), and "
+                ."the credentials' owner column would be one. Make Schema::morphUsingUuids() or "
+                .'Schema::morphUsingUlids() match your owner keys, or store those owners with keys of that type, '
+                .'then migrate again. Nothing was changed.'
+            );
+        }
     }
 
     /**

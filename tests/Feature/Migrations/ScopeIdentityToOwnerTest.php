@@ -24,7 +24,7 @@ function ownerMigration(): object
 }
 
 /** Insert a v1-shaped credential row (tokens encrypted like the model cast does). */
-function v1Credential(string $provider, string $holder, string $accessToken): int
+function v1Credential(string $provider, ?string $holder, string $accessToken): int
 {
     return DB::table('social_tokens')->insertGetId([
         'provider' => $provider,
@@ -89,6 +89,37 @@ it('gives a single-owner credential its owner without copying it', function () {
 
     expect(SocialToken::count())->toBe(1)
         ->and(SocialToken::find($token)->ownable->is($this->alice))->toBeTrue();
+});
+
+it('copies a credential without a holder instead of reusing another one', function () {
+    // The old unique key let any number of holder-less credentials through, so
+    // another one of the same provider and owner is not a copy of this one.
+    $bobsOwn = v1Credential('custom', null, 'bob-grant');
+    $shared = v1Credential('custom', null, 'shared-grant');
+    v1Account('custom', 'c-1', null, $bobsOwn, $this->bob);
+    $alice = v1Account('custom', 'c-2', null, $shared, $this->alice);
+    $bob = v1Account('custom', 'c-3', null, $shared, $this->bob);
+
+    ownerMigration()->up();
+
+    $bobToken = SocialAccount::find($bob)->credential;
+
+    expect(SocialToken::count())->toBe(3)
+        ->and($bobToken->access_token)->toBe('shared-grant')
+        ->and($bobToken->ownable->is($this->bob))->toBeTrue()
+        ->and($bobToken->getKey())->not->toBe($bobsOwn)
+        ->and(SocialAccount::find($alice)->credential->access_token)->toBe('shared-grant');
+});
+
+it('gives a credential without a holder no owner through accounts without one', function () {
+    // An account without a holder names no credential: nothing ties this one to alice.
+    $orphan = v1Credential('custom', null, 'orphan-grant');
+    v1Account('custom', 'c-1', null, v1Credential('custom', null, 'alice-grant'), $this->alice);
+
+    ownerMigration()->up();
+
+    expect(SocialToken::find($orphan)->ownable_type)->toBeNull()
+        ->and(SocialToken::count())->toBe(2);
 });
 
 it('owns a Meta user credential through the Pages that name its holder', function () {
@@ -221,17 +252,6 @@ it('changes nothing when run again on a migrated schema', function () {
         ->and(SocialToken::find($user)->ownable_type)->toBeNull();
 });
 
-it('refuses before changing anything when owner ids are not integers but morphs default to integers', function () {
-    Schema::table('social_accounts', function (Blueprint $table) {
-        $table->string('ownable_id')->nullable()->change();
-    });
-
-    expect(fn () => ownerMigration()->up())->toThrow(RuntimeException::class, 'Schema::morphUsingUuids()');
-
-    expect(Schema::hasColumn('social_tokens', 'ownable_type'))->toBeFalse()
-        ->and(uniqueIndexes('social_tokens'))->toBe(['social_tokens_provider_provider_holder_id_unique' => ['provider', 'provider_holder_id']]);
-});
-
 it('gives credentials the owner key type of the accounts they copy it from', function () {
     // The app switched to uuid morphs after its accounts table was created.
     Schema::morphUsingUuids();
@@ -267,3 +287,108 @@ it('backfills uuid owners', function () {
 
     expect(DB::table('social_tokens')->where('id', $token)->value('ownable_id'))->toBe($workspace);
 });
+
+/** The owner key type the migration picks for an accounts column described like Schema::getColumns(). */
+function morphTypeFor(string $typeName, string $type, string $driver, string $default = 'int'): string
+{
+    $migration = ownerMigration();
+    Schema::defaultMorphKeyType($default);
+
+    try {
+        return (fn () => $this->morphTypeOf('social_accounts', ['type_name' => $typeName, 'type' => $type], $driver))->call($migration);
+    } finally {
+        Schema::defaultMorphKeyType('int');
+    }
+}
+
+it('reads uuid and ulid owner keys from the accounts column, whatever the default', function (string $driver, string $typeName, string $type, string $default, string $expected) {
+    expect(morphTypeFor($typeName, $type, $driver, $default))->toBe($expected);
+})->with([
+    'mysql uuid' => ['mysql', 'char', 'char(36)', 'ulid', 'uuid'],
+    'mariadb native uuid' => ['mariadb', 'uuid', 'uuid', 'ulid', 'uuid'],
+    'pgsql uuid' => ['pgsql', 'uuid', 'uuid', 'ulid', 'uuid'],
+    'sqlsrv uuid' => ['sqlsrv', 'uniqueidentifier', 'uniqueidentifier', 'ulid', 'uuid'],
+    'mysql ulid' => ['mysql', 'char', 'char(26)', 'uuid', 'ulid'],
+    'pgsql ulid' => ['pgsql', 'bpchar', 'character(26)', 'uuid', 'ulid'],
+    'sqlsrv ulid' => ['sqlsrv', 'nchar', 'nchar(26)', 'uuid', 'ulid'],
+    'mysql bigint' => ['mysql', 'bigint', 'bigint unsigned', 'uuid', 'int'],
+    'pgsql bigint' => ['pgsql', 'int8', 'bigint', 'uuid', 'int'],
+    'sqlite integer' => ['sqlite', 'integer', 'integer', 'uuid', 'int'],
+]);
+
+it('takes the app morph key type for any other string column', function () {
+    expect(morphTypeFor('varchar', 'varchar(255)', 'mysql', 'ulid'))->toBe('ulid');
+});
+
+it('refuses a string column it cannot read while morph keys default to integers', function (string $driver, string $typeName, string $type) {
+    morphTypeFor($typeName, $type, $driver);
+})->with([
+    'mysql' => ['mysql', 'varchar', 'varchar(255)'],
+    'pgsql' => ['pgsql', 'varchar', 'character varying(255)'],
+])->throws(RuntimeException::class, 'Nothing was changed');
+
+it('takes either string type on SQLite, which declares uuid and ulid columns alike', function () {
+    expect(morphTypeFor('varchar', 'varchar', 'sqlite'))->toBeIn(['uuid', 'ulid']);
+});
+
+it('backfills owners of a per-column uuid morph on SQLite', function () {
+    // nullableUuidMorphs('ownable') in a published copy of the accounts
+    // migration, morph keys left to integers app-wide.
+    Schema::table('social_accounts', function (Blueprint $table) {
+        $table->string('ownable_id')->nullable()->change();
+    });
+
+    $workspace = (string) Str::uuid();
+    $token = v1Credential('tiktok', 'tt-1', 'tt-access');
+    DB::table('social_accounts')->insert([
+        'provider' => 'tiktok', 'provider_user_id' => 'tt-1', 'provider_holder_id' => 'tt-1',
+        'social_token_id' => $token, 'ownable_type' => 'workspace', 'ownable_id' => $workspace,
+        'status' => 'active', 'created_at' => now(), 'updated_at' => now(),
+    ]);
+
+    ownerMigration()->up();
+
+    expect(Schema::getColumnType('social_tokens', 'ownable_id'))->toBe('varchar')
+        ->and(DB::table('social_tokens')->where('id', $token)->value('ownable_id'))->toBe($workspace);
+});
+
+/** Run the migration's check that the accounts' owner ids fit the credentials' column. */
+function checkOwnerIds(string $morphType, string $driver): void
+{
+    $migration = ownerMigration();
+
+    (fn () => $this->ensureOwnerIdsFit('social_accounts', $morphType, $driver))->call($migration);
+}
+
+function accountOwnedBy(string $ownerId): void
+{
+    DB::table('social_accounts')->insert([
+        'provider' => 'tiktok', 'provider_user_id' => $ownerId, 'ownable_type' => 'workspace', 'ownable_id' => $ownerId,
+        'status' => 'active', 'created_at' => now(), 'updated_at' => now(),
+    ]);
+}
+
+it('accepts owner ids that fit the credentials column', function (string $ownerId, string $morphType, string $driver) {
+    Schema::table('social_accounts', fn (Blueprint $table) => $table->string('ownable_id')->nullable()->change());
+    accountOwnedBy($ownerId);
+
+    checkOwnerIds($morphType, $driver);
+
+    expect(true)->toBeTrue();
+})->with([
+    'uuid, mysql' => [(string) Str::uuid(), 'uuid', 'mysql'],
+    'uuid, pgsql' => [(string) Str::uuid(), 'uuid', 'pgsql'],
+    'ulid' => [(string) Str::ulid(), 'ulid', 'pgsql'],
+    'anything on sqlite' => [str_repeat('x', 40), 'ulid', 'sqlite'],
+]);
+
+it('refuses before changing anything when owner ids do not fit the credentials column', function (string $ownerId, string $morphType, string $driver) {
+    Schema::table('social_accounts', fn (Blueprint $table) => $table->string('ownable_id')->nullable()->change());
+    accountOwnedBy($ownerId);
+
+    checkOwnerIds($morphType, $driver);
+})->with([
+    'too long for char(36)' => [str_repeat('x', 37), 'uuid', 'mysql'],
+    'not a uuid for a uuid column' => ['42', 'uuid', 'pgsql'],
+    'a uuid in a ulid column' => [(string) Str::uuid(), 'ulid', 'mysql'],
+])->throws(RuntimeException::class, 'Nothing was changed');

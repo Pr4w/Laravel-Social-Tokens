@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Pr4w\SocialTokens\Models\SocialAccount;
 
 /*
@@ -12,6 +13,29 @@ use Pr4w\SocialTokens\Models\SocialAccount;
 function providerLengthMigration(): object
 {
     return include __DIR__.'/../../../database/migrations/2025_01_01_000006_shorten_provider_columns.php';
+}
+
+/**
+ * Point the package at tables whose provider column declares the given type.
+ * SQLite keeps a declared length (without enforcing it), which the schema
+ * builder never writes there.
+ */
+function declaredProviderTables(string $type): void
+{
+    foreach (['declared_accounts', 'declared_tokens'] as $table) {
+        DB::statement("create table {$table} (id integer primary key, provider {$type} not null)");
+    }
+
+    config(['social-tokens.table' => 'declared_accounts', 'social-tokens.tokens_table' => 'declared_tokens']);
+}
+
+/** @return list<string> */
+function declaredProviderTypes(): array
+{
+    return [
+        Schema::getColumnType('declared_accounts', 'provider', true),
+        Schema::getColumnType('declared_tokens', 'provider', true),
+    ];
 }
 
 it('runs before the migration that adds the owner-scoped keys', function () {
@@ -29,7 +53,6 @@ it('reads the declared length of the column', function (string $type, ?int $leng
 })->with([
     'mysql' => ['varchar(255)', 255],
     'pgsql' => ['character varying(255)', 255],
-    'sqlsrv' => ['nvarchar(255)', 255],
     'shortened' => ['varchar(50)', 50],
     'sqlite, no length' => ['varchar', null],
 ]);
@@ -58,4 +81,24 @@ it('leaves a column without a declared length alone', function () {
     providerLengthMigration()->down();
 
     expect(DB::table('social_accounts')->value('provider'))->toBe(str_repeat('p', 51));
+});
+
+it('changes the column only where InnoDB caps the key length', function () {
+    // SQLite here. SQL Server, which has no such cap, cannot shrink a column an
+    // index uses in place either.
+    declaredProviderTables('varchar(255)');
+
+    providerLengthMigration()->up();
+
+    expect(declaredProviderTypes())->toBe(['varchar(255)', 'varchar(255)']);
+});
+
+it('keeps the shorter column on rollback', function () {
+    // 2.x reads varchar(50) fine, and widening it again could push the owner
+    // keys of a uuid install back over InnoDB's limit.
+    declaredProviderTables('varchar(50)');
+
+    providerLengthMigration()->down();
+
+    expect(declaredProviderTypes())->toBe(['varchar(50)', 'varchar(50)']);
 });
