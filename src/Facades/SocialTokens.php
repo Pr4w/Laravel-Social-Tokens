@@ -21,6 +21,7 @@ use Pr4w\SocialTokens\Testing\SocialTokensFake;
  * @method static bool reportRejected(SocialAccount $account, string $reason, bool $terminal = true, ?string $rejectedToken = null)
  * @method static void disconnect(SocialAccount $account)
  * @method static void revoke(SocialToken $token)
+ * @method static SocialAccount adopt(SocialAccount $account, Model $owner)
  * @method static EloquentCollection<int, SocialAccount> forgetOwner(Model $owner)
  * @method static EloquentCollection<int, SocialAccount> revokeExternalUser(string $provider, string $externalId)
  * @method static EloquentCollection<int, SocialAccount> purgeExternalUser(string $provider, string $externalId, ?Closure $deleted = null)

@@ -646,6 +646,134 @@ class SocialTokens
     }
 
     /**
+     * Give an owner-less account an owner, with the credentials it depends on:
+     * for rows stored without an owner (every 1.x row, and later connections
+     * made without one), since a connection with an owner no longer adopts
+     * them. Returns the account, saved. No event fires.
+     *
+     * A credential moves with the account unless an account of another owner,
+     * or still without one, depends on it (another Instagram account of the
+     * same Facebook user: adopt it too, and the credential follows with the
+     * last one), or the owner already holds a credential for the same
+     * holder and purpose; the account then keeps posting with the owner-less
+     * one until the owner's next reconnect. That covers the Meta user token
+     * behind a Facebook Page, which the dispatcher renews only for the Page's
+     * own owner.
+     *
+     * An account that already belongs to $owner gets its owner-less
+     * credentials moved the same way: that finishes an adoption made by
+     * associating the account alone.
+     *
+     * @throws InvalidArgumentException when the account belongs to another
+     *                                  owner, or when the owner already has the
+     *                                  same external account (a reconnect stored
+     *                                  a row of its own): disconnect or delete the
+     *                                  owner-less row instead.
+     */
+    public function adopt(SocialAccount $account, Model $owner): SocialAccount
+    {
+        return $account->getConnection()->transaction(function () use ($account, $owner) {
+            $account->refresh();
+
+            if ($account->ownable_type !== null && ! $this->isOwnedBy($account, $owner)) {
+                throw new InvalidArgumentException("Social account [{$account->getKey()}] belongs to another owner.");
+            }
+
+            $taken = $account->ownable_type === null && SocialAccount::query()->ownedBy($owner)
+                ->where('provider', $account->provider)
+                ->where('provider_user_id', $account->provider_user_id)
+                ->exists();
+
+            if ($taken) {
+                throw new InvalidArgumentException(
+                    "The owner already has this account ({$account->provider} {$account->provider_user_id}): disconnect or delete the owner-less row [{$account->getKey()}] instead."
+                );
+            }
+
+            $credentials = $this->ownerlessCredentialsBehind($account);
+
+            if ($account->ownable_type === null) {
+                $account->ownable()->associate($owner)->save();
+            }
+
+            foreach ($credentials as $token) {
+                if (! $this->otherOwnerDependsOn($token, $owner) && ! $this->ownerHoldsLike($token, $owner)) {
+                    $token->ownable()->associate($owner)->save();
+                }
+            }
+
+            return $account;
+        });
+    }
+
+    /**
+     * The owner-less, unrevoked credentials an account depends on: the one it
+     * posts with, then those of its holder (the Meta user token behind a
+     * Facebook Page), whatever their purpose.
+     *
+     * @return list<SocialToken>
+     */
+    protected function ownerlessCredentialsBehind(SocialAccount $account): array
+    {
+        $own = $account->credential()->first();
+        $credentials = $own !== null && $own->ownable_type === null ? [$own] : [];
+
+        if ($account->provider_holder_id !== null) {
+            $held = SocialToken::query()->ownedBy(null)
+                ->where('provider', $this->credentialProviderOf($account->provider))
+                ->where('provider_holder_id', $account->provider_holder_id);
+
+            if ($own !== null) {
+                $held->whereKeyNot($own->getKey());
+            }
+
+            array_push($credentials, ...$held->orderBy('id')->get()->all());
+        }
+
+        return array_values(array_filter($credentials, fn (SocialToken $token) => $token->status !== AccountStatus::Revoked));
+    }
+
+    /**
+     * Whether an account that does not belong to $owner, and is not revoked,
+     * still depends on the owner-less credential: posting with it, or,
+     * without an owner itself, as an account of its holder.
+     */
+    protected function otherOwnerDependsOn(SocialToken $token, Model $owner): bool
+    {
+        $postingWithIt = $token->accounts()
+            ->where('status', '!=', AccountStatus::Revoked->value)
+            ->get()
+            ->contains(fn (SocialAccount $account) => ! $this->isOwnedBy($account, $owner));
+
+        if ($postingWithIt || $token->provider_holder_id === null) {
+            return $postingWithIt;
+        }
+
+        return SocialAccount::query()->ownedBy(null)
+            ->whereIn('provider', $this->accountProvidersOf($token->provider))
+            ->where('provider_holder_id', $token->provider_holder_id)
+            ->where('status', '!=', AccountStatus::Revoked->value)
+            ->exists();
+    }
+
+    /** Whether $owner already holds a credential of the same provider, holder and purpose (the unique key). */
+    protected function ownerHoldsLike(SocialToken $token, Model $owner): bool
+    {
+        return SocialToken::query()->ownedBy($owner)
+            ->where('provider', $token->provider)
+            ->where('provider_holder_id', $token->provider_holder_id)
+            ->forPurpose($token->purpose)
+            ->exists();
+    }
+
+    /** Compared in PHP: the owner key may be an integer or a uuid. */
+    protected function isOwnedBy(SocialAccount $account, Model $owner): bool
+    {
+        return $account->ownable_type === $owner->getMorphClass()
+            && (string) $account->ownable_id === (string) $owner->getKey();
+    }
+
+    /**
      * Revoke, locally, everything one external user's grant backs, under every
      * owner: the credentials they hold, the accounts recorded under them
      * (provider_holder_id: a Facebook user's Pages and Instagram accounts),

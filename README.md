@@ -123,7 +123,21 @@ providers grant access:
   local.
 
 A connection with an owner never adopts an existing owner-less row: it creates
-its own. To attach an owner-less row, `associate()` it yourself.
+its own. To give an owner-less row an owner, adopt it, before that owner
+reconnects the account:
+
+```php
+app(SocialTokens::class)->adopt($account, $workspace);
+```
+
+`adopt()` moves the account and the credentials it depends on in one
+transaction: the one it posts with and, for a Facebook Page, the Meta user
+token behind it. A credential another owner-less account still uses (the
+other Instagram accounts of the same Facebook user) moves with the last of
+them. It refuses an account the owner already has (a reconnect stored a row of
+its own): disconnect the owner-less row instead. `associate()` alone would move
+the account but not its credential, and the owner's next reconnect would store
+a second one.
 
 **Deleting an owner.** The owner columns carry no foreign key, so a deleted
 workspace would leave its accounts active, its credentials renewed, and each

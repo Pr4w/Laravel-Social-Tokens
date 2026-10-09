@@ -308,6 +308,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 
 ### Fixed
+- UPGRADE and README: attaching an owner-less row with
+  `$account->ownable()->associate($owner)`, as 2.0's notes advised, saved
+  nothing until `save()`, then moved the account without its credential: the
+  owner's next reconnect stored a second credential and left the first one
+  behind, a Facebook Page's Meta user token stopped being renewed, and an
+  account the owner had already reconnected hit the owner-scoped unique key.
+  The notes now point at `adopt()` (see Added).
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
   the TikTok, Google and LinkedIn connectors with "Array to string conversion";
   it is now an unknown, retried failure.
@@ -842,6 +849,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   - `Testing\FakeConnector`, a connector that makes no request, for a
     provider key of an app's tests: scripted renewals, connect-time
     exchange and revocation, and the same assertions.
+- `SocialTokens::adopt(SocialAccount $account, Model $owner)` gives an
+  owner-less account an owner, with the credentials it depends on (the one
+  it posts with, and the Meta user token behind a Facebook Page) once no
+  other owner-less account uses them, in one transaction. It refuses an
+  account of another owner, and one the owner already has (a reconnect
+  stored a row of its own). Given an account the owner already has, it
+  moves its owner-less credentials, which finishes an adoption made with
+  `associate()` ([UPGRADE](UPGRADE.md#owner-less-rows-you-attached-by-hand)).
 - `SocialTokens` reaches the providers through two protected methods,
   `refreshAtProvider()` (renewals) and `checkAtProvider()` (the check of
   `reportRejected()`), next to `revokeAtProvider()`, so that a subclass can

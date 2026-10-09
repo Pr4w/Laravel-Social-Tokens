@@ -544,6 +544,37 @@ holds without touching other owners' rows.
    Add `withTrashed()` to the subquery if soft-deleted workspaces should keep
    their connections.
 
+### Owner-less rows you attached by hand
+
+2.0's notes said to attach an owner-less row to an owner with
+`$account->ownable()->associate($owner)`. Saved, that moved the account but
+not its credential, which stayed owner-less: the owner's next reconnect stored
+a second credential and left the first behind, and the Meta user token behind
+a Facebook Page attached that way was no longer renewed. 3.0 adds
+`SocialTokens::adopt($account, $owner)` (see
+[README, Owners](README.md#owners)). Given an account that already belongs to
+the owner, it moves the owner-less credentials it depends on, so this
+finishes the accounts attached before:
+
+```php
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\SocialTokens;
+
+SocialAccount::query()
+    ->whereNotNull('ownable_type')
+    ->whereHas('credential', fn ($credential) => $credential->whereNull('ownable_type'))
+    ->with('ownable')
+    ->each(function (SocialAccount $account) {
+        if ($account->ownable !== null) { // the owner still exists
+            app(SocialTokens::class)->adopt($account, $account->ownable);
+        }
+    });
+```
+
+A credential still used by an owner-less account, or one the owner already
+holds a copy of (a reconnect since), stays as it is; a credential nothing uses
+any more is pruned (see the next section).
+
 ### Unused credentials are unscheduled, then pruned
 
 Two changes keep `social_tokens` to the credentials something uses.
@@ -1120,7 +1151,14 @@ has one credential for the personal profile and one for the organizations (see
   renewals. Some providers cap the refresh tokens per user and app (Google: 100).
 - **No implicit adoption.** In 1.x, connecting with an owner an account stored
   without one attached that row to the owner. Now it creates a separate row.
-  Attach an owner-less row yourself with `$account->ownable()->associate($owner)`.
+  To give an owner-less row an owner, call
+  `app(SocialTokens::class)->adopt($account, $owner)` before that owner
+  reconnects the account. It moves the account and the credentials it
+  depends on, in one transaction, and refuses an account the owner already
+  has: disconnect that owner-less row instead (`disconnect($account)`). Do not
+  use `$account->ownable()->associate($owner)`, which 2.0's notes suggested:
+  it moves the account only, and the owner's next reconnect stores a second
+  credential next to the owner-less one.
 - **Reconciliation stays per external user.** When a Facebook user no longer
   manages a Page, or a LinkedIn member no longer administers an organization,
   every row of that user is flagged, whatever the owner. Meta and LinkedIn grant
