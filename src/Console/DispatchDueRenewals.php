@@ -3,6 +3,8 @@
 namespace Pr4w\SocialTokens\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Queue\Factory as QueueFactory;
+use Illuminate\Queue\SyncQueue;
 use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -20,6 +22,8 @@ class DispatchDueRenewals extends Command
         $count = 0;
         $deferred = 0;
         $failed = 0;
+        $stopped = false;
+        $inline = null;
         $configured = $registry->configured();
 
         SocialToken::query()->dueForRenewal()->whereNotIn('provider', $configured)
@@ -34,7 +38,7 @@ class DispatchDueRenewals extends Command
             ->whereIn('provider', $configured)
             ->inUse()
             ->lazyById()
-            ->each(function (SocialToken $token) use (&$count, &$deferred, &$failed) {
+            ->each(function (SocialToken $token) use (&$count, &$deferred, &$failed, &$stopped, &$inline) {
                 // On a sync queue the job runs right here and its failure is
                 // rethrown: one credential must never stop the walk.
                 try {
@@ -47,6 +51,16 @@ class DispatchDueRenewals extends Command
                 } catch (Throwable $e) {
                     $failed++;
                     report($e);
+
+                    // On a real queue the dispatch itself failed: the queue or
+                    // the lock store is down for every credential. Stop at one
+                    // report instead of one per credential, each waiting out
+                    // its own connect timeout.
+                    if (! ($inline ??= $this->runsInline())) {
+                        $stopped = true;
+
+                        return false;
+                    }
                 }
             });
 
@@ -56,6 +70,12 @@ class DispatchDueRenewals extends Command
             $this->warn("{$deferred} renewal(s) failed for now and will be retried later.");
         }
 
+        if ($stopped) {
+            $this->error('Could not queue a renewal job; stopped until the next run. See the log.');
+
+            return self::FAILURE;
+        }
+
         if ($failed > 0) {
             $this->error("{$failed} renewal job(s) failed or could not be dispatched; see the log.");
 
@@ -63,5 +83,19 @@ class DispatchDueRenewals extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Whether renewal jobs run right here, on a sync connection. Read only
+     * once a dispatch has failed, so that a run with nothing to dispatch
+     * never resolves the connection.
+     */
+    protected function runsInline(): bool
+    {
+        try {
+            return app(QueueFactory::class)->connection(config('social-tokens.queue.connection')) instanceof SyncQueue;
+        } catch (Throwable) {
+            return false;
+        }
     }
 }

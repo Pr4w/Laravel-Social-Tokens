@@ -33,8 +33,9 @@ return [
     | you support, queue latency included: Google renews 25 minutes early.
     |
     | Either a scheduler frequency method that takes no argument
-    | ('everyTenMinutes', 'hourly') or a cron expression ('5,20,35,50 * * * *').
-    | Anything else logs an error and keeps the default.
+    | ('everyTenMinutes', 'hourly') or a cron expression ('5,20,35,50 * * * *',
+    | '@hourly'). Anything else, including a method that only picks the days
+    | ('weekdays'), logs an error and keeps the default.
     |
     | Set to null to disable (e.g. to schedule social-tokens:dispatch-renewals
     | yourself). Both scheduled commands run withoutOverlapping()->onOneServer(),

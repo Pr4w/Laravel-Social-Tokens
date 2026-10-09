@@ -77,7 +77,10 @@ Event::listen(JobFailed::class, function (JobFailed $event) {
 
 On the `sync` queue connection, `social-tokens:dispatch-renewals` no longer
 stops at the first failed renewal. It exits with a failure code only for an
-unexpected error, after walking every due credential.
+unexpected error, after walking every due credential. On a real queue, a job
+the queue rejects (Redis, SQS or the cache lock store down) still ends the run,
+as in 2.x: it is reported once, the command prints `Could not queue a renewal
+job` and exits with a failure code.
 
 ### Check your published config
 
@@ -86,11 +89,18 @@ forms are now normalised instead of failing or being misread:
 
 - `queue.backoff` may be one value (`60`), a list, or a comma-separated string.
   A single value used to stop every dispatcher run with a `TypeError`.
-- Boolean settings written as strings are read as booleans. If your published
-  `config/social-tokens.php` holds `'log_unknown_errors' => 'false'` or
-  `'check_renewable' => 'false'` (a literal string, not `env()`), 2.x treated
-  it as true: uncatalogued errors were logged, renewable credentials were
-  checked. 3.0 turns them off. Write `true` to keep the 2.x behaviour.
+- `queue.tries` set to `null`, an empty string or a non-numeric value now means
+  4 attempts. 2.x read it as `0`, which Laravel takes as unlimited retries: for
+  example `'tries' => env('SOCIAL_TOKENS_TRIES')` with the variable unset.
+  Write `0` to keep unlimited retries.
+- Boolean settings holding a string are read as booleans. If
+  `log_unknown_errors` or `check_renewable` holds a string such as `'false'`,
+  `'no'` or `'off'`, either written in the file or coming from `env()` (which
+  converts only `true`, `false`, `null` and `empty`, and returns any other
+  value as a string: `SOCIAL_TOKENS_CHECK_RENEWABLE=off` gives `'off'`), 2.x
+  treated it as true: uncatalogued errors were logged, renewable credentials
+  were checked. 3.0 reads it as false. Write `true` (or
+  `SOCIAL_TOKENS_CHECK_RENEWABLE=true`) to keep the 2.x behaviour.
 - `http.timeout` and `http.connect_timeout` keep fractional seconds (2.x cut
   `2.5` to `2`).
 - `check_static_breaker.min_checked` below 1 counts as 1.
@@ -109,6 +119,11 @@ forms are now normalised instead of failing or being misread:
   it logs an error naming the setting and keeps the default (every 15 minutes,
   daily). If you used a macro, set the key to `null` and schedule the command
   yourself.
+- A method that only picks the days (`weekdays`, `weekends`, `mondays` to
+  `sundays`) is no longer accepted either: 2.x ran the command every minute of
+  those days, and 3.0 logs the same error and keeps the default. Write a cron
+  expression instead, such as `'*/15 * * * 1-5'` for every 15 minutes on
+  weekdays. The same goes for `daysOfMonth` without its days.
 
 ## From 1.x to 2.0
 

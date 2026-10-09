@@ -4,15 +4,18 @@ namespace Pr4w\SocialTokens;
 
 use Closure;
 use Cron\CronExpression;
+use Illuminate\Console\Scheduling\CacheEventMutex;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\ManagesFrequencies;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use ReflectionMethod;
+use Throwable;
 
 class SocialTokensServiceProvider extends ServiceProvider
 {
@@ -94,8 +97,8 @@ class SocialTokensServiceProvider extends ServiceProvider
             return fn (Event $event) => $event->{$value}();
         }
 
-        if (is_string($value) && CronExpression::isValidExpression($value)) {
-            return fn (Event $event) => $event->cron($value);
+        if (is_string($value) && ($cron = $this->cronExpression($value)) !== null) {
+            return fn (Event $event) => $event->cron($cron);
         }
 
         Log::error("[social-tokens] social-tokens.{$key} must be a cron expression or a scheduler frequency method that takes no argument; using the default, {$default}.", [
@@ -105,6 +108,14 @@ class SocialTokensServiceProvider extends ServiceProvider
         return fn (Event $event) => $event->{$default}();
     }
 
+    /**
+     * A public method of the scheduler that takes no argument and sets how
+     * often the command runs. It is tried on a probe first: 'weekdays' or
+     * 'mondays' only pick the days, and would run the command every minute
+     * of them, so a method that leaves the minute at '*' counts only when
+     * every minute, or more often, is what it means. 'daysOfMonth' without
+     * its days leaves a field empty, which no cron parser reads.
+     */
     protected function isFrequencyMethod(string $name): bool
     {
         if (! method_exists(ManagesFrequencies::class, $name)) {
@@ -113,6 +124,38 @@ class SocialTokensServiceProvider extends ServiceProvider
 
         $method = new ReflectionMethod(ManagesFrequencies::class, $name);
 
-        return $method->isPublic() && $method->getNumberOfRequiredParameters() === 0;
+        if (! $method->isPublic() || $method->getNumberOfRequiredParameters() > 0) {
+            return false;
+        }
+
+        try {
+            $probe = new Event($this->app->make(CacheEventMutex::class), 'social-tokens:probe');
+            $probe->{$method->name}();
+        } catch (Throwable) {
+            return false;
+        }
+
+        if ($this->cronExpression($probe->expression) !== $probe->expression) {
+            return false;
+        }
+
+        return ! str_starts_with($probe->expression, '* ')
+            || $method->name === 'everyMinute'
+            || $probe->isRepeatable();
+    }
+
+    /**
+     * The five fields of a cron expression, or null when the value is not one.
+     * An alias ('@hourly') is expanded and extra spaces dropped: schedule:list
+     * and its timezone conversion split every expression into five fields, and
+     * crash on an alias.
+     */
+    protected function cronExpression(string $value): ?string
+    {
+        try {
+            return (new CronExpression($value))->getExpression();
+        } catch (InvalidArgumentException) {
+            return null;
+        }
     }
 }

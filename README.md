@@ -309,8 +309,10 @@ lead time, so a single command handles token lifetimes from one hour to sixty
 days. The schedule is registered automatically; just run the Laravel scheduler.
 `dispatch_schedule` (every 15 minutes) and `check_static_schedule` (daily) take
 a scheduler frequency method with no argument (`'everyTenMinutes'`) or a cron
-expression (`'*/10 * * * *'`); a value that is neither logs an error and keeps
-the default. Set `dispatch_schedule` to `null` to schedule the command yourself. Both scheduled
+expression (`'*/10 * * * *'`, `'@hourly'`); a value that is neither logs an
+error and keeps the default. A method that only picks the days (`'weekdays'`,
+`'mondays'`) is not a frequency: write a cron expression (`'*/15 * * * 1-5'`).
+Set `dispatch_schedule` to `null` to schedule the command yourself. Both scheduled
 commands run `withoutOverlapping()->onOneServer()` (`check-static` also in the
 background): on several servers, use a shared cache store (redis, memcached,
 database, dynamodb) so that really runs once.
@@ -333,7 +335,9 @@ errors while `log_unknown_errors` is on.
 Run a real queue worker. On the `sync` connection each job runs once, inline in
 the dispatcher, without `tries` or `backoff`. The dispatcher still walks every
 due credential past a failed one; only an unexpected error makes it exit with a
-failure code.
+failure code. On a real queue, a job the queue rejects (its backend or the cache
+lock store is down) is reported once and ends the run with a failure code; the
+next run tries again.
 
 A credential that cannot be renewed unattended (LinkedIn without refresh tokens,
 or a refresh token past its own lifetime) is not cut off early: when its window

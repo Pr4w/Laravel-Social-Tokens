@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Queue\Connectors\ConnectorInterface;
+use Illuminate\Queue\NullQueue;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Exceptions;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -129,4 +131,34 @@ it('reports an unexpected failure, keeps going, and fails the run', function () 
     expect($healthy->fresh()->access_token)->toBe('fresh');
 
     Exceptions::assertReported(fn (LogicException $e) => $e->getMessage() === 'connector bug');
+});
+
+it('stops at the first job a real queue rejects, with a single report', function () {
+    Exceptions::fake();
+
+    // A queue whose backend is down: every push fails the same way.
+    app('queue')->extend('down', fn () => new class implements ConnectorInterface
+    {
+        public function connect(array $config)
+        {
+            return new class extends NullQueue
+            {
+                public function push($job, $data = '', $queue = null)
+                {
+                    throw new RuntimeException('Connection refused');
+                }
+            };
+        }
+    });
+    config()->set('queue.connections.down', ['driver' => 'down']);
+    config()->set('social-tokens.queue.connection', 'down');
+
+    makeCredential(['renew_at' => now()->subMinute()]);
+    makeCredential(['renew_at' => now()->subMinute()]);
+
+    $this->artisan('social-tokens:dispatch-renewals')
+        ->expectsOutputToContain('Could not queue a renewal job')
+        ->assertFailed();
+
+    Exceptions::assertReportedCount(1);
 });

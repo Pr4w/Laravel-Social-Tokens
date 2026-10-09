@@ -24,6 +24,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `social_accounts_owner_identity_unique`). Only 1.x installs migrating with
   3.0 get the new names; keys 2.0.0 created keep theirs, and `down()` finds
   either by its columns.
+- `TransientRenewalException` implements `ShouldntReport`: a transient renewal
+  failure no longer reaches your exception handler or error tracker; alert on
+  the `Renewal failed after retries` warning instead (see Changed, and
+  [UPGRADE](UPGRADE.md#transient-renewal-failures-are-no-longer-reported)).
+- Boolean settings holding a string, written in the config or coming from
+  `env()` (`'false'`, `'no'`, `'off'`), are read as false; 2.x read them as
+  true (see Fixed, and
+  [UPGRADE](UPGRADE.md#check-your-published-config)).
+- `queue.tries` set to `null`, an empty string or a non-numeric value means 4
+  attempts; 2.x read it as 0, unlimited. Write `0` to keep unlimited retries
+  ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- A connector `driver` that is not a resolvable `ProviderConnector` class counts
+  as no connector: `disconnect()`, `revoke()` and `validAccessTokenFor()` no
+  longer throw `InvalidArgumentException` for it (see Fixed, and
+  [UPGRADE](UPGRADE.md#check-your-published-config)).
+- A `dispatch_schedule` or `check_static_schedule` value that is neither a cron
+  expression nor a frequency method without arguments (a scheduler macro, a
+  method that only picks the days such as `weekdays`) logs an error and keeps
+  the default schedule (see Fixed, and
+  [UPGRADE](UPGRADE.md#check-your-published-config)).
 
 ### Fixed
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
@@ -94,9 +114,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `social-tokens:check-static` crashed with `DivisionByZeroError` when
   `check_static_breaker.min_checked` was 0 (or negative) and the run checked
   no credential. A minimum below 1 now counts as 1.
-- Boolean settings written as strings are read as booleans:
-  `'log_unknown_errors' => 'false'` or `'check_renewable' => 'false'` in a
-  published config used to count as true.
+- Boolean settings holding a string are read as booleans:
+  `'log_unknown_errors' => 'false'` in a published config, or
+  `SOCIAL_TOKENS_CHECK_RENEWABLE=off` (which `env()` returns as the string
+  `'off'`), used to count as true.
 - A connector `driver` naming a class that does not exist (a renamed custom
   connector) or does not implement `ProviderConnector` passed every "no
   connector" guard, which then threw `InvalidArgumentException`:
@@ -113,15 +134,19 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   in every artisan process, so `queue:work`, `migrate` and the whole scheduler
   died with it. Both settings now accept a cron expression as well as a
   frequency method without arguments; anything else logs an error and keeps
-  the default schedule. A non-frequency method such as `runInBackground` no
-  longer schedules the command every minute.
+  the default schedule. A cron alias (`'@hourly'`) is stored as its five
+  fields, which `schedule:list` needs. A method that is not a frequency, such
+  as `runInBackground`, or that only picks the days, such as `weekdays` or
+  `mondays`, no longer schedules the command every minute.
 - On a `sync` queue connection, one failed renewal ended the dispatcher run:
   the job runs inline and its exception escaped `social-tokens:dispatch-renewals`,
   so no credential after it was renewed in that run, and a credential failing
   for good blocked the others on most ticks. The dispatcher now walks every
   due credential: a transient failure is counted in its output, and any other
   exception is reported and makes the run exit with a failure code once all
-  credentials were dispatched.
+  credentials were dispatched. On a real queue, a job the queue rejects (its
+  backend or the cache lock store down) still ends the run, after a single
+  report, since every credential would fail the same way.
 
 ### Added
 - **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
@@ -151,7 +176,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - Config values are read and normalised in one place, `Support\Settings`:
   numeric strings work for `queue.tries`, the HTTP timeouts and the breaker,
   and the HTTP timeouts keep fractional seconds (`'connect_timeout' => 2.5`
-  used to be cut to 2).
+  used to be cut to 2). A `queue.tries` that is not a number takes the default,
+  4 (see Changed (breaking)).
 - A transient renewal failure throws `Exceptions\TransientRenewalException`, a
   `RuntimeException` with the same "Transient renewal failure: ..." message,
   instead of a plain `RuntimeException`. It implements `ShouldntReport`, so a
