@@ -49,8 +49,14 @@ class SocialTokens
      * calling the provider again, which matters for rotating-refresh-token
      * providers like TikTok and X where a double refresh invalidates the token.
      * The re-read is a locking read, so it also sees a renewal committed after
-     * the caller's transaction began, and waits for one not committed yet (a
-     * wait past 30 seconds, or the database's lock wait timeout, is transient).
+     * the caller's transaction began, and waits for one not committed yet: as
+     * long as the database lets it (MySQL's innodb_lock_wait_timeout, 50
+     * seconds by default; on PostgreSQL 30 seconds outside a transaction, and
+     * until the holder's transaction ends inside one unless lock_timeout is
+     * set). A wait that lasted more than 30 seconds is transient, and so,
+     * outside a transaction, is a lock wait timeout or a deadlock. Inside the
+     * caller's transaction those errors are thrown: the database may have
+     * rolled the transaction back, and only the caller can retry it.
      *
      * Applies the result on success (single source of truth), on the token
      * that was refreshed only: when a reconnect replaced it meanwhile, the
@@ -76,6 +82,10 @@ class SocialTokens
      *                                  directly to refresh a token held elsewhere).
      * @throws ModelNotFoundException<SocialToken> for a credential deleted
      *                                             while it waited or renewed.
+     * @throws QueryException inside the caller's transaction, when the
+     *                        database did not grant the row lock (a nested
+     *                        DB::transaction() turns a deadlock into a
+     *                        DeadlockException).
      */
     public function renewCredential(SocialToken $token, int $minValiditySeconds = 30): RenewalResult
     {
@@ -96,11 +106,16 @@ class SocialTokens
                 $waitingSince = now();
 
                 try {
-                    $token->refreshForUpdate();
+                    $this->lockForRenewal($token);
                 } catch (QueryException $e) {
-                    // The row is locked by a transaction that outlived the
-                    // database's lock wait (or deadlocked with this one).
-                    if ($this->causedByConcurrencyError($e)) {
+                    // A transaction held the row past the database's lock wait,
+                    // or deadlocked with this read. Inside the caller's own
+                    // transaction that is not ours to absorb: a MySQL deadlock
+                    // has rolled the whole transaction back, and any PostgreSQL
+                    // error aborts it. A transient result would let the caller
+                    // carry on and commit the rest of its work alone, so its
+                    // DB::transaction() gets the error, to roll back or retry.
+                    if ($token->getConnection()->transactionLevel() === 0 && $this->lockWasRefused($e)) {
                         return RenewalResult::transientFailure('Could not lock the credential for renewal.');
                     }
 
@@ -184,6 +199,42 @@ class SocialTokens
     }
 
     /**
+     * The locking re-read under the renewal lock. PostgreSQL waits for a row
+     * lock until the holder's transaction ends unless lock_timeout is set, so
+     * a request or a worker would hang on a credential another process keeps
+     * locked through a long transaction (MySQL gives up at
+     * innodb_lock_wait_timeout). Outside the caller's transaction the wait is
+     * bounded at 30 seconds, in a transaction of its own since the setting
+     * ends with it; a lock_timeout the app set is kept. Inside the caller's
+     * transaction the setting stays the caller's.
+     */
+    protected function lockForRenewal(SocialToken $token): void
+    {
+        $connection = $token->getConnection();
+
+        if ($connection->getDriverName() !== 'pgsql' || $connection->transactionLevel() > 0) {
+            $token->refreshForUpdate();
+
+            return;
+        }
+
+        $connection->transaction(function () use ($connection, $token) {
+            $connection->statement("select set_config('lock_timeout', '30s', true) where current_setting('lock_timeout') = '0'");
+            $token->refreshForUpdate();
+        });
+    }
+
+    /**
+     * The database did not grant the row lock: a lock wait timeout or a
+     * deadlock, or PostgreSQL's lock_timeout (SQLSTATE 55P03), which Laravel
+     * does not count as a concurrency error.
+     */
+    protected function lockWasRefused(QueryException $e): bool
+    {
+        return $this->causedByConcurrencyError($e) || ($e->errorInfo[0] ?? $e->getCode()) === '55P03';
+    }
+
+    /**
      * Return a valid access token for the account, renewing its credential
      * synchronously if needed. This is a belt-and-suspenders layer on top of the
      * scheduled job: even if a renewal was missed, a posting attempt still gets a
@@ -196,6 +247,8 @@ class SocialTokens
      * refreshes. Never less than 30 seconds.
      *
      * @throws NeedsReconnectException
+     * @throws QueryException inside the caller's transaction, when renewing
+     *                        could not lock the credential (see renewCredential()).
      */
     public function validAccessTokenFor(SocialAccount $account, int $minValiditySeconds = 30): string
     {

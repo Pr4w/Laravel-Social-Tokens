@@ -416,29 +416,41 @@ Renewals run under a per-credential lock so a scheduled job and a synchronous
 refresh tokens are single-use, so the second refresh would be refused and the
 credential flagged. The second caller waits up to 10 seconds, then uses the token
 the first one stored instead of calling the provider; if the lock is still held,
-or a transaction keeps the credential's row locked for more than 30 seconds, it
-gets a transient failure (the job retries, `validAccessTokenFor()` throws a
+it gets a transient failure (the job retries, `validAccessTokenFor()` throws a
 transient `NeedsReconnectException`). The lock lives in your default cache
 store, which must support atomic locks **and be shared by every server that
 serves web requests, runs queue workers or runs the scheduler**: redis,
-memcached, database or dynamodb, on a server they all reach. The `file` and
-`array` stores, or a redis on each host, lock one host only: with a separate
-worker server, a job and a web request each take their own lock and refresh the
-same TikTok or X token.
+memcached, database or dynamodb, on a server they all reach. The `file` store,
+or a redis on each host, locks one host only: with a separate worker server, a
+job and a web request each take their own lock and refresh the same TikTok or X
+token. The `array` store locks nothing across processes, even on one server (a
+queue worker and a web request each have their own): use it in tests only.
 
 A reconnect that lands while a renewal is in flight wins: the renewal's result
 is dropped instead of overwriting the new tokens, and a refusal of the old
 refresh token does not flag the reconnected credential.
 
-Ask for a token outside your own database transaction. Under the lock the
-credential is re-read with a locking read (`SELECT ... FOR UPDATE`), so even
-inside a transaction a renewal another process stored is seen, or waited for
-until it commits. But inside one the credential's row then stays locked until
-your transaction ends, and a rollback discards the token the renewal stored:
-for TikTok and X the provider has already retired the old refresh token, so the
-credential dies at its next renewal. Renewing a TikTok or X credential inside a
-transaction logs a warning (`Renewing a single-use refresh token inside a
-database transaction`).
+Under the lock the credential is re-read with a locking read
+(`SELECT ... FOR UPDATE`; SQLite has no row locks), so a renewal another process
+stored is seen, even inside a transaction, or waited for until it commits. That
+wait lasts as long as the database lets it: on MySQL up to
+`innodb_lock_wait_timeout` (50 seconds by default), on PostgreSQL up to 30
+seconds, or your `lock_timeout` if you set one. A lock wait timeout, a deadlock,
+or a wait of more than 30 seconds (after which the renewal lock could lapse
+during the provider call) is a transient failure.
+
+Ask for a token outside your own database transaction. Inside one, the
+credential's row stays locked until your transaction ends, and a rollback
+discards the token the renewal stored: for TikTok and X the provider has
+already retired the old refresh token, so the credential dies at its next
+renewal. On PostgreSQL the wait for the row lasts until the transaction holding
+it ends, unless you set `lock_timeout`. And a lock wait timeout or a deadlock is
+not a transient failure there: the database may already have rolled your transaction back (a MySQL
+deadlock does, and any error aborts a PostgreSQL transaction), so the
+`QueryException` reaches your `DB::transaction()` (as a `DeadlockException` from
+a nested one), which rolls back or retries. Renewing a TikTok or X credential
+inside a transaction logs a warning (`Renewing a single-use refresh token inside
+a database transaction`).
 
 ## Posting
 

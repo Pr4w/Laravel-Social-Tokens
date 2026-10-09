@@ -323,20 +323,37 @@ refreshed twice or renewed over a reconnect. Check three things:
    On such a setup set the default store (`CACHE_STORE`, or `CACHE_DRIVER` if
    your `config/cache.php` still reads it) to `redis`, `memcached`, `database`
    or `dynamodb`, on a server every host reaches, and restart the workers
-   (`php artisan queue:restart`). A single server can keep `file`.
+   (`php artisan queue:restart`). A single server can keep `file`. The `array`
+   store locks nothing across processes, even on one server (a queue worker
+   and a web request each keep their own): if you set `CACHE_STORE=array`
+   outside tests to turn caching off, switch to one of the stores above.
 2. **You ask for tokens outside your own transactions.** Under the lock,
    `renewCredential()` now re-reads the credential with `SELECT ... FOR UPDATE`.
-   Inside your `DB::transaction()` that row stays locked until the transaction
-   ends, so other renewals (which give up after 30 seconds, as a transient
-   failure), reconnects and status changes of that credential wait for it, and
-   a rollback discards the token the renewal stored (for TikTok and X, the
-   provider has already replaced the old refresh token, so the credential dies
-   at its next renewal). Call `validAccessTokenFor()`
-   before opening the transaction. To find the places, look for the new
-   warning `[social-tokens] Renewing a single-use refresh token inside a
-   database transaction` in your logs. Tests that use `RefreshDatabase` or
-   `DatabaseTransactions` run inside a transaction too, so a test that renews a
-   TikTok or X credential logs it as well; there it does no harm.
+   Inside your `DB::transaction()`:
+   - that row stays locked until the transaction ends, so other renewals,
+     reconnects and status changes of that credential wait for it. Another
+     renewal waits as long as the database lets it: MySQL's
+     `innodb_lock_wait_timeout` (50 seconds by default); on PostgreSQL 30
+     seconds, or until your transaction ends if that renewal itself runs inside
+     a transaction and no `lock_timeout` is set. A wait of more than 30 seconds
+     ends in a transient failure instead of a renewal;
+   - a rollback discards the token the renewal stored (for TikTok and X, the
+     provider has already replaced the old refresh token, so the credential
+     dies at its next renewal);
+   - a lock wait timeout or a deadlock on that read throws its `QueryException`
+     (a `DeadlockException` from a nested `DB::transaction()`), where outside a
+     transaction it is a transient failure: the database may have rolled your
+     transaction back already, so `validAccessTokenFor()` does not turn it into
+     a transient `NeedsReconnectException` you would catch and carry on from.
+     Let your `DB::transaction()` roll back, or retry it
+     (`DB::transaction($callback, 3)` retries a deadlock).
+
+   Call `validAccessTokenFor()` before opening the transaction. To find the
+   places, look for the new warning `[social-tokens] Renewing a single-use
+   refresh token inside a database transaction` in your logs. Tests that use
+   `RefreshDatabase` or `DatabaseTransactions` run inside a transaction too, so
+   a test that renews a TikTok or X credential logs it as well; there it does
+   no harm.
 3. **If you call `renewCredential()` or `applyRenewal()` yourself.**
    - After a Terminal result, flag the credential only while it holds the
      refused token: `$token->markNeedsReconnectOnce($result->reason, $token->access_token)`

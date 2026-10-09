@@ -1,9 +1,12 @@
 <?php
 
 use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DeadlockException;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Database\Query\Grammars\SQLiteGrammar;
 use Illuminate\Database\QueryException;
+use Illuminate\Database\SQLiteConnection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -66,6 +69,102 @@ function holdRenewalLock(SocialToken $token): Lock
     expect($lock->get())->toBeTrue();
 
     return $lock;
+}
+
+/**
+ * SQLite has no SELECT ... FOR UPDATE: this grammar records each locking read
+ * (its table and the transaction level it ran at), and tags its SQL so that a
+ * test can fail that read alone.
+ */
+function recordLockingReads(?Connection $connection = null): SQLiteGrammar
+{
+    $connection ??= DB::connection();
+
+    $grammar = new class($connection) extends SQLiteGrammar
+    {
+        /** @var list<array{string, int}> */
+        public array $lockedReads = [];
+
+        protected function compileLock(Builder $query, $value)
+        {
+            if ($value === true && is_string($query->from)) {
+                $this->lockedReads[] = [$query->from, $this->connection->transactionLevel()];
+
+                return '/* for update */';
+            }
+
+            return parent::compileLock($query, $value);
+        }
+    };
+
+    $connection->setQueryGrammar($grammar);
+
+    return $grammar;
+}
+
+/** The error a driver raises when it does not grant a row lock. */
+function lockError(string $case): PDOException
+{
+    [$sqlState, $message] = match ($case) {
+        'a MySQL lock wait timeout' => ['HY000', 'SQLSTATE[HY000]: General error: 1205 Lock wait timeout exceeded; try restarting transaction'],
+        'a MySQL deadlock' => ['40001', 'SQLSTATE[40001]: Serialization failure: 1213 Deadlock found when trying to get lock; try restarting transaction'],
+        'a PostgreSQL deadlock' => ['40P01', 'SQLSTATE[40P01]: Deadlock detected: 7 ERROR:  deadlock detected'],
+        'a PostgreSQL lock timeout' => ['55P03', 'SQLSTATE[55P03]: Lock not available: 7 ERROR:  canceling statement due to lock timeout'],
+    };
+
+    $error = new PDOException($message);
+    $error->errorInfo = [$sqlState, 7, $message];
+
+    return $error;
+}
+
+/** The database refuses the first locking read of the credential row. */
+function refuseLockingRead(PDOException $error): void
+{
+    recordLockingReads();
+    $refused = false;
+
+    DB::connection()->beforeExecuting(function (string $sql, array $bindings) use (&$refused, $error) {
+        if (! $refused && str_contains($sql, '"social_tokens"') && str_contains($sql, '/* for update */')) {
+            $refused = true;
+
+            throw new QueryException('testing', $sql, $bindings, $error);
+        }
+    });
+}
+
+$lockErrors = ['a MySQL lock wait timeout', 'a MySQL deadlock', 'a PostgreSQL deadlock', 'a PostgreSQL lock timeout'];
+
+/**
+ * The suite's SQLite database behind a connection that reports the pgsql
+ * driver. It records each statement that sets a lock timeout, with the
+ * transaction level it ran at, instead of running it: SQLite has no such
+ * setting.
+ */
+function pretendPostgres(): SQLiteConnection
+{
+    $pdo = DB::connection()->getPdo();
+
+    config(['database.connections.pretend-pgsql' => ['driver' => 'pgsql']]);
+
+    DB::extend('pretend-pgsql', fn (array $config, string $name) => new class($pdo, '', '', $config + ['name' => $name]) extends SQLiteConnection
+    {
+        /** @var list<array{string, int}> */
+        public array $settings = [];
+
+        public function statement($query, $bindings = [])
+        {
+            if (str_contains($query, 'lock_timeout')) {
+                $this->settings[] = [$query, $this->transactionLevel()];
+
+                return true;
+            }
+
+            return parent::statement($query, $bindings);
+        }
+    });
+
+    return DB::connection('pretend-pgsql');
 }
 
 // The lock -------------------------------------------------------------------
@@ -169,28 +268,10 @@ it('waits for a renewal in flight and hands out its token instead of refreshing 
 
 it('re-reads the credential under the lock with a locking read', function () {
     $token = lockedCredential();
-    $connection = DB::connection();
-
-    // SQLite has no SELECT ... FOR UPDATE: record what the query asked for.
-    $grammar = new class($connection) extends SQLiteGrammar
-    {
-        /** @var list<string> */
-        public array $lockedReads = [];
-
-        protected function compileLock(Builder $query, $value)
-        {
-            if ($value === true && is_string($query->from)) {
-                $this->lockedReads[] = $query->from;
-            }
-
-            return parent::compileLock($query, $value);
-        }
-    };
-
-    $connection->setQueryGrammar($grammar);
+    $grammar = recordLockingReads();
 
     FakeConnector::$resultUsing = function () use ($grammar) {
-        expect($grammar->lockedReads)->toBe(['social_tokens']); // before the provider call
+        expect($grammar->lockedReads)->toBe([['social_tokens', 0]]); // before the provider call
 
         return RenewalResult::success(accessToken: 'renewed-token', expiresAt: now()->addHour());
     };
@@ -199,26 +280,85 @@ it('re-reads the credential under the lock with a locking read', function () {
         ->and(FakeConnector::$renewCalls)->toBe(1);
 });
 
-it('treats a lock wait on the credential row as transient', function () {
+it('compares the credential before storing the renewal with a locking read, in a transaction', function () {
     $token = lockedCredential();
-    $thrown = false;
+    $grammar = recordLockingReads();
 
-    DB::connection()->beforeExecuting(function (string $sql, array $bindings) use (&$thrown) {
-        if (! $thrown && str_starts_with($sql, 'select') && str_contains($sql, '"social_tokens"')) {
-            $thrown = true;
+    // Without the row lock, a reconnect or a revoke could land between the
+    // comparison and the write, and be overwritten by the old grant's tokens.
+    expect($this->tokens->renewCredential($token)->succeeded())->toBeTrue()
+        ->and($grammar->lockedReads)->toBe([['social_tokens', 0], ['social_tokens', 1]])
+        ->and($token->fresh()->access_token)->toBe('renewed-token');
+});
 
-            throw new QueryException('testing', $sql, $bindings, new PDOException(
-                'SQLSTATE[HY000]: General error: 1205 Lock wait timeout exceeded; try restarting transaction'
-            ));
-        }
-    });
+it('treats a refused lock on the credential row as transient outside a transaction', function (string $error) {
+    $token = lockedCredential();
+    refuseLockingRead(lockError($error));
 
     $result = $this->tokens->renewCredential($token);
 
-    expect($thrown)->toBeTrue()
-        ->and($result->outcome)->toBe(RenewalOutcome::Transient)
+    expect($result->outcome)->toBe(RenewalOutcome::Transient)
+        ->and($result->reason)->toBe('Could not lock the credential for renewal.')
         ->and(FakeConnector::$renewCalls)->toBe(0)
         ->and($token->fresh()->access_token)->toBe('current-token');
+})->with($lockErrors);
+
+it("lets a refused lock through inside the caller's transaction, which the database may have rolled back", function (string $error, string $entry) {
+    $token = lockedCredential();
+    $account = lockedAccount($token);
+    refuseLockingRead(lockError($error));
+
+    // A MySQL deadlock rolls back the caller's whole transaction, and any
+    // PostgreSQL error aborts it: a transient result would let the caller
+    // carry on and commit the rest of its work alone.
+    $call = fn () => DB::transaction(fn () => match ($entry) {
+        'renewCredential' => $this->tokens->renewCredential($token),
+        'validAccessTokenFor' => $this->tokens->validAccessTokenFor($account),
+    });
+
+    expect($call)->toThrow(QueryException::class, lockError($error)->getMessage());
+
+    expect(DB::transactionLevel())->toBe(0)
+        ->and(FakeConnector::$renewCalls)->toBe(0)
+        ->and($token->fresh()->access_token)->toBe('current-token')
+        ->and($token->fresh()->status)->toBe(AccountStatus::Active);
+})->with($lockErrors)->with(['renewCredential', 'validAccessTokenFor']);
+
+it("hands a deadlock in a nested transaction to the caller's outer transaction", function () {
+    $token = lockedCredential();
+    refuseLockingRead(lockError('a MySQL deadlock'));
+
+    expect(fn () => DB::transaction(fn () => DB::transaction(fn () => $this->tokens->renewCredential($token))))
+        ->toThrow(DeadlockException::class);
+
+    expect(DB::transactionLevel())->toBe(0)
+        ->and(FakeConnector::$renewCalls)->toBe(0);
+});
+
+it('bounds the wait for the credential row on PostgreSQL, in a transaction of its own', function () {
+    $token = lockedCredential();
+    $connection = pretendPostgres();
+    $grammar = recordLockingReads($connection);
+    $token->setConnection($connection->getName());
+
+    expect($this->tokens->renewCredential($token)->succeeded())->toBeTrue()
+        ->and($connection->settings)->toBe([[
+            "select set_config('lock_timeout', '30s', true) where current_setting('lock_timeout') = '0'", 1,
+        ]])
+        ->and($grammar->lockedReads[0])->toBe(['social_tokens', 1])
+        ->and($connection->transactionLevel())->toBe(0);
+});
+
+it("leaves the lock timeout of the caller's transaction alone on PostgreSQL", function () {
+    Log::spy();
+    $token = lockedCredential();
+    $connection = pretendPostgres();
+    $token->setConnection($connection->getName());
+
+    $connection->transaction(fn () => $this->tokens->renewCredential($token));
+
+    expect($connection->settings)->toBe([])
+        ->and(FakeConnector::$renewCalls)->toBe(1);
 });
 
 it('gives up, rather than refresh, after waiting long on the credential row', function () {
