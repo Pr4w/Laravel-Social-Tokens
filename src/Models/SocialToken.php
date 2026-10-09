@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens\Models;
 
 use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -552,10 +553,10 @@ class SocialToken extends Model
     /**
      * applyRenewal() that says whether the renewal was stored. It is stored
      * only on the token it renewed: the access and refresh tokens this
-     * instance was loaded with, compared by ciphertext under a row lock. A
-     * reconnect that replaced them while the provider call was in flight wins
-     * (the renewal of the old grant would bring back its tokens and lose the
-     * new grant's), and so does a revoke. Either way nothing is written, no
+     * instance was loaded with, compared under a row lock. A reconnect that
+     * replaced them while the provider call was in flight wins (the renewal
+     * of the old grant would bring back its tokens and lose the new grant's),
+     * and so does a revoke. Either way nothing is written, no
      * CredentialRenewed fires, and the instance is reloaded with the row as
      * it now is. Load the credential right before renewing it.
      *
@@ -568,19 +569,16 @@ class SocialToken extends Model
         $notExtended = $result->expiresAt !== null && ! $result->expiresAt->copy()->sub($connector->leadTime())->isFuture();
 
         if ($this->exists) {
-            $held = [$this->getRawOriginal('access_token'), $this->getRawOriginal('refresh_token')];
-
             // The lock keeps a reconnect or a revoke from landing between the
             // comparison and the write: it waits, and is written last.
-            $stored = $this->getConnection()->transaction(function () use ($held, $result, $connector, $notExtended) {
+            $stored = $this->getConnection()->transaction(function () use ($result, $connector, $notExtended) {
                 $current = $this->newQueryWithoutScopes()
                     ->useWritePdo()
                     ->whereKey($this->getKey())
                     ->lockForUpdate()
                     ->firstOrFail();
 
-                if ($current->status === AccountStatus::Revoked
-                    || [$current->getRawOriginal('access_token'), $current->getRawOriginal('refresh_token')] !== $held) {
+                if ($current->status === AccountStatus::Revoked || ! $this->holdsTokensOf($current)) {
                     $this->setRawAttributes($current->getAttributes(), true);
 
                     return false;
@@ -602,6 +600,50 @@ class SocialToken extends Model
         }
 
         return $stored;
+    }
+
+    /**
+     * Whether the stored row still holds the tokens this instance was loaded
+     * with. The ciphertext differs, for the same tokens, once
+     * social-tokens:reencrypt has rewritten them under a new APP_KEY: the
+     * decrypted values are compared then, so that the renewal is not taken
+     * for a reconnect and dropped (for TikTok and X, with the only copy of
+     * the rotated refresh token). The instance takes the stored ciphertext,
+     * as the row holds it.
+     */
+    protected function holdsTokensOf(self $current): bool
+    {
+        $reencrypted = [];
+
+        foreach (['access_token', 'refresh_token'] as $column) {
+            $held = $this->getRawOriginal($column);
+            $stored = $current->getRawOriginal($column);
+
+            if ($held === $stored) {
+                continue;
+            }
+
+            if (! is_string($held) || ! is_string($stored)) {
+                return false;
+            }
+
+            try {
+                if (! hash_equals((string) $this->getOriginal($column), (string) $current->getAttribute($column))) {
+                    return false;
+                }
+            } catch (DecryptException) {
+                return false;
+            }
+
+            $reencrypted[$column] = $stored;
+        }
+
+        foreach ($reencrypted as $column => $cipher) {
+            $this->attributes[$column] = $cipher;
+            $this->syncOriginalAttribute($column);
+        }
+
+        return true;
     }
 
     /**

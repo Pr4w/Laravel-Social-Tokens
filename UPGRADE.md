@@ -590,8 +590,10 @@ Two changes keep `social_tokens` to the credentials something uses.
 
 If you rotated `APP_KEY` and still list the old key in `APP_PREVIOUS_KEYS`
 because some tokens were never written again (Google refresh tokens, Facebook
-Page tokens), run `php artisan social-tokens:reencrypt`, then drop the old
-key once it exits successfully. See the README, "Rotating APP_KEY".
+Page tokens), make sure every process runs with the new key (restart your
+queue workers), run `php artisan social-tokens:reencrypt`, then drop the old
+key once it exits successfully. When it fails because credentials changed
+while it ran, run it again. See the README, "Rotating APP_KEY".
 
 ### Review your `reportRejected()` calls
 
@@ -743,7 +745,8 @@ refreshed twice or renewed over a reconnect. Check three things:
      is the token the provider refused, and a credential the user reconnected
      meanwhile is left alone.
    - `applyRenewal()` now writes only while the stored credential still holds
-     the access and refresh tokens the instance was loaded with. Load the
+     the access and refresh tokens the instance was loaded with (the same
+     tokens re-encrypted under a new `APP_KEY` still count). Load the
      credential right before you refresh it, not earlier. Use
      `tryApplyRenewal()` to know whether the renewal was stored; when it was
      not, the instance holds the stored row. A credential deleted meanwhile

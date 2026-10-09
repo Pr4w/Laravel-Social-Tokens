@@ -68,10 +68,14 @@ too.
 new one: tokens still decrypt, and each is re-encrypted with the new key when
 it is written again. Some never are (a Google refresh token, a Facebook Page
 token), so run `php artisan social-tokens:reencrypt` before you drop the old
-key. It rewrites every token not under the current key, never over a token
-renewed meanwhile, and can be run again. It exits with a failure code, and
-logs the credentials, when some token decrypts with none of the keys: keep the
-previous key until those users reconnect.
+key, once every process runs with the new one (restart your queue workers): a
+process still on the old key writes tokens under it. The command rewrites
+every token not under the current key and can be run again. Renewals and
+reconnects can go on meanwhile: a row they change is read again and
+rewritten, and a renewal in flight keeps its result. It exits with a failure
+code when a credential kept changing under it (run it again), and when some
+token decrypts with none of the keys, which it logs: keep the previous key
+until those users reconnect.
 
 ### Owners
 

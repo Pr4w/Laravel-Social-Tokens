@@ -165,7 +165,8 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
 - `applyRenewal()` writes only while the credential still holds the access and
   refresh tokens the instance was loaded with (compared in a transaction, under
-  a row lock), and not over a revoke, as before. Otherwise it writes nothing,
+  a row lock; the same tokens re-encrypted under a new `APP_KEY` still count),
+  and not over a revoke, as before. Otherwise it writes nothing,
   fires no `CredentialRenewed`, and reloads the instance with the stored row. A
   credential deleted meanwhile throws `ModelNotFoundException`; 2.x saved
   silently. Load the credential right before refreshing it
@@ -809,10 +810,14 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   retired. The `encrypted` cast only re-encrypts a value it writes, and a
   Google refresh token or a Facebook Page token is never written again: once
   the old key was dropped, those credentials no longer decrypted. Tokens
-  already under the current key are left as they are; a row is written only
-  while it holds the ciphertext that was read (a renewal meanwhile wins), and
-  its `updated_at` is kept. A token no key decrypts is logged and left, and
-  the command exits with a failure code.
+  already under the current key are left as they are, and `updated_at` is
+  kept. It runs alongside renewals and reconnects: a row is written only while
+  it holds the ciphertext that was read, a row changed meanwhile is read again
+  and rewritten (a Google renewal leaves the refresh token under the old key),
+  and a renewal in flight still stores its result over the rewritten tokens
+  (for TikTok and X, the only copy of the rotated refresh token). It exits
+  with a failure code when a row kept changing (run it again), and when a
+  token decrypts with none of the keys, which it logs and leaves.
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
