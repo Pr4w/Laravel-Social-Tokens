@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialToken;
 
@@ -11,6 +12,11 @@ use Pr4w\SocialTokens\Models\SocialToken;
  * token columns are dropped from social_accounts. Reads the (encrypted) account
  * tokens raw and decrypts by hand, so it does not depend on the model casts,
  * which no longer describe those columns.
+ *
+ * It writes the credentials through the model, for its encrypted casts, but
+ * only the columns social_tokens has at this point: the model describes the
+ * latest schema, and an install upgrading from 0.x runs this long before
+ * later migrations add columns the model fills in (purpose, 3.0).
  *
  *  - instagram : one shared renewable Meta credential per Facebook user
  *  - facebook  : one static page-token credential per page (renew_at null)
@@ -21,18 +27,31 @@ return new class extends Migration
     public function up(): void
     {
         $table = config('social-tokens.table', 'social_accounts');
+        $rows = DB::table($table)->whereNull('social_token_id')->get();
 
-        DB::table($table)->whereNull('social_token_id')->get()->each(function (object $row) use ($table) {
+        // A fresh install, or `migrate --pretend` (no rows): no schema to read.
+        if ($rows->isEmpty()) {
+            return;
+        }
+
+        $columns = Schema::getColumnListing((new SocialToken)->getTable());
+
+        $rows->each(function (object $row) use ($table, $columns) {
             [$provider, $holder, $attributes] = $this->credentialFor($row);
 
             if ($holder === null) {
                 return; // cannot group without a holder; leave it for a reconnect
             }
 
-            $token = SocialToken::query()->updateOrCreate(
-                ['provider' => $provider, 'provider_holder_id' => (string) $holder],
-                $attributes,
-            );
+            $token = SocialToken::query()
+                ->firstOrNew(['provider' => $provider, 'provider_holder_id' => (string) $holder])
+                ->fill($attributes);
+
+            foreach (array_diff(array_keys($token->getAttributes()), $columns) as $missing) {
+                $token->offsetUnset($missing);
+            }
+
+            $token->save();
 
             DB::table($table)->where('id', $row->id)->update(['social_token_id' => $token->getKey()]);
         });

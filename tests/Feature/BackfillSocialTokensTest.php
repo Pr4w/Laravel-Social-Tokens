@@ -112,3 +112,35 @@ it('skips accounts that are already linked', function () {
     expect(SocialAccount::find($id)->social_token_id)->toBe($token->getKey())
         ->and(SocialToken::count())->toBe(1); // no new credential created
 });
+
+it('backfills on the schema of an upgrade from 0.x, before the later columns exist', function () {
+    // An install still on 0.x runs this backfill long before purpose (3.0),
+    // the owner columns (2.0) and failed_checks are added: roll them back.
+    foreach ([
+        '2025_01_01_000008_add_purpose_to_social_tokens',
+        '2025_01_01_000007_scope_identity_to_owner',
+        '2025_01_01_000006_add_failed_checks_to_social_tokens_table',
+    ] as $migration) {
+        (include __DIR__."/../../database/migrations/{$migration}.php")->down();
+    }
+
+    $tiktok = insertLegacyAccount([
+        'provider' => 'tiktok', 'provider_user_id' => 'tt-1',
+        'access_token' => Crypt::encryptString('tt-access'),
+        'refresh_token' => Crypt::encryptString('tt-refresh'),
+        'expires_at' => now()->addDay(), 'renew_at' => now()->addHours(22),
+    ]);
+    $instagram = insertLegacyAccount([
+        'provider' => 'instagram', 'provider_user_id' => 'ig-1', 'provider_holder_id' => 'fb-user',
+        'access_token' => Crypt::encryptString('user-token'),
+        'expires_at' => now()->addDays(60), 'renew_at' => now()->addDays(53),
+    ]);
+
+    runBackfill();
+
+    expect(Schema::hasColumn('social_tokens', 'purpose'))->toBeFalse()
+        ->and(SocialAccount::find($tiktok)->credential->access_token)->toBe('tt-access')
+        ->and(SocialAccount::find($tiktok)->credential->refresh_token)->toBe('tt-refresh')
+        ->and(SocialAccount::find($instagram)->credential->provider_holder_id)->toBe('fb-user')
+        ->and(SocialAccount::find($instagram)->credential->access_token)->toBe('user-token');
+});
