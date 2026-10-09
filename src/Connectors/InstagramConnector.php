@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
@@ -21,9 +22,14 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * the extension call is graph.instagram.com/refresh_access_token with
  * grant_type=ig_refresh_token and no client credentials. Same strategy, swap
  * the request below.
+ *
+ * appSecretProof() signs the app's own Graph calls made with the user token
+ * (see SignsGraphRequests).
  */
 class InstagramConnector extends AbstractConnector
 {
+    use SignsGraphRequests;
+
     /**
      * Instagram shares the Meta user credential, refreshed via the Facebook
      * connector (fb_exchange_token). So its credentials live under "facebook".

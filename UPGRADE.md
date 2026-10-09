@@ -118,6 +118,30 @@ its method; it was named `connected_by`. If your code reads it by the old name
 `with('connectedBy')` and `toArray()` (key `connected_by`) need no change;
 eager loading now actually avoids the extra query per row.
 
+### Meta calls carry `appsecret_proof`
+
+The `facebook` connector now signs the Graph calls it makes with a user or Page
+token (`/me`, `/me/accounts`) with `appsecret_proof`, so you can turn on
+**Require App Secret** in your Meta app. Nothing to do for the package to keep
+working: the option defaults to on, even in a published config that does not
+have it, and Meta accepts a valid proof whether or not the setting is on.
+
+1. If you keep a published `config/social-tokens.php`, add the option to the
+   `facebook` and `instagram` entries to be able to switch it:
+   `'appsecret_proof' => env('META_APPSECRET_PROOF', true),`.
+2. If your database still holds Facebook Page or user tokens issued by
+   **another** Meta app than the one in `services.facebook` (you switched
+   apps), their proof cannot match: `social-tokens:check-static` then logs
+   `Uncatalogued credential check error` ("Invalid appsecret_proof") for them
+   instead of checking them. Set `META_APPSECRET_PROOF=false` until those
+   users have reconnected.
+3. To turn on Require App Secret, first sign your own Graph calls made with
+   these tokens (publishing, insights):
+   `app(SocialTokens::class)->connector('facebook')->appSecretProof($token)`
+   (or `connector('instagram')`) gives the value to send as
+   `appsecret_proof`. Then deploy, and turn the setting on in the Meta app's
+   advanced settings.
+
 ### Check your published config
 
 No change is needed for a config that kept the shipped forms. Values in other

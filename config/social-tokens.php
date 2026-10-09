@@ -155,12 +155,18 @@ return [
             'driver' => InstagramConnector::class,
             'credentials' => 'facebook',   // shares the Meta app with Facebook
             'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
+            // See facebook below: appSecretProof() for your own Instagram calls.
+            'appsecret_proof' => env('META_APPSECRET_PROOF', true),
         ],
 
         'facebook' => [
             'driver' => FacebookConnector::class,
             'credentials' => 'facebook',
             'graph_version' => env('META_GRAPH_VERSION', 'v23.0'),
+            // Sign Graph calls made with a user or Page token with
+            // appsecret_proof, so the Meta app can turn on "Require App
+            // Secret". Needs the secret of the app that issued the tokens.
+            'appsecret_proof' => env('META_APPSECRET_PROOF', true),
         ],
 
         'threads' => [

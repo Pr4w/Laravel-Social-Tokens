@@ -216,6 +216,16 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   dispatcher, `revoke()`, `disconnect()`, deleting a credential, the 000007
   backfill) scanned the whole table. On MySQL the foreign key's own index is
   kept and nothing is added.
+- **Meta "Require App Secret" support.** Graph calls made with a user or Page
+  token (`/me` at connect and in `check-static`, `/me/accounts` and its
+  `paging.next` pages) carry `appsecret_proof`, the HMAC-SHA256 of the token
+  keyed with the Meta app secret. Turning the setting on used to break every
+  Facebook and Instagram connection and leave every Page unchecked. The
+  `appsecret_proof` option of the `facebook` and `instagram` connectors
+  (`META_APPSECRET_PROOF`, default on) turns it off, and
+  `appSecretProof($token)` on both connectors signs your own Graph calls.
+- `Support\Settings::flag()`: reads a boolean config value the way the
+  package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
 
 ### Changed
 - The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
@@ -242,6 +252,10 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   logged (`[social-tokens] {provider} token revocation failed`, with
   `provider`, `token_id`, `exception` and a redacted `message`); the X
   connector's own failure log takes that form too.
+- Graph calls the package makes with a user or Page token now send
+  `appsecret_proof` by default (see Added). Meta accepts it whether or not
+  "Require App Secret" is on, but it only matches tokens issued to the
+  configured app ([UPGRADE](UPGRADE.md#meta-calls-carry-appsecret_proof)).
 - `ProviderConnector::revoke()` is documented as best effort that must not
   throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
   override.

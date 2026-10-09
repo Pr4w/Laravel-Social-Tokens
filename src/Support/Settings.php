@@ -86,18 +86,24 @@ final class Settings
     }
 
     /**
-     * A missing key takes the default; null reads as false, as the plain
-     * truthiness test this replaces did; anything unreadable takes the default.
+     * A boolean read from any config value: `'false'`, `'off'`, `'no'` and
+     * `'0'` (what env() returns for such a variable) are false. null reads as
+     * false, as a plain truthiness test would; anything unreadable takes the
+     * default. For connector options too, which live in the connector's block.
      */
-    private static function bool(string $key, bool $default): bool
+    public static function flag(mixed $value, bool $default): bool
     {
-        $value = config("social-tokens.{$key}", $default);
-
         if (is_array($value) || is_object($value)) {
             return $default;
         }
 
         return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? $default;
+    }
+
+    /** A missing key takes the default. */
+    private static function bool(string $key, bool $default): bool
+    {
+        return self::flag(config("social-tokens.{$key}", $default), $default);
     }
 
     private static function int(mixed $value, int $default): int

@@ -239,6 +239,30 @@ is flagged `needs_reconnect` at its next renewal. The package renews each X
 credential about every 90 minutes, which also keeps its ~6-month refresh token
 alive; with many X accounts, keep X's token-endpoint rate limits in mind.
 
+### Meta: Require App Secret
+
+Every Graph call the package makes with a user or Page token (`/me`,
+`/me/accounts`) carries `appsecret_proof`, the HMAC-SHA256 of that token keyed
+with `services.facebook.client_secret`, as Socialite's Facebook driver already
+does. You can therefore turn on **Require App Secret** in the Meta app's
+advanced settings: a Page or user token that leaks is then useless without the
+app secret. Sign your own publishing calls the same way:
+
+```php
+$proof = app(SocialTokens::class)->connector('instagram')->appSecretProof($token); // or 'facebook'
+
+Http::withToken($token)->post("https://graph.facebook.com/v23.0/{$igUserId}/media", array_filter([
+    'image_url' => $imageUrl,
+    'appsecret_proof' => $proof, // null when signing is off
+]));
+```
+
+A proof only matches tokens issued to the configured Meta app. Set
+`META_APPSECRET_PROOF=false` (the `appsecret_proof` option of the `facebook` and
+`instagram` connectors) to stop sending it, for example while tokens issued by
+a former Meta app are still stored. Threads calls (`graph.threads.net`) are not
+signed.
+
 ### What `StoreConnection` handles for you
 
 - **Long-lived tokens.** Threads hands back a short-lived token, which is upgraded

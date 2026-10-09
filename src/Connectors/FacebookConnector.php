@@ -5,6 +5,7 @@ namespace Pr4w\SocialTokens\Connectors;
 use Carbon\CarbonInterval;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
+use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -26,9 +27,14 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * revoke() is deliberately left a no-op: DELETE /me/permissions would
  * deauthorise the app for the whole Facebook user, killing the static page
  * credentials of every other Page they connected.
+ *
+ * Calls made with a user or Page token carry appsecret_proof (see
+ * SignsGraphRequests), so the Meta app can require it.
  */
 class FacebookConnector extends AbstractConnector implements ChecksCredential
 {
+    use SignsGraphRequests;
+
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
 
@@ -267,7 +273,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
 
         return $this->attempt(fn () => $this->http()->withToken($token)
             ->acceptJson()
-            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id']));
+            ->get("https://graph.facebook.com/{$version}/me", ['fields' => 'id'] + $this->appSecretProofQuery($token)));
     }
 
     /**
@@ -287,7 +293,7 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
     {
         $version = $this->config['graph_version'] ?? 'v23.0';
         $url = "https://graph.facebook.com/{$version}/me/accounts";
-        $query = ['fields' => $fields, 'limit' => 100];
+        $query = ['fields' => $fields, 'limit' => 100] + $this->appSecretProofQuery($userToken);
         $pages = [];
 
         for ($resultPage = 0; $resultPage < self::MAX_RESULT_PAGES; $resultPage++) {
@@ -326,8 +332,9 @@ class FacebookConnector extends AbstractConnector implements ChecksCredential
                 return $pages;
             }
 
-            // paging.next is a complete URL that already carries every parameter.
-            $url = $next;
+            // paging.next is a complete URL with the first call's parameters;
+            // the proof is added if Meta left it out.
+            $url = $this->withAppSecretProof($next, $userToken);
             $query = null;
         }
 
