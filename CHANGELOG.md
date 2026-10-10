@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.0.0]
 
 3.0.0 adds X (Twitter), Instagram accounts without a Facebook Page, and
 answers to Meta's deauthorize and data deletion callbacks. Most of the rest
