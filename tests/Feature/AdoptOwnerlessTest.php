@@ -9,12 +9,16 @@
  * SocialTokens::adopt() does the whole step.
  */
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Actions\StoreConnection;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Tests\Fixtures\Owner;
+use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
+
+const ATTACHED_BY_HAND = '### Owner-less rows you attached by hand';
 
 beforeEach(fn () => $this->owner = Owner::create(['name' => 'acme']));
 
@@ -121,18 +125,37 @@ it('finishes every account attached by hand with the UPGRADE fix-up', function (
     $page->ownable()->associate($this->owner)->save();
     $untouched = SocialAccount::factory()->create(); // owner-less, and left so
 
-    // UPGRADE.md, "Owner-less rows you attached by hand".
-    SocialAccount::query()
-        ->whereNotNull('ownable_type')
-        ->whereHas('credential', fn ($credential) => $credential->whereNull('ownable_type'))
-        ->with('ownable')
-        ->each(function (SocialAccount $account) {
-            if ($account->ownable !== null) {
-                app(SocialTokens::class)->adopt($account, $account->ownable);
-            }
-        });
+    UpgradeGuide::run(ATTACHED_BY_HAND, 'adopt(');
 
     expect(SocialToken::ownedBy($this->owner)->pluck('id')->sort()->values()->all())
         ->toBe(collect([$tiktok->social_token_id, $page->social_token_id, $user->getKey()])->sort()->values()->all())
         ->and($untouched->fresh()->credential->ownable_type)->toBeNull();
+});
+
+it('finishes every account attached by hand, past the first thousand', function () {
+    // each() pages by offset: an account adopted in one page leaves the
+    // query, and the next offset skipped as many still half-adopted ones.
+    $now = now();
+
+    foreach (array_chunk(range(1, 1050), 100) as $chunk) {
+        DB::table((new SocialToken)->getTable())->insert(array_map(fn (int $i) => [
+            'provider' => 'tiktok', 'provider_holder_id' => "tt-{$i}", 'purpose' => SocialToken::DEFAULT_PURPOSE,
+            'status' => 'active', 'created_at' => $now, 'updated_at' => $now,
+        ], $chunk));
+    }
+
+    $credentials = SocialToken::query()->pluck('id', 'provider_holder_id');
+
+    foreach (array_chunk(range(1, 1050), 100) as $chunk) {
+        DB::table((new SocialAccount)->getTable())->insert(array_map(fn (int $i) => [
+            'provider' => 'tiktok', 'provider_user_id' => "tt-{$i}", 'provider_holder_id' => "tt-{$i}",
+            'ownable_type' => $this->owner->getMorphClass(), 'ownable_id' => $this->owner->getKey(),
+            'social_token_id' => $credentials["tt-{$i}"], 'status' => 'active', 'created_at' => $now, 'updated_at' => $now,
+        ], $chunk));
+    }
+
+    UpgradeGuide::run(ATTACHED_BY_HAND, 'adopt(');
+
+    expect(SocialToken::ownedBy(null)->count())->toBe(0)
+        ->and(SocialToken::ownedBy($this->owner)->count())->toBe(1050);
 });

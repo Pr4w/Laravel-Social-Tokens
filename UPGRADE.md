@@ -248,7 +248,7 @@ $facebook = app(SocialTokens::class)->connector('facebook');
 
 SocialToken::where('provider', 'facebook')->where('status', 'active')
     ->whereHas('accounts', fn ($account) => $account->where('provider', 'instagram')) // not the Page tokens
-    ->each(function (SocialToken $token) use ($facebook) {
+    ->eachById(function (SocialToken $token) use ($facebook) {
         $data = $facebook->debugToken($token->access_token);
 
         if (! is_array($data)) {
@@ -556,7 +556,9 @@ a Facebook Page attached that way was no longer renewed. 3.0 adds
 `SocialTokens::adopt($account, $owner)` (see
 [README, Owners](README.md#owners)). Given an account that already belongs to
 the owner, it moves the owner-less credentials it depends on, so this
-finishes the accounts attached before:
+finishes the accounts attached before. It pages with `eachById()`: each
+adopted account leaves the query, and `each()`, which pages by offset, would
+skip some once there are more than a thousand.
 
 ```php
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -566,7 +568,7 @@ SocialAccount::query()
     ->whereNotNull('ownable_type')
     ->whereHas('credential', fn ($credential) => $credential->whereNull('ownable_type'))
     ->with('ownable')
-    ->each(function (SocialAccount $account) {
+    ->eachById(function (SocialAccount $account) {
         if ($account->ownable !== null) { // the owner still exists
             app(SocialTokens::class)->adopt($account, $account->ownable);
         }
@@ -804,7 +806,7 @@ use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 
 foreach ([SocialAccount::class, SocialToken::class] as $model) {
-    $model::query()->where('provider', 'linkedin')->whereNotNull('scopes')->each(function ($row) {
+    $model::query()->where('provider', 'linkedin')->whereNotNull('scopes')->eachById(function ($row) {
         if (($scopes = SocialToken::normaliseScopes($row->scopes)) !== null) {
             $row->forceFill(['scopes' => $scopes])->saveQuietly();
         }
@@ -1038,21 +1040,9 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
 - **Rotate your Meta and Threads app secrets** if your logs, `failed_jobs` or
   error tracker may hold `client_secret=`: up to 1.1, a connection failure put
   the request URL, query string included, in the renewal reason, and from
-  there in exceptions and `last_error`. Then redact the stored reasons, in
-  `php artisan tinker`:
-
-  ```php
-  use Pr4w\SocialTokens\Connectors\AbstractConnector;
-  use Pr4w\SocialTokens\Models\SocialAccount;
-  use Pr4w\SocialTokens\Models\SocialToken;
-
-  foreach ([SocialToken::class, SocialAccount::class] as $model) {
-      $model::query()->whereNotNull('last_error')->each(fn ($row) => $row
-          ->forceFill(['last_error' => AbstractConnector::redactQueryStrings($row->last_error)])
-          ->saveQuietly());
-  }
-  ```
-
+  there in exceptions and `last_error`. Redact the stored reasons once 3.0 is
+  deployed (see the one-off data fixes below): 1.1 keeps writing them
+  unredacted until then.
 - **Every provider you connect needs a connector** (breaking).
   `StoreConnection` and `StoreAccountFromSocialite` throw
   `InvalidArgumentException` for a provider without one (a missing key, or
@@ -1104,9 +1094,28 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
 - A LinkedIn organization the member holds only through a non-posting role
   is flagged at the member's next connect (`connectors.linkedin.posting_roles`).
 
-**One-off data fixes, where they apply** (in `php artisan tinker`, before
-3.0's first `social-tokens:prune`, which deletes credentials flagged
-`needs_reconnect` for 30 days):
+**One-off data fixes, where they apply** (in `php artisan tinker`, once 3.0
+is deployed and before its first `social-tokens:prune`, which deletes
+credentials flagged `needs_reconnect` for 30 days). They page with
+`eachById()`, not `each()`: `each()` pages by offset, and skips rows once a
+page's changes take rows out of the query.
+
+- Redact the request URLs 1.0 and 1.1 left in `last_error` (their query
+  strings can hold `client_secret=`). Run it after the deploy:
+  `redactQueryStrings()` first exists in 1.2, and 1.1 keeps writing
+  unredacted reasons until 3.0 is live.
+
+  ```php
+  use Pr4w\SocialTokens\Connectors\AbstractConnector;
+  use Pr4w\SocialTokens\Models\SocialAccount;
+  use Pr4w\SocialTokens\Models\SocialToken;
+
+  foreach ([SocialToken::class, SocialAccount::class] as $model) {
+      $model::query()->whereNotNull('last_error')->eachById(fn ($row) => $row
+          ->forceFill(['last_error' => AbstractConnector::redactQueryStrings($row->last_error)])
+          ->saveQuietly());
+  }
+  ```
 
 - Meta user credentials stored without `expires_at` and `renew_at` (Meta
   sent no `expires_in`, or `StoreInstagramAccounts` ran with `extend: false`)
@@ -1132,7 +1141,7 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
       ->where(fn ($query) => $query->where('last_error', 'like', 'invalid_client:%')
           ->orWhere('last_error', 'like', 'unauthorized_client:%')
           ->orWhere('last_error', 'like', 'invalid_request:%'))
-      ->each(function (SocialToken $token) {
+      ->eachById(function (SocialToken $token) {
           if (! preg_match('/refresh[\s_-]?token/i', (string) $token->last_error)) {
               $token->forceFill(['status' => AccountStatus::Active, 'last_error' => null, 'renew_at' => now()])->save();
           }
@@ -1146,7 +1155,7 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
   $registry = app(\Pr4w\SocialTokens\Support\ConnectorRegistry::class);
 
   SocialToken::where('status', 'active')->whereNotNull('refresh_expires_at')->whereNotNull('renew_at')
-      ->each(function (SocialToken $token) use ($registry) {
+      ->eachById(function (SocialToken $token) use ($registry) {
           if ($registry->has($token->provider)) {
               $warnAt = $token->refresh_expires_at->copy()->sub($registry->for($token->provider)->leadTime());
               $token->forceFill(['renew_at' => $token->renew_at->min($warnAt)])->save();
@@ -1165,13 +1174,17 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
     AND last_error = 'Organization no longer administered by the connected LinkedIn member.';
   ```
 
-- Optionally, normalise the scopes stored before 1.2 (leave Meta's `[]`
-  alone: it can be a real "none"):
+- Optionally, normalise the scopes stored before 1.2: split joined
+  elements, and turn `[""]` into `null` (unknown). An empty list is left
+  alone: Meta's `[]` can be a real "none".
 
   ```php
   foreach ([SocialAccount::class, SocialToken::class] as $model) {
-      $model::whereNotNull('scopes')->each(fn ($row) => $row
-          ->forceFill(['scopes' => SocialToken::normaliseScopes($row->scopes)])->saveQuietly());
+      $model::whereNotNull('scopes')->eachById(function ($row) {
+          if ($row->scopes !== [] && ($scopes = SocialToken::normaliseScopes($row->scopes)) !== $row->scopes) {
+              $row->forceFill(['scopes' => $scopes])->saveQuietly();
+          }
+      });
   }
   ```
 

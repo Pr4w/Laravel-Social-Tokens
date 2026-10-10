@@ -317,7 +317,13 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   repairing flagged rows) were only in the changelog, which the package did
   not ship. A 1.1 app following the guide kept static Meta credentials that
   died about 60 days later. The guide now has a "Coming from 1.0 or 1.1"
-  section, with redaction and reactivation snippets of its own.
+  section, with redaction and reactivation snippets of its own, run once 3.0
+  is deployed (1.1 has no `redactQueryStrings()`). Its snippets page with
+  `eachById()`, not `each()`, which pages by offset and, past the first
+  thousand rows, skips rows a page's own changes took out of the query. The
+  scopes clean-up in the 1.2 changelog turned Meta's known-empty `[]` into
+  `null` (unknown), against its own advice; the guide's leaves `[]` alone,
+  and a row the old one changed gets its list back at the next reconnect.
 - README: the OAuth routes used the connector key from the URL as the
   Socialite driver name, which broke two keys. `/oauth/instagram/redirect`
   threw "Driver [instagram] not supported" (Instagram through a Page logs in

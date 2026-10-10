@@ -9,28 +9,33 @@
  * the current schema.
  */
 
-use Pr4w\SocialTokens\Connectors\AbstractConnector;
+use Illuminate\Support\Facades\DB;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
 
-function upgradeGuide(): string
+const FROM_ONE = '### Coming from 1.0 or 1.1';
+
+/**
+ * Insert credentials 1.1 flagged for an app-side error, past the thousand
+ * rows Laravel's each() pages by.
+ */
+function flaggedForClientError(int $count): void
 {
-    return (string) file_get_contents(__DIR__.'/../../UPGRADE.md');
-}
+    $rows = array_map(fn (int $i) => [
+        'provider' => 'tiktok',
+        'provider_holder_id' => "tt-{$i}",
+        'purpose' => SocialToken::DEFAULT_PURPOSE,
+        'status' => AccountStatus::NeedsReconnect->value,
+        'last_error' => 'invalid_client: Client key or secret is incorrect.',
+        'created_at' => now(),
+        'updated_at' => now(),
+    ], range(1, $count));
 
-/** The text between $heading and the next heading of the same level or above. */
-function upgradeSection(string $heading): string
-{
-    $guide = upgradeGuide();
-    $start = strpos($guide, "\n{$heading}\n");
-
-    expect($start)->not->toBeFalse("UPGRADE.md has no [{$heading}] section.");
-
-    $level = strlen(strstr($heading, ' ', true));
-    preg_match('/\n#{1,'.$level.'} /', $guide, $next, PREG_OFFSET_CAPTURE, $start + strlen($heading) + 2);
-
-    return substr($guide, $start, ($next[0][1] ?? strlen($guide)) - $start);
+    foreach (array_chunk($rows, 100) as $chunk) {
+        DB::table((new SocialToken)->getTable())->insert($chunk);
+    }
 }
 
 it('ships the changelog and the upgrade guide in the dist archive', function () {
@@ -45,7 +50,7 @@ it('ships the changelog and the upgrade guide in the dist archive', function () 
 });
 
 it('walks 1.0 and 1.1 apps through the 1.2 changes', function () {
-    $section = upgradeSection('### Coming from 1.0 or 1.1');
+    $section = UpgradeGuide::section(FROM_ONE);
 
     foreach ([
         'Rotate your Meta and Threads app secrets',
@@ -64,8 +69,8 @@ it('walks 1.0 and 1.1 apps through the 1.2 changes', function () {
         expect($section)->toContain($step);
     }
 
-    expect(upgradeSection('## From 2.x to 3.0'))->toContain('[Coming from 1.0 or 1.1](#coming-from-10-or-11)')
-        ->and(upgradeSection('### 4. Behaviour changes to know'))->not->toContain('`validAccessTokenFor()` are unchanged.');
+    expect(UpgradeGuide::section('## From 2.x to 3.0'))->toContain('[Coming from 1.0 or 1.1](#coming-from-10-or-11)')
+        ->and(UpgradeGuide::section('### 4. Behaviour changes to know'))->not->toContain('`validAccessTokenFor()` are unchanged.');
 });
 
 it('redacts the secrets earlier versions left in last_error', function () {
@@ -74,12 +79,7 @@ it('redacts the secrets earlier versions left in last_error', function () {
     )->create();
     $account = SocialAccount::factory()->needsReconnect('Page no longer managed by the connected Facebook user.')->create();
 
-    // UPGRADE.md, "Coming from 1.0 or 1.1".
-    foreach ([SocialToken::class, SocialAccount::class] as $model) {
-        $model::query()->whereNotNull('last_error')->each(fn ($row) => $row
-            ->forceFill(['last_error' => AbstractConnector::redactQueryStrings($row->last_error)])
-            ->saveQuietly());
-    }
+    UpgradeGuide::run(FROM_ONE, 'redactQueryStrings');
 
     expect($credential->fresh()->last_error)->toBe('Connection error: cURL error 28 for https://graph.facebook.com/oauth/access_token?[redacted]')
         ->and($account->fresh()->last_error)->toBe('Page no longer managed by the connected Facebook user.');
@@ -90,19 +90,56 @@ it('reactivates the credentials 1.1 flagged for an app-side error', function () 
     $deadRefresh = SocialToken::factory()->forProvider('linkedin')->needsReconnect('invalid_request: The provided refresh token is invalid')->create();
     $deadGrant = SocialToken::factory()->forProvider('google')->needsReconnect('invalid_grant: Token has been expired or revoked.')->create();
 
-    // UPGRADE.md, "Coming from 1.0 or 1.1".
-    SocialToken::query()->where('status', AccountStatus::NeedsReconnect->value)
-        ->where(fn ($query) => $query->where('last_error', 'like', 'invalid_client:%')
-            ->orWhere('last_error', 'like', 'unauthorized_client:%')
-            ->orWhere('last_error', 'like', 'invalid_request:%'))
-        ->each(function (SocialToken $token) {
-            if (! preg_match('/refresh[\s_-]?token/i', (string) $token->last_error)) {
-                $token->forceFill(['status' => AccountStatus::Active, 'last_error' => null, 'renew_at' => now()])->save();
-            }
-        });
+    UpgradeGuide::run(FROM_ONE, 'invalid_client:%');
 
     expect($client->fresh()->status)->toBe(AccountStatus::Active)
         ->and($client->fresh()->isDueForRenewal())->toBeTrue()
         ->and($deadRefresh->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
         ->and($deadGrant->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+});
+
+it('reactivates every flagged credential, past the first thousand', function () {
+    // each() pages by offset: rows reactivated in one page leave the query,
+    // and the next offset skipped as many still flagged ones.
+    flaggedForClientError(1050);
+
+    UpgradeGuide::run(FROM_ONE, 'invalid_client:%');
+
+    expect(SocialToken::where('status', AccountStatus::NeedsReconnect->value)->count())->toBe(0)
+        ->and(SocialToken::where('status', AccountStatus::Active->value)->count())->toBe(1050);
+});
+
+it('redacts the stored reasons once 3.0 is deployed, not before', function () {
+    $section = UpgradeGuide::section(FROM_ONE);
+    $beforeDeploy = substr($section, strpos($section, '**Before you deploy:**'), strpos($section, '**What changed under your code:**') - strpos($section, '**Before you deploy:**'));
+    $oneOff = substr($section, strpos($section, '**One-off data fixes'));
+
+    // 1.0 and 1.1 have no redactQueryStrings(), and keep writing unredacted reasons until the deploy.
+    expect($beforeDeploy)->toContain('Rotate your Meta and Threads app secrets')
+        ->and($beforeDeploy)->not->toContain('redactQueryStrings')
+        ->and($oneOff)->toContain('redactQueryStrings');
+});
+
+it('normalises the scopes stored before 1.2, keeping Meta\'s known-empty ones', function () {
+    $none = SocialAccount::factory()->forProvider('facebook')->create(['scopes' => []]);
+    $joined = SocialToken::factory()->forProvider('linkedin')->create(['scopes' => ['email,openid profile', 'w_member_social']]);
+    $blank = SocialToken::factory()->forProvider('tiktok')->create(['scopes' => ['']]);
+    $clean = SocialAccount::factory()->forProvider('tiktok')->create(['scopes' => ['video.publish']]);
+
+    UpgradeGuide::run(FROM_ONE, 'normaliseScopes');
+
+    expect($none->fresh()->scopes)->toBe([])
+        ->and($none->fresh()->scopesKnown())->toBeTrue()
+        ->and($joined->fresh()->scopes)->toBe(['email', 'openid', 'profile', 'w_member_social'])
+        ->and($blank->fresh()->scopes)->toBeNull()
+        ->and($clean->fresh()->scopes)->toBe(['video.publish']);
+});
+
+it('pages by id in every guide block that walks a table', function () {
+    // A block that changes the rows its query selects skips some with each().
+    preg_match_all('/```php\n(.*?)```/s', UpgradeGuide::text(), $blocks);
+
+    foreach ($blocks[1] as $block) {
+        expect($block)->not->toMatch('/\)\s*->each\((fn|function) \((SocialToken|SocialAccount|\$row)/');
+    }
 });
