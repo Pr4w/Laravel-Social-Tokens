@@ -942,8 +942,13 @@ add some, a throttle for instance, in `callbacks.middleware`, and move them with
   `{code}`; without `{code}`, `?code=` is appended).
 
 To place the routes yourself, leave `enabled` off and call
-`Pr4w\SocialTokens\Support\CallbackRoutes::register()` from your routes file, or
-call the actions from your own controllers:
+`Pr4w\SocialTokens\Support\CallbackRoutes::register()` from your routes file,
+outside a group that prefixes route names. Its two POST routes skip CSRF
+verification themselves, so `routes/web.php` will do: the `web` group would
+otherwise refuse every Meta POST with a 419 before it is verified. Or
+call the actions from your own controllers, from a route that skips CSRF
+verification (`->withoutMiddleware(VerifyCsrfToken::class)`, or
+`validateCsrfTokens(except: [...])` in `bootstrap/app.php`):
 `app(HandleDeauthorizeCallback::class)->handle($provider, $signedRequest)` and
 `app(HandleDataDeletionCallback::class)->handle($provider, $signedRequest)`.
 Calling `purgeExternalUser()` yourself, pass it a closure as third argument to

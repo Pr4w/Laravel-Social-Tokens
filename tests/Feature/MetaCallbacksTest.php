@@ -1,10 +1,12 @@
 <?php
 
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 use Pr4w\SocialTokens\Actions\HandleDataDeletionCallback;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountRevoked;
@@ -222,6 +224,25 @@ it('registers no route unless enabled', function () {
 
     expect(app('router')->has('social-tokens.callbacks.deauthorize'))->toBeTrue()
         ->and(route('social-tokens.callbacks.delete', ['provider' => 'facebook'], false))->toBe('/social-tokens/meta/facebook/delete');
+});
+
+it('takes Meta\'s posts in an app\'s web routes file, which checks CSRF tokens Meta never sends', function () {
+    // routes/web.php is loaded inside the `web` group: placed there as the
+    // README says, the callbacks answered every Meta POST with a 419.
+    Route::middleware('web')->group(fn () => CallbackRoutes::register());
+    app('router')->getRoutes()->refreshNameLookups();
+    $this->app['env'] = 'production'; // the CSRF check skips the testing environment
+    $rows = metaConnection('user-1');
+
+    $this->post('/social-tokens/meta/facebook/deauthorize', ['signed_request' => signedFor('user-1')])->assertOk();
+
+    expect($rows['user']->fresh()->status)->toBe(AccountStatus::Revoked);
+
+    foreach (['deauthorize', 'delete'] as $name) {
+        $middleware = app('router')->gatherRouteMiddleware(app('router')->getRoutes()->getByName("social-tokens.callbacks.{$name}"));
+
+        expect(collect($middleware)->contains(fn ($class) => is_string($class) && is_a($class, VerifyCsrfToken::class, true)))->toBeFalse();
+    }
 });
 
 it('revokes the user named by a verified deauthorize callback', function () {

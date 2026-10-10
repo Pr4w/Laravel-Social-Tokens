@@ -137,7 +137,8 @@ they add.
     (none); `callbacks.deletion_status_url` points the answer at the app's
     own page (`{provider}` and `{code}` in it are replaced; without `{code}`,
     `?code=` is appended). `Support\CallbackRoutes::register()` registers
-    them anywhere.
+    them anywhere, `routes/web.php` included: the POST routes skip CSRF
+    verification, since Meta sends no token.
   - `Support\MetaSignedRequest::parse($signedRequest, $secret)` (and
     `make()`), which reads nothing in the payload before its signature
     checks out, `Exceptions\InvalidSignedRequestException`, and the
