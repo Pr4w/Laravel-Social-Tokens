@@ -15,6 +15,7 @@ use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
 use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
@@ -192,6 +193,33 @@ it('moves the rows of a 2.x Instagram Login subclass to instagram_login with the
         ->and($login->fresh()->credential->provider)->toBe('instagram_login')
         ->and($throughPage->fresh()->provider)->toBe('instagram')
         ->and($throughPage->fresh()->credential->provider)->toBe('facebook');
+});
+
+it('enters a Meta action bound in the container through storeConnection(), not handle(), as UPGRADE says', function () {
+    fakeRoutingGraph();
+    $pages = new class(app(ConnectorRegistry::class)) extends StoreFacebookPages
+    {
+        public array $entered = [];
+
+        public function handle(#[SensitiveParameter] string $userToken, ?Model $owner = null, ?Model $connectedBy = null, ?string $userId = null, bool $extend = true, bool $restoreDisconnected = false): Collection
+        {
+            $this->entered[] = 'handle';
+
+            return parent::handle($userToken, $owner, $connectedBy, $userId, $extend, $restoreDisconnected);
+        }
+
+        public function storeConnection(string $provider, #[SensitiveParameter] SocialiteUser $user, ?Model $owner = null, ?Model $connectedBy = null, bool $longLived = true, ?CarbonInterface $refreshExpiresAt = null, bool $restoreDisconnected = false): Collection
+        {
+            $this->entered[] = 'storeConnection';
+
+            return parent::storeConnection($provider, $user, $owner, $connectedBy, $longLived, $refreshExpiresAt, $restoreDisconnected);
+        }
+    };
+    app()->instance(StoreFacebookPages::class, $pages);
+
+    app(StoreConnection::class)->handle('facebook', socialiteUser(['id' => 'user-1']));
+
+    expect($pages->entered)->toBe(['storeConnection']);
 });
 
 it('stores a 1:1 provider through StoreAccountFromSocialite as before', function () {

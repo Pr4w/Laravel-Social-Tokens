@@ -382,9 +382,10 @@ invalidate the token.
 
 #### Store connections through the connector
 
-For apps calling the `Store*` actions with options, or `StoreAccountFromSocialite`
-for Meta. `StoreConnection` now asks the connector which action stores a
-connection (`Contracts\FansOutConnections`), and passes every option to it.
+For apps calling the `Store*` actions with options, extending them, or calling
+`StoreAccountFromSocialite` for Meta. `StoreConnection` now asks the connector
+which action stores a connection (`Contracts\FansOutConnections`), and passes
+every option to it.
 
 1. **`longLived: false` reaches Facebook and Instagram.** 2.x ignored it for
    those two providers and always exchanged the user token for a long-lived
@@ -412,6 +413,23 @@ connection (`Contracts\FansOutConnections`), and passes every option to it.
    fan-out; one that returns `StoreAccountFromSocialite::class` stores one
    account per connection instead, through `StoreConnection` and
    `StoreAccountFromSocialite` alike.
+5. **If you extend a `Store*` action** (bound in the container in place of
+   the package's, to add checks, auditing or fields):
+   - an override of `handle()` must declare the parameters 3.0 added at the
+     end, or PHP stops with "Declaration of ...::handle(...) must be
+     compatible with ...": `bool $restoreDisconnected = false` on
+     `StoreFacebookPages`, `StoreInstagramAccounts` and
+     `StoreLinkedInOrganizations`, `?CarbonInterface $refreshExpiresAt = null`
+     on `StoreAccountFromSocialite`. Mark a parameter that carries a token
+     `#[\SensitiveParameter]`, as the package's are.
+   - `StoreConnection` no longer calls `StoreFacebookPages::handle()` nor
+     `StoreInstagramAccounts::handle()`: it calls their `storeConnection()`
+     (`Contracts\StoresConnections`), so an override of `handle()` alone
+     runs only where your code calls it, and silently not for
+     `StoreConnection`. Override `storeConnection()` too, or move the
+     customisation to an `AccountConnected` listener, which every path fires.
+     `StoreAccountFromSocialite::storeConnection()` still goes through its
+     `handle()`.
 
 #### Instagram Login through a subclass of `InstagramConnector`
 

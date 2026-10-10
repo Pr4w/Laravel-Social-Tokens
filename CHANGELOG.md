@@ -491,7 +491,13 @@ they add.
   for `FacebookConnector` and `InstagramConnector`; a subclass of either
   inherits its action. Its constructor takes the `ConnectorRegistry`, the
   container and `StoreAccountFromSocialite`, no longer the two Meta actions:
-  resolve it from the container
+  resolve it from the container. It enters `StoreFacebookPages` and
+  `StoreInstagramAccounts` through `storeConnection()`, not `handle()`: a
+  subclass bound in their place whose `handle()` adds checks or fields no
+  longer runs them for `StoreConnection`. And `handle()` gained trailing
+  parameters (`restoreDisconnected` on the three fan-out actions,
+  `refreshExpiresAt` on `StoreAccountFromSocialite`): an override with the 2.x
+  signature no longer loads
   ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
 - **(breaking)** `social-tokens:dispatch-renewals` unschedules a due credential
   no active account depends on (`renew_at` null) instead of leaving it due,
