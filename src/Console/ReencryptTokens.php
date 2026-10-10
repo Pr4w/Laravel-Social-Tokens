@@ -22,9 +22,11 @@ use Pr4w\SocialTokens\Models\SocialToken;
  * since such a write may have left a token under the old key (a Google
  * renewal rewrites only the access token). A row still changing after a few
  * attempts fails the command, as does a token no key decrypts, which is
- * logged and left: put its key back in APP_PREVIOUS_KEYS, or let the user
- * reconnect (its next renewal or publish flags it needs_reconnect, and a
- * reconnect writes a new token over it).
+ * logged and left: put its key back in APP_PREVIOUS_KEYS, or, when the key
+ * is truly lost, run the command with --flag-undecryptable to flag those
+ * credentials needs_reconnect, so their users are asked to reconnect (a
+ * reconnect writes a new token over them). Nothing else flags them: a token
+ * that does not decrypt is usually a process with the wrong key.
  */
 class ReencryptTokens extends Command
 {
@@ -33,19 +35,28 @@ class ReencryptTokens extends Command
     /** Writes tried on a row before it counts as changing under the command. */
     private const ATTEMPTS = 3;
 
-    protected $signature = 'social-tokens:reencrypt';
+    protected $signature = 'social-tokens:reencrypt
+                            {--flag-undecryptable : Flag needs_reconnect the credentials no key decrypts, so their users are asked to reconnect}';
 
     protected $description = 'Re-encrypt every stored token with the current APP_KEY, so the previous keys can be retired.';
 
     public function handle(): int
     {
-        $counts = ['rewritten' => 0, 'current' => 0, 'changed' => 0, 'failed' => 0, 'gone' => 0];
+        $counts = ['rewritten' => 0, 'current' => 0, 'changed' => 0, 'failed' => 0, 'gone' => 0, 'flagged' => 0];
+        $flag = (bool) $this->option('flag-undecryptable');
 
         SocialToken::query()
             ->where(fn ($query) => $query->whereNotNull('access_token')->orWhereNotNull('refresh_token'))
             ->lazyById(200)
-            ->each(function (SocialToken $token) use (&$counts) {
-                $counts[$this->rewrite($token)]++;
+            ->each(function (SocialToken $token) use (&$counts, $flag) {
+                $outcome = $this->rewrite($token);
+
+                // Pinned to the ciphertext read: a reconnect meanwhile is kept.
+                if ($outcome === 'failed' && $flag && $token->markNeedsReconnectIfStillHeld(SocialToken::UNDECRYPTABLE)) {
+                    $outcome = 'flagged';
+                }
+
+                $counts[$outcome]++;
             });
 
         $this->info("Re-encrypted {$counts['rewritten']} credential(s); {$counts['current']} already used the current key.");
@@ -54,8 +65,12 @@ class ReencryptTokens extends Command
             $this->error("{$counts['changed']} credential(s) changed while being re-encrypted; run the command again.");
         }
 
+        if ($counts['flagged'] > 0) {
+            $this->warn("Flagged {$counts['flagged']} credential(s) needs_reconnect: no key decrypts them, their users must reconnect.");
+        }
+
         if ($counts['failed'] > 0) {
-            $this->error("{$counts['failed']} credential(s) could not be decrypted with APP_KEY or APP_PREVIOUS_KEYS; see the log. Keep the previous key until they are reconnected.");
+            $this->error("{$counts['failed']} credential(s) could not be decrypted with APP_KEY or APP_PREVIOUS_KEYS; see the log. Put their key back in APP_PREVIOUS_KEYS, or run again with --flag-undecryptable to ask their users to reconnect.");
         }
 
         return $counts['changed'] > 0 || $counts['failed'] > 0 ? self::FAILURE : self::SUCCESS;

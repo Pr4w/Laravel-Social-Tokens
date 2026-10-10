@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Encryption\Encrypter;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -13,11 +14,11 @@ use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
+use Pr4w\SocialTokens\Exceptions\TransientRenewalException;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
-use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
 
 /*
  * A credential written under an APP_KEY that is gone (not in
@@ -26,11 +27,11 @@ use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
  * paths decrypted the stored row before writing over it (to keep a known
  * refresh token, to compare a re-synced token, and in Eloquent's dirty check
  * without previous keys), so every reconnect threw DecryptException and
- * changed nothing. And each renewal threw it too, was reported, and was
- * rescheduled 15 minutes later for good, never flagging the credential:
- * no CredentialNeedsReconnect ever asked the user to reconnect, and
- * validAccessTokenFor() threw DecryptException instead of
- * NeedsReconnectException.
+ * changed nothing. And each renewal and publish threw DecryptException out of
+ * the package and into the error tracker. A key problem is the operator's: it
+ * is now retried and alerted (Log::critical), never flagged on its own, and
+ * the operator flags the truly lost credentials with
+ * social-tokens:reencrypt --flag-undecryptable.
  */
 
 /** Write the credential's tokens as ciphertext of a key the app no longer has. */
@@ -130,33 +131,56 @@ function undecryptableDueCredential(): SocialAccount
     return $account->fresh();
 }
 
-it('flags a credential that no longer decrypts when its renewal comes due, once, and reports nothing', function () {
+/** Critical log lines written from now on. */
+function undecryptableCriticalLogs(): ArrayObject
+{
+    $logs = new ArrayObject;
+
+    Event::listen(MessageLogged::class, function (MessageLogged $log) use ($logs) {
+        if ($log->level === 'critical') {
+            $logs->append($log->message);
+        }
+    });
+
+    return $logs;
+}
+
+// A key problem is the operator's, not the user's ------------------------------
+//
+// A token that does not decrypt usually means a process runs with the wrong
+// APP_KEY (a rotation still rolling out, a misconfigured worker): asking every
+// user it touches to reconnect would be wrong, and could not be taken back.
+// It is retried and alerted, never flagged on its own; the operator flags
+// the truly lost ones with social-tokens:reencrypt --flag-undecryptable.
+
+it('keeps a credential that no longer decrypts active when its renewal comes due, and alerts the operator', function () {
     Http::preventStrayRequests();
     Exceptions::fake();
     Event::fake([CredentialNeedsReconnect::class]);
+    $alerts = undecryptableCriticalLogs();
     $credential = undecryptableDueCredential()->credential;
 
-    RenewCredential::dispatchSync($credential);
-    RenewCredential::dispatchSync($credential);
+    expect(fn () => RenewCredential::dispatchSync($credential))->toThrow(TransientRenewalException::class);
 
-    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
-        ->and($credential->fresh()->last_error)->toContain('APP_KEY');
+    expect($credential->fresh()->status)->toBe(AccountStatus::Active)
+        ->and($alerts->count())->toBeGreaterThan(0)
+        ->and(implode("\n", $alerts->getArrayCopy()))->toContain('APP_KEY');
 
-    Event::assertDispatchedTimes(CredentialNeedsReconnect::class, 1);
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
     Exceptions::assertNothingReported();
 });
 
-it('returns a terminal renewal for a credential that no longer decrypts, without calling the provider', function () {
+it('returns a transient renewal for a credential that no longer decrypts, without calling the provider', function () {
     Http::preventStrayRequests();
     $credential = undecryptableDueCredential()->credential;
 
     $result = app(SocialTokens::class)->renewCredential($credential);
 
-    expect($result->outcome)->toBe(RenewalOutcome::Terminal)
+    expect($result->outcome)->toBe(RenewalOutcome::Transient)
         ->and($result->reason)->toContain('APP_KEY');
 });
 
-it('asks the user to reconnect, rather than throw DecryptException, when publishing with a credential that no longer decrypts', function (bool $expired) {
+it('tells the publisher to retry, not to reconnect, when a credential no longer decrypts', function (bool $expired) {
     Http::preventStrayRequests();
     Event::fake([CredentialNeedsReconnect::class]);
     $account = undecryptableDueCredential();
@@ -171,20 +195,59 @@ it('asks the user to reconnect, rather than throw DecryptException, when publish
         app(SocialTokens::class)->validAccessTokenFor($account);
         $this->fail('No NeedsReconnectException.');
     } catch (NeedsReconnectException $e) {
-        expect($e->transient)->toBeFalse();
+        expect($e->transient)->toBeTrue()
+            ->and($e->getMessage())->toContain('APP_KEY');
     }
 
-    expect($account->credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
-    Event::assertDispatchedTimes(CredentialNeedsReconnect::class, 1);
+    expect($account->credential->fresh()->status)->toBe(AccountStatus::Active);
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
 })->with(['token still valid' => false, 'token expired' => true]);
 
-it('flags a credential that no longer decrypts when a rejection is reported for it', function (bool $terminal) {
+it('does not flag a credential that no longer decrypts when a rejection is reported for it', function (bool $terminal) {
     Http::preventStrayRequests();
     $account = undecryptableDueCredential();
 
-    expect(app(SocialTokens::class)->reportRejected($account, 'Rejected at publish.', terminal: $terminal, rejectedToken: 'old-access'))->toBeTrue()
-        ->and($account->credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+    expect(app(SocialTokens::class)->reportRejected($account, 'Rejected at publish.', terminal: $terminal, rejectedToken: 'old-access'))->toBeFalse()
+        ->and($account->credential->fresh()->status)->toBe(AccountStatus::Active);
 })->with(['terminal' => true, 'to check' => false]);
+
+it('leaves every credential alone when a worker runs with the wrong APP_KEY', function () {
+    Http::preventStrayRequests();
+    Event::fake([CredentialNeedsReconnect::class]);
+    $right = config('app.key');
+    $credential = SocialAccount::factory()->forProvider('google')->credential(fn ($credential) => $credential->dueForRenewal())->create()->credential;
+
+    // A worker started with another APP_KEY.
+    config(['app.key' => 'base64:'.base64_encode(random_bytes(32))]);
+    usePreviousKeys(false);
+    rescue(fn () => RenewCredential::dispatchSync($credential), report: false);
+
+    config(['app.key' => $right]);
+    usePreviousKeys(false);
+
+    expect($credential->fresh()->status)->toBe(AccountStatus::Active);
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
+});
+
+it('flags the credentials no key decrypts only when the operator asks reencrypt to', function () {
+    Event::fake([CredentialNeedsReconnect::class]);
+    $lost = undecryptableDueCredential()->credential;
+    $readable = SocialAccount::factory()->forProvider('tiktok')->create()->credential;
+
+    $this->artisan('social-tokens:reencrypt')->assertFailed();
+
+    expect($lost->fresh()->status)->toBe(AccountStatus::Active);
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
+
+    $this->artisan('social-tokens:reencrypt', ['--flag-undecryptable' => true])
+        ->expectsOutputToContain('Flagged 1 credential(s) needs_reconnect')
+        ->assertSuccessful();
+
+    expect($lost->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
+        ->and($lost->fresh()->last_error)->toBe(SocialToken::UNDECRYPTABLE)
+        ->and($readable->fresh()->status)->toBe(AccountStatus::Active);
+    Event::assertDispatchedTimes(CredentialNeedsReconnect::class, 1);
+});
 
 it('does not flag a credential a reconnect made readable while the renewal ran', function () {
     $credential = undecryptableDueCredential()->credential;
@@ -195,26 +258,4 @@ it('does not flag a credential a reconnect made readable while the renewal ran',
 
     expect($stale->markNeedsReconnectIfStillHeld('Its tokens no longer decrypt.'))->toBeFalse()
         ->and($credential->fresh()->status)->toBe(AccountStatus::Active);
-});
-
-it('lets the operator reactivate, with the UPGRADE snippet, the credentials a process with the wrong key flagged', function () {
-    Http::preventStrayRequests();
-    $right = config('app.key');
-    $credential = SocialAccount::factory()->forProvider('google')->credential(fn ($credential) => $credential->dueForRenewal())->create()->credential;
-    $flaggedOtherwise = SocialToken::factory()->needsReconnect('The provider rejected the token.')->create();
-
-    // A worker started with another APP_KEY.
-    config(['app.key' => 'base64:'.base64_encode(random_bytes(32))]);
-    usePreviousKeys(false);
-    RenewCredential::dispatchSync($credential);
-
-    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
-
-    config(['app.key' => $right]);
-    usePreviousKeys(false);
-    UpgradeGuide::run('#### Rotating `APP_KEY` (optional)', 'UNDECRYPTABLE');
-
-    expect($credential->fresh()->status)->toBe(AccountStatus::Active)
-        ->and($credential->fresh()->isDueForRenewal())->toBeTrue()
-        ->and($flaggedOtherwise->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
 });

@@ -74,11 +74,15 @@ every token not under the current key and can be run again. Renewals and
 reconnects can go on meanwhile: a row they change is read again and
 rewritten, and a renewal in flight keeps its result. It exits with a failure
 code when a credential kept changing under it (run it again), and when some
-token decrypts with none of the keys, which it logs: keep the previous key
-until those users reconnect. A token that decrypts with none of the keys
-cannot be renewed nor posted with: its next renewal or publish flags its
-credential `needs_reconnect` (`CredentialNeedsReconnect`, `last_error`
-`SocialToken::UNDECRYPTABLE`), and a reconnect replaces it.
+token decrypts with none of the keys, which it logs: put its key back in
+`APP_PREVIOUS_KEYS`. A token that decrypts with none of a process's keys is
+treated as that process's key problem, never the user's: its renewals and
+publishes fail as transient (`NeedsReconnectException` with `transient`) and
+a `Log::critical` alerts you, but nothing flags it, so a worker started with
+the wrong key cannot get every user asked to reconnect. When the key is truly
+lost, run `php artisan social-tokens:reencrypt --flag-undecryptable`: it flags
+those credentials `needs_reconnect` (`CredentialNeedsReconnect`, `last_error`
+`SocialToken::UNDECRYPTABLE`), and the users' reconnects replace them.
 
 ### Owners
 

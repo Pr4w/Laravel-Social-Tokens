@@ -71,7 +71,7 @@ class SocialToken extends Model
     public const DEFAULT_PURPOSE = '';
 
     /** The reason a credential whose tokens no longer decrypt is flagged with. */
-    public const UNDECRYPTABLE = 'The stored token no longer decrypts with APP_KEY or APP_PREVIOUS_KEYS: reconnect, or put back the key it was encrypted with.';
+    public const UNDECRYPTABLE = 'The stored token no longer decrypts with APP_KEY or APP_PREVIOUS_KEYS: put back the key it was encrypted with, or run social-tokens:reencrypt --flag-undecryptable to ask its users to reconnect.';
 
     protected $guarded = [];
 

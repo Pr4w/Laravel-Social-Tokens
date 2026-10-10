@@ -683,9 +683,9 @@ three things:
      instead of `markNeedsReconnect($result->reason)`. `renewCredential()`
      reloads the `$token` you pass under the lock, so it holds the token the
      provider refused, and a credential the user reconnected meanwhile is left
-     alone. Do not read `$token->access_token` for it: a credential whose
-     tokens no longer decrypt (an `APP_KEY` that is gone) is a Terminal result
-     too (`SocialToken::UNDECRYPTABLE`), and reading its token throws
+     alone. A credential whose tokens do not decrypt with the process's keys
+     is a Transient result (`SocialToken::UNDECRYPTABLE`, a critical log, no
+     provider call): do not read `$token->access_token` for it, that throws
      `DecryptException`.
    - `applyRenewal()` now writes only while the stored credential still holds
      the access and refresh tokens the instance was loaded with (the same
@@ -1308,18 +1308,14 @@ queue workers), run `php artisan social-tokens:reencrypt`, then drop the old
 key once it exits successfully. When it fails because credentials changed
 while it ran, run it again. See the README, "Rotating APP_KEY".
 
-A token no key decrypts any more is no longer stuck: its renewal, a publish
-(`validAccessTokenFor()`) or a rejection report flags its credential
-`needs_reconnect`, firing `CredentialNeedsReconnect` with `last_error` set to
-`SocialToken::UNDECRYPTABLE`, and the user's reconnect replaces it (2.x threw
-`DecryptException` from all of these, the reconnect included). A process
-started with the wrong `APP_KEY` flags the credentials it renews or posts
-with that way: once the right key is back, reactivate them:
-
-```php
-SocialToken::query()->where('status', 'needs_reconnect')->where('last_error', SocialToken::UNDECRYPTABLE)
-    ->update(['status' => 'active', 'last_error' => null, 'renew_at' => now()]);
-```
+A token no key decrypts any more is no longer stuck. A reconnect writes over
+it (2.x threw `DecryptException`, the reconnect included). Its renewals and
+publishes fail as transient and raise a `Log::critical`, but nothing flags it
+on its own: it is usually a process with the wrong `APP_KEY`, and the user
+cannot fix that. When the key is truly lost, run
+`php artisan social-tokens:reencrypt --flag-undecryptable` to flag those
+credentials `needs_reconnect` (`CredentialNeedsReconnect`, `last_error`
+`SocialToken::UNDECRYPTABLE`), so their users are asked to reconnect.
 
 #### Testing helpers
 

@@ -213,7 +213,9 @@ they add.
   and a renewal in flight still stores its result over the rewritten tokens
   (for TikTok and X, the only copy of the rotated refresh token). It exits
   with a failure code when a row kept changing (run it again), and when a
-  token decrypts with none of the keys, which it logs and leaves.
+  token decrypts with none of the keys, which it logs and leaves; with
+  `--flag-undecryptable` it flags those credentials `needs_reconnect` instead,
+  for keys that are truly lost.
 - `SocialTokens::forgetOwner(Model $owner)` tears down what an owner holds,
   for when the owner itself is deleted: its credentials are revoked (tokens
   erased, the provider called unless another owner still holds a grant for
@@ -334,8 +336,8 @@ they add.
   `renewCredential()`. `holdsAccessToken($token)` compares a token with the
   stored one, `canDecrypt($column)` and `tokensDecrypt()` say whether the
   tokens decrypt with `APP_KEY` or `APP_PREVIOUS_KEYS`, and
-  `SocialToken::UNDECRYPTABLE` is the reason a credential that no longer
-  decrypts is flagged with (see Fixed).
+  `SocialToken::UNDECRYPTABLE` is the reason given for a credential that no
+  longer decrypts (see Fixed).
 - `AbstractConnector::renewalStrategyFor(SocialToken $token)`: the strategy for
   one credential, `renewalStrategy()` by default. `LinkedInConnector` returns
   `ReauthOnly` for a credential without a refresh token (see Fixed).
@@ -723,16 +725,14 @@ they add.
   it, and forget a refresh token nobody can read, with its expiry. Each of its
   renewals threw too, was reported, and was rescheduled 15 minutes later, for
   good, while the credential stayed `active`; `validAccessTokenFor()` and
-  `reportRejected()` threw `DecryptException`. The renewal (`renewCredential()`
-  returns a Terminal result, with no provider call), `validAccessTokenFor()`
-  (a non-transient `NeedsReconnectException`) and `reportRejected()` now flag
-  it `needs_reconnect`, once, with `last_error` set to
-  `SocialToken::UNDECRYPTABLE`, so `CredentialNeedsReconnect` asks the user to
-  reconnect. A process running with the wrong `APP_KEY` flags each credential
-  it renews or posts with the same way: once the right key is back, reactivate
-  them with `SocialToken::where('status', 'needs_reconnect')->where('last_error',
-  SocialToken::UNDECRYPTABLE)->update(['status' => 'active', 'last_error' =>
-  null, 'renew_at' => now()])`.
+  `reportRejected()` threw `DecryptException`. Now `renewCredential()` returns
+  a Transient result with no provider call, `validAccessTokenFor()` throws a
+  transient `NeedsReconnectException`, `reportRejected()` returns false, and a
+  `Log::critical` (at most every 15 minutes) alerts the operator, all with the
+  reason `SocialToken::UNDECRYPTABLE`. Nothing flags such a credential on its
+  own: it is usually a process with the wrong `APP_KEY`, which must not get
+  every user it touches asked to reconnect. For keys that are truly lost,
+  `social-tokens:reencrypt --flag-undecryptable` flags them `needs_reconnect`.
 - Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade):
   - It can be run again after failing partway. On MySQL and SQLite a failure (a
     lost connection, a timeout, a rejected key) left the owner columns added and

@@ -73,8 +73,9 @@ class SocialTokens
      * holds the token the provider refused: flag it with
      * $token->markNeedsReconnectIfStillHeld($result->reason), so that a
      * credential reconnected meanwhile is not flagged. A credential whose
-     * tokens no longer decrypt (written under an APP_KEY that is gone) is a
-     * Terminal result too, SocialToken::UNDECRYPTABLE, with no provider call.
+     * tokens do not decrypt with this process's keys is a Transient result,
+     * SocialToken::UNDECRYPTABLE, with no provider call and a critical log:
+     * a key problem is the operator's, never flagged on its own.
      *
      * Call it outside your own database transaction: there the row stays
      * locked until the transaction ends, and a rollback discards the renewed
@@ -141,11 +142,14 @@ class SocialTokens
                     return RenewalResult::terminalFailure("Credential is {$token->status->value}.");
                 }
 
-                // Written under an APP_KEY that is gone: nothing can renew it,
-                // and each attempt threw DecryptException, reported and
-                // rescheduled for good. Only a reconnect brings it back.
+                // Does not decrypt: most often a process running with the wrong
+                // APP_KEY (a rotation rolling out, a misconfigured worker). The
+                // operator's problem, not the user's: retried and alerted, never
+                // flagged on its own (reencrypt --flag-undecryptable does that).
                 if (! $token->tokensDecrypt()) {
-                    return RenewalResult::terminalFailure(SocialToken::UNDECRYPTABLE);
+                    $this->alertUndecryptable($token);
+
+                    return RenewalResult::transientFailure(SocialToken::UNDECRYPTABLE, ['undecryptable' => true]);
                 }
 
                 // Another process may have renewed while we waited for the lock:
@@ -302,8 +306,10 @@ class SocialTokens
         try {
             $accessToken = $token->getAttribute('access_token');
         } catch (DecryptException) {
-            // Written under an APP_KEY that is gone: nothing can post with it.
-            $this->flagRefused($account, $token, SocialToken::UNDECRYPTABLE);
+            // The operator's key problem, not the user's: retry, never flag.
+            $this->alertUndecryptable($token);
+
+            throw NeedsReconnectException::transient($account, SocialToken::UNDECRYPTABLE);
         }
 
         if (! $token->isAccessTokenExpired($minValiditySeconds) && $accessToken !== null) {
@@ -1010,10 +1016,12 @@ class SocialTokens
             return false;
         }
 
-        // Written under an APP_KEY that is gone: dead whatever the rejection
-        // says, and reading it to compare or check would throw.
+        // Unreadable with this process's keys: the rejection may well come
+        // from that, not from the user. Alert the operator, flag nothing.
         if (! $token->tokensDecrypt()) {
-            return $token->markNeedsReconnectIfStillHeld(SocialToken::UNDECRYPTABLE);
+            $this->alertUndecryptable($token);
+
+            return false;
         }
 
         if ($terminal) {
@@ -1102,6 +1110,20 @@ class SocialTokens
             'reason' => $result->reason,
             'context' => $result->context,
         ]);
+    }
+
+    /**
+     * A credential whose tokens do not decrypt with this process's keys:
+     * alert the operator, at most once every 15 minutes across credentials.
+     */
+    protected function alertUndecryptable(SocialToken $token): void
+    {
+        if (Cache::add('social-tokens:undecryptable-alert', true, now()->addMinutes(15))) {
+            Log::critical('[social-tokens] A stored token does not decrypt with APP_KEY or APP_PREVIOUS_KEYS. Check this process\'s APP_KEY; for tokens whose key is truly lost, run social-tokens:reencrypt --flag-undecryptable.', [
+                'provider' => $token->provider,
+                'token_id' => $token->getKey(),
+            ]);
+        }
     }
 
     protected function lockKey(SocialToken $token): string
