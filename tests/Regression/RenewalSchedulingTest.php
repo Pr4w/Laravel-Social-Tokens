@@ -420,3 +420,19 @@ it('renews a Google credential before it expires on the default dispatch schedul
     // not the synchronous 30s fallback in validAccessTokenFor(), keeps it alive.
     expect(min($margins))->toBeGreaterThan(60, 'Validity left at each scheduled renewal: '.json_encode($margins));
 });
+
+it('flags, rather than renews, an unscheduled Meta user credential at its first publish once its token has expired', function () {
+    // An account made active by hand, its credential left unscheduled by the
+    // dispatcher: the docs once said validAccessTokenFor() would renew it at
+    // expiry. An expired Meta token cannot be extended; set renew_at instead.
+    Http::fake(['graph.facebook.com/*' => Http::response(['error' => [
+        'message' => 'Error validating access token: Session has expired.', 'type' => 'OAuthException', 'code' => 190, 'error_subcode' => 463,
+    ]], 400)]);
+    $account = SocialAccount::factory()->forProvider('instagram')->heldBy('fb-1')
+        ->credential(['expires_at' => now()->subMinute(), 'renew_at' => null, 'refresh_token' => null])->create();
+
+    expect(fn () => app(SocialTokens::class)->validAccessTokenFor($account))
+        ->toThrow(fn (NeedsReconnectException $e) => expect($e->transient)->toBeFalse());
+
+    expect($account->credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+});

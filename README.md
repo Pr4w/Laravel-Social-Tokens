@@ -914,8 +914,11 @@ the credential is left as is.
 
 A credential nothing will use again is removed. When its renewal comes due
 and no active account depends on it, the dispatcher unschedules it
-(`renew_at` null) rather than renew it; a reconnect, or a re-sync of LinkedIn
-organizations with the stored member token, schedules it again. A daily
+(`renew_at` null) rather than renew it; a reconnect, a re-sync with the
+stored token (LinkedIn organizations, or Facebook Pages and Instagram accounts
+with `extend: false`), or an `adopt()` that moves it, schedules it again. Nothing else does:
+an account you make active again by hand needs its credential's `renew_at`
+set too (see the UPGRADE guide). A daily
 `social-tokens:prune` then deletes the credentials that are revoked, flagged
 `needs_reconnect`, or used by no connected account (left behind by a
 reconnect, or by accounts you deleted), once they have not changed for

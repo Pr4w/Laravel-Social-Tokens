@@ -127,9 +127,12 @@ class DispatchDueRenewals extends Command
      * left due, each run would read them again through inUse()'s subqueries,
      * for good. renew_at null, checked again in the update, so a credential
      * a reconnect rescheduled since the read keeps its date. A reconnect
-     * schedules it again (persistCredential()), and so does a re-sync of
-     * LinkedIn organizations with the stored member token, or a renewal on
-     * demand (validAccessTokenFor() once its token expires).
+     * schedules it again (persistCredential()), and so do a re-sync with the
+     * stored token (LinkedIn organizations, Facebook Pages and Instagram
+     * accounts) and SocialTokens::adopt(). Nothing else does: a credential
+     * with a refresh token is renewed on demand once its token has expired
+     * (validAccessTokenFor()), but one whose token must be extended while
+     * still valid (Meta, Threads, Instagram Login) is flagged by then.
      *
      * @param  array<int, string>  $configured
      */

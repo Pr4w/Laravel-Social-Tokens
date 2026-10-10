@@ -505,11 +505,15 @@ they add.
 - **(breaking)** `social-tokens:dispatch-renewals` unschedules a due credential
   no active account depends on (`renew_at` null) instead of leaving it due,
   where every run read it again through two correlated subqueries, for good. A
-  reconnect schedules it again, and so does a re-sync of LinkedIn
-  organizations with the stored member token. An account made active by hand
-  (an `UPDATE`) leaves its credential unscheduled until its token expires and
-  `validAccessTokenFor()` renews it: set the credential's `renew_at` to now as
-  well ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
+  reconnect schedules it again, and so do a re-sync with the stored token
+  (LinkedIn organizations, Facebook Pages and Instagram accounts) and
+  `adopt()`. An account made active by hand (an `UPDATE`) leaves its
+  credential unscheduled: set the credential's `renew_at` to now as well.
+  Otherwise a credential with a refresh token is renewed only once its token
+  has expired, by `validAccessTokenFor()`, and one whose token must be
+  extended while still valid (the Meta user token, Threads, Instagram Login)
+  is flagged `needs_reconnect` by the first publish after its expiry
+  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
 - **(breaking)** Config values are read and normalised in one place,
   `Support\Settings`. Numeric strings work for `queue.tries`, the HTTP timeouts
   and the breaker, and the HTTP timeouts keep fractional seconds

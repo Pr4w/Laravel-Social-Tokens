@@ -703,7 +703,8 @@ to the credentials something uses.
 - `social-tokens:dispatch-renewals` sets `renew_at` to null on a credential
   whose renewal is due but that no active account depends on, instead of
   reading it again on every run. A reconnect schedules it again, and so does
-  a re-sync of LinkedIn organizations with the stored member token.
+  a re-sync with the stored token (LinkedIn organizations, or Facebook Pages
+  and Instagram accounts with `extend: false`), or `adopt()`.
 - The new `social-tokens:prune` command, scheduled daily, deletes the
   credentials that are revoked, flagged `needs_reconnect`, or used by no
   connected account, once they have not changed for `prune_after_days` (30).
@@ -730,9 +731,15 @@ to the credentials something uses.
    change.
 3. **Reactivating an account by hand** (`UPDATE social_accounts SET status =
    'active'`, as the 1.2 notes describe): set its credential's `renew_at` to
-   now as well. Otherwise the dispatcher may have unscheduled it, and it is
-   renewed only once its token expires and `validAccessTokenFor()` is asked
-   for it.
+   now as well. Otherwise the dispatcher may have unscheduled it, and nothing
+   renews it ahead of its expiry. A credential with a refresh token (Google,
+   TikTok, X, LinkedIn with refresh tokens) is then renewed only once its
+   token has expired and `validAccessTokenFor()` is asked for it. One whose
+   token is extended while it is still valid (the Meta user token behind
+   Instagram, Threads, Instagram Login) is lost: once expired it cannot be
+   extended, so the first publish flags it `needs_reconnect` and the user
+   must reconnect; a LinkedIn credential without a refresh token is flagged
+   the same way, with no warning ahead of it.
 
 #### Tear down the owners you delete
 
