@@ -191,7 +191,7 @@ class RenewCredential implements ShouldBeUnique, ShouldQueue
         // if it truly can no longer be renewed.
         match ($result->outcome) {
             RenewalOutcome::Success => null,
-            RenewalOutcome::Terminal => $token->markNeedsReconnectOnce($result->reason, (string) $token->access_token),
+            RenewalOutcome::Terminal => $token->markNeedsReconnectIfStillHeld($result->reason),
             RenewalOutcome::Transient => throw TransientRenewalException::for($token, $result->reason),
         };
     }

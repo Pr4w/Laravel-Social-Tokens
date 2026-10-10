@@ -259,6 +259,7 @@ it('marks every parameter carrying a token or a secret as sensitive', function (
     [MetaSignedRequest::class, 'parse', 'secret'],
     [MetaSignedRequest::class, 'make', 'secret'],
     [SocialToken::class, 'markNeedsReconnectOnce', 'checkedToken'],
+    [SocialToken::class, 'holdsAccessToken', 'accessToken'],
     [SocialTokens::class, 'reportRejected', 'rejectedToken'],
     [RenewalResult::class, 'success', 'accessToken'],
     [RenewalResult::class, 'success', 'refreshToken'],

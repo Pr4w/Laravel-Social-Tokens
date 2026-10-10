@@ -119,6 +119,8 @@ class StoreAccountFromSocialite implements StoresConnections
         // Never forget a known refresh token: a reconnect without one must not
         // wipe it or its expiry. The default credential: the LinkedIn
         // organizations have their own (StoreLinkedInOrganizations::PURPOSE).
+        // One that no longer decrypts (written under an APP_KEY that is gone)
+        // is known to nobody: forgotten, with its expiry.
         $existing = SocialToken::query()
             ->where('provider', $connector->credentialProvider())
             ->where('provider_holder_id', $user->getId())
@@ -126,7 +128,7 @@ class StoreAccountFromSocialite implements StoresConnections
             ->ownedBy($owner)
             ->first();
 
-        if ($existing !== null) {
+        if ($existing !== null && $existing->canDecrypt('refresh_token')) {
             $refreshToken ??= $existing->refresh_token;
 
             if ($refreshExpiresAt === null && $refreshToken === $existing->refresh_token) {

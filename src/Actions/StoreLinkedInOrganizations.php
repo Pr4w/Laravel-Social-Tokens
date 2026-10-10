@@ -82,7 +82,9 @@ class StoreLinkedInOrganizations
         }
 
         // Never forget a known refresh token: a re-sync without one must not
-        // wipe it or its expiry.
+        // wipe it or its expiry. One that no longer decrypts (written under
+        // an APP_KEY that is gone) is known to nobody: forgotten, with its
+        // expiry.
         $existing = SocialToken::query()
             ->where('provider', 'linkedin')
             ->where('provider_holder_id', $memberId)
@@ -90,10 +92,13 @@ class StoreLinkedInOrganizations
             ->ownedBy($owner)
             ->first();
 
-        if ($existing !== null) {
-            $refreshToken ??= $existing->refresh_token;
+        $knownRefreshToken = $existing !== null && $existing->canDecrypt('refresh_token');
+        $storedRefreshToken = $knownRefreshToken ? $existing->refresh_token : null;
 
-            if ($refreshExpiresAt === null && $refreshToken === $existing->refresh_token) {
+        if ($knownRefreshToken) {
+            $refreshToken ??= $storedRefreshToken;
+
+            if ($refreshExpiresAt === null && $refreshToken === $storedRefreshToken) {
                 $refreshExpiresAt = $existing->refresh_expires_at;
             }
         }
@@ -109,13 +114,14 @@ class StoreLinkedInOrganizations
         // renewed (or warned about) again.
         $kept = [];
 
-        if ($existing !== null && hash_equals((string) $existing->access_token, $accessToken)) {
+        if ($existing !== null && $existing->holdsAccessToken($accessToken)) {
             $kept['last_renewed_at'] = $existing->last_renewed_at;
             $expiresAt ??= $existing->expires_at;
 
             if ($existing->renew_at !== null
                 && self::sameMoment($expiresAt, $existing->expires_at)
-                && $refreshToken === $existing->refresh_token
+                && $knownRefreshToken
+                && $refreshToken === $storedRefreshToken
                 && self::sameMoment($refreshExpiresAt, $existing->refresh_expires_at)) {
                 $kept['renew_at'] = $existing->renew_at;
             }

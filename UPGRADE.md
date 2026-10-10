@@ -586,11 +586,14 @@ three things:
    no harm.
 3. **If you call `renewCredential()` or `applyRenewal()` yourself.**
    - After a Terminal result, flag the credential only while it holds the
-     refused token: `$token->markNeedsReconnectOnce($result->reason, $token->access_token)`
+     refused token: `$token->markNeedsReconnectIfStillHeld($result->reason)`
      instead of `markNeedsReconnect($result->reason)`. `renewCredential()`
-     reloads the `$token` you pass under the lock, so `$token->access_token`
-     is the token the provider refused, and a credential the user reconnected
-     meanwhile is left alone.
+     reloads the `$token` you pass under the lock, so it holds the token the
+     provider refused, and a credential the user reconnected meanwhile is left
+     alone. Do not read `$token->access_token` for it: a credential whose
+     tokens no longer decrypt (an `APP_KEY` that is gone) is a Terminal result
+     too (`SocialToken::UNDECRYPTABLE`), and reading its token throws
+     `DecryptException`.
    - `applyRenewal()` now writes only while the stored credential still holds
      the access and refresh tokens the instance was loaded with (the same
      tokens re-encrypted under a new `APP_KEY` still count). Load the
@@ -1204,6 +1207,19 @@ Page tokens), make sure every process runs with the new key (restart your
 queue workers), run `php artisan social-tokens:reencrypt`, then drop the old
 key once it exits successfully. When it fails because credentials changed
 while it ran, run it again. See the README, "Rotating APP_KEY".
+
+A token no key decrypts any more is no longer stuck: its renewal, a publish
+(`validAccessTokenFor()`) or a rejection report flags its credential
+`needs_reconnect`, firing `CredentialNeedsReconnect` with `last_error` set to
+`SocialToken::UNDECRYPTABLE`, and the user's reconnect replaces it (2.x threw
+`DecryptException` from all of these, the reconnect included). A process
+started with the wrong `APP_KEY` flags the credentials it renews or posts
+with that way: once the right key is back, reactivate them:
+
+```php
+SocialToken::query()->where('status', 'needs_reconnect')->where('last_error', SocialToken::UNDECRYPTABLE)
+    ->update(['status' => 'active', 'last_error' => null, 'renew_at' => now()]);
+```
 
 #### Testing helpers
 

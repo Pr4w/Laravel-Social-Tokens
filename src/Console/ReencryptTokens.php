@@ -23,7 +23,8 @@ use Pr4w\SocialTokens\Models\SocialToken;
  * renewal rewrites only the access token). A row still changing after a few
  * attempts fails the command, as does a token no key decrypts, which is
  * logged and left: put its key back in APP_PREVIOUS_KEYS, or let the user
- * reconnect.
+ * reconnect (its next renewal or publish flags it needs_reconnect, and a
+ * reconnect writes a new token over it).
  */
 class ReencryptTokens extends Command
 {

@@ -70,6 +70,9 @@ class SocialToken extends Model
     /** The purpose of a holder's default credential. */
     public const DEFAULT_PURPOSE = '';
 
+    /** The reason a credential whose tokens no longer decrypt is flagged with. */
+    public const UNDECRYPTABLE = 'The stored token no longer decrypts with APP_KEY or APP_PREVIOUS_KEYS: reconnect, or put back the key it was encrypted with.';
+
     protected $guarded = [];
 
     /** @var array<string, mixed> */
@@ -320,7 +323,7 @@ class SocialToken extends Model
         $keys += ['purpose' => static::DEFAULT_PURPOSE];
         $values += static::issuedState();
 
-        $token = static::query()->firstOrNew($keys)->forceFill($values);
+        $token = static::query()->firstOrNew($keys)->forgetUndecryptableTokens()->forceFill($values);
 
         if ($connector !== null && ! array_key_exists('renew_at', $values)) {
             $values['renew_at'] = $token->renew_at = static::renewAtFor(
@@ -337,10 +340,29 @@ class SocialToken extends Model
             static::query()->withSavepointIfNeeded(fn () => $token->save());
         } catch (UniqueConstraintViolationException $e) {
             $token = static::query()->useWritePdo()->where($keys)->first() ?? throw $e;
-            $token->forceFill($values)->save();
+            $token->forgetUndecryptableTokens()->forceFill($values)->save();
         }
 
         return $token;
+    }
+
+    /**
+     * Forget the stored value of a token that no longer decrypts (written
+     * under an APP_KEY that is gone), so that a new token is written over it:
+     * without APP_PREVIOUS_KEYS, Eloquent's dirty check decrypts the stored
+     * value it compares with, and a reconnect threw DecryptException.
+     */
+    protected function forgetUndecryptableTokens(): static
+    {
+        foreach (['access_token', 'refresh_token'] as $column) {
+            try {
+                $this->getOriginal($column);
+            } catch (DecryptException) {
+                unset($this->original[$column]);
+            }
+        }
+
+        return $this;
     }
 
     /**
@@ -463,6 +485,31 @@ class SocialToken extends Model
         } catch (DecryptException) {
             return false;
         }
+    }
+
+    /**
+     * Whether a token column decrypts with APP_KEY or APP_PREVIOUS_KEYS (an
+     * empty one does). A token written under a key that is gone does not:
+     * nothing can renew it nor post with it, and only a reconnect, which
+     * writes a new one, brings the credential back.
+     *
+     * @param  'access_token'|'refresh_token'  $column
+     */
+    public function canDecrypt(string $column): bool
+    {
+        try {
+            $this->getAttribute($column);
+
+            return true;
+        } catch (DecryptException) {
+            return false;
+        }
+    }
+
+    /** Whether both its tokens decrypt (see canDecrypt()). */
+    public function tokensDecrypt(): bool
+    {
+        return $this->canDecrypt('access_token') && $this->canDecrypt('refresh_token');
     }
 
     public function isAccessTokenExpired(int $bufferSeconds = 30): bool
@@ -802,7 +849,7 @@ class SocialToken extends Model
             // of the current row, then pin the update to that exact ciphertext.
             $current = $this->newQuery()->whereKey($this->getKey())->first();
 
-            if ($current === null || ! hash_equals((string) $current->access_token, $checkedToken)) {
+            if ($current === null || ! $current->holdsAccessToken($checkedToken)) {
                 if ($current !== null) {
                     $this->status = $current->status;
                     $this->syncOriginalAttribute('status');
@@ -826,6 +873,36 @@ class SocialToken extends Model
         }
 
         if ($changed) {
+            event(new CredentialNeedsReconnect($this, $reason));
+        }
+
+        return $changed;
+    }
+
+    /**
+     * markNeedsReconnectOnce() for the access token this instance holds: the
+     * row is flagged only while it still holds that token, so that a
+     * reconnect that landed since keeps its new one. Compared decrypted, or,
+     * for a token that no longer decrypts (see canDecrypt()), by its
+     * ciphertext. For a terminal renewal result: renewCredential() reloads
+     * the token it is given, which then holds the token that was refused.
+     */
+    public function markNeedsReconnectIfStillHeld(?string $reason = null): bool
+    {
+        if ($this->canDecrypt('access_token')) {
+            return $this->markNeedsReconnectOnce($reason, (string) $this->access_token);
+        }
+
+        $changed = $this->exists && $this->newQuery()
+            ->whereKey($this->getKey())
+            ->where('status', AccountStatus::Active->value)
+            ->where('access_token', $this->getAttributes()['access_token'])
+            ->update(['status' => AccountStatus::NeedsReconnect->value, 'last_error' => $reason]) > 0;
+
+        if ($changed) {
+            $this->forceFill(['status' => AccountStatus::NeedsReconnect, 'last_error' => $reason])
+                ->syncOriginalAttributes(['status', 'last_error']);
+
             event(new CredentialNeedsReconnect($this, $reason));
         }
 

@@ -4,6 +4,7 @@ namespace Pr4w\SocialTokens;
 
 use Closure;
 use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\DetectsConcurrencyErrors;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -70,8 +71,10 @@ class SocialTokens
      *
      * $token is reloaded in place under the lock. On a Terminal result it
      * holds the token the provider refused: flag it with
-     * markNeedsReconnectOnce($result->reason, $token->access_token), so that
-     * a credential reconnected meanwhile is not flagged.
+     * $token->markNeedsReconnectIfStillHeld($result->reason), so that a
+     * credential reconnected meanwhile is not flagged. A credential whose
+     * tokens no longer decrypt (written under an APP_KEY that is gone) is a
+     * Terminal result too, SocialToken::UNDECRYPTABLE, with no provider call.
      *
      * Call it outside your own database transaction: there the row stays
      * locked until the transaction ends, and a rollback discards the renewed
@@ -136,6 +139,13 @@ class SocialTokens
                 // Revoked or flagged since the caller loaded it: never renew.
                 if (! $token->status->isUsable()) {
                     return RenewalResult::terminalFailure("Credential is {$token->status->value}.");
+                }
+
+                // Written under an APP_KEY that is gone: nothing can renew it,
+                // and each attempt threw DecryptException, reported and
+                // rescheduled for good. Only a reconnect brings it back.
+                if (! $token->tokensDecrypt()) {
+                    return RenewalResult::terminalFailure(SocialToken::UNDECRYPTABLE);
                 }
 
                 // Another process may have renewed while we waited for the lock:
@@ -289,8 +299,15 @@ class SocialTokens
             throw NeedsReconnectException::for($account);
         }
 
-        if (! $token->isAccessTokenExpired($minValiditySeconds) && $token->access_token !== null) {
-            return $token->access_token;
+        try {
+            $accessToken = $token->getAttribute('access_token');
+        } catch (DecryptException) {
+            // Written under an APP_KEY that is gone: nothing can post with it.
+            $this->flagRefused($account, $token, SocialToken::UNDECRYPTABLE);
+        }
+
+        if (! $token->isAccessTokenExpired($minValiditySeconds) && $accessToken !== null) {
+            return $accessToken;
         }
 
         // A config problem, not the user's: do not ask them to reconnect (a
@@ -309,8 +326,8 @@ class SocialTokens
         if (! $token->renewalStrategyWith($connector)->canRenewUnattended() || $token->isRefreshTokenExpired()) {
             // Cannot be renewed, but still valid: hand it out rather than cut it
             // off early (the renewal job warns the user ahead of the expiry).
-            if ($token->access_token !== null && ! $token->isAccessTokenExpired()) {
-                return $token->access_token;
+            if ($accessToken !== null && ! $token->isAccessTokenExpired()) {
+                return $accessToken;
             }
 
             $token->markNeedsReconnect('Token expired and cannot be renewed unattended.');
@@ -331,19 +348,28 @@ class SocialTokens
         // accounts' rows are not rewritten; every account it backs reports it
         // through effectiveStatus().
         if ($result->outcome === RenewalOutcome::Terminal) {
-            // Only if it still holds the refused token: a reconnect that
-            // landed meanwhile is a working credential, worth a retry.
-            if (! $token->markNeedsReconnectOnce($result->reason, (string) $token->access_token)
-                && $token->fresh()?->status->isUsable()) {
-                throw NeedsReconnectException::transient($account, 'The credential was reconnected during renewal; retry.');
-            }
-
-            throw NeedsReconnectException::for($account, $result->reason);
+            $this->flagRefused($account, $token, $result->reason);
         }
 
         // Transient: leave the credential usable so background retries continue,
         // and tell the caller to retry rather than ask the user to reconnect.
         throw NeedsReconnectException::transient($account, $result->reason);
+    }
+
+    /**
+     * Flag the credential that could not give $account a token, and tell the
+     * caller: only while it still holds the refused token, since a reconnect
+     * that landed meanwhile is a working credential, worth a retry.
+     *
+     * @throws NeedsReconnectException always
+     */
+    protected function flagRefused(SocialAccount $account, SocialToken $token, ?string $reason): never
+    {
+        if (! $token->markNeedsReconnectIfStillHeld($reason) && $token->fresh()?->status->isUsable()) {
+            throw NeedsReconnectException::transient($account, 'The credential was reconnected meanwhile; retry.');
+        }
+
+        throw NeedsReconnectException::for($account, $reason);
     }
 
     /**
@@ -982,6 +1008,12 @@ class SocialTokens
 
         if ($token === null || $token->status !== AccountStatus::Active) {
             return false;
+        }
+
+        // Written under an APP_KEY that is gone: dead whatever the rejection
+        // says, and reading it to compare or check would throw.
+        if (! $token->tokensDecrypt()) {
+            return $token->markNeedsReconnectIfStillHeld(SocialToken::UNDECRYPTABLE);
         }
 
         if ($terminal) {

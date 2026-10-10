@@ -75,7 +75,10 @@ reconnects can go on meanwhile: a row they change is read again and
 rewritten, and a renewal in flight keeps its result. It exits with a failure
 code when a credential kept changing under it (run it again), and when some
 token decrypts with none of the keys, which it logs: keep the previous key
-until those users reconnect.
+until those users reconnect. A token that decrypts with none of the keys
+cannot be renewed nor posted with: its next renewal or publish flags its
+credential `needs_reconnect` (`CredentialNeedsReconnect`, `last_error`
+`SocialToken::UNDECRYPTABLE`), and a reconnect replaces it.
 
 ### Owners
 

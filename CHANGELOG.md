@@ -325,6 +325,14 @@ they add.
 - `SocialToken::tryApplyRenewal($result, $connector)`: `applyRenewal()` that
   returns whether it stored the renewal (see Fixed, "A reconnect during a
   renewal is no longer undone").
+- `SocialToken::markNeedsReconnectIfStillHeld($reason)`: flags the credential
+  only while the row still holds the access token the instance holds (by its
+  ciphertext when it no longer decrypts), for a Terminal result of
+  `renewCredential()`. `holdsAccessToken($token)` compares a token with the
+  stored one, `canDecrypt($column)` and `tokensDecrypt()` say whether the
+  tokens decrypt with `APP_KEY` or `APP_PREVIOUS_KEYS`, and
+  `SocialToken::UNDECRYPTABLE` is the reason a credential that no longer
+  decrypts is flagged with (see Fixed).
 - `AbstractConnector::renewalStrategyFor(SocialToken $token)`: the strategy for
   one credential, `renewalStrategy()` by default. `LinkedInConnector` returns
   `ReauthOnly` for a credential without a refresh token (see Fixed).
@@ -563,7 +571,8 @@ they add.
     `NeedsReconnectException` (retry) instead of a non-transient one.
     `renewCredential()` reloads the `$token` it is given under the lock, so
     `$token->access_token` is that token; flag it the same way if you call
-    `renewCredential()` yourself.
+    `renewCredential()` yourself, with
+    `$token->markNeedsReconnectIfStillHeld($result->reason)` (see Added).
 - **(breaking)** **A renewal requested inside a database transaction no longer
   spends a rotated refresh token.** The re-read under the renewal lock was a
   plain read. On MySQL (REPEATABLE READ), a caller inside a transaction read
@@ -685,6 +694,26 @@ they add.
   `Model::preventAccessingMissingAttributes()`); read `$account->connectedBy`.
   `toArray()` still shows it as `connected_by`
   ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
+- A credential whose tokens no longer decrypt (written under an `APP_KEY` that
+  is gone from `APP_PREVIOUS_KEYS`) no longer gets stuck. Reconnecting it, the
+  way out `social-tokens:reencrypt` and the README give, threw
+  `DecryptException` and changed nothing: the connect paths read the stored
+  tokens before writing over them (the refresh token a reconnect without one
+  keeps, the member token a LinkedIn re-sync compares, and Eloquent's dirty
+  check when `APP_PREVIOUS_KEYS` is empty). They now write the new tokens over
+  it, and forget a refresh token nobody can read, with its expiry. Each of its
+  renewals threw too, was reported, and was rescheduled 15 minutes later, for
+  good, while the credential stayed `active`; `validAccessTokenFor()` and
+  `reportRejected()` threw `DecryptException`. The renewal (`renewCredential()`
+  returns a Terminal result, with no provider call), `validAccessTokenFor()`
+  (a non-transient `NeedsReconnectException`) and `reportRejected()` now flag
+  it `needs_reconnect`, once, with `last_error` set to
+  `SocialToken::UNDECRYPTABLE`, so `CredentialNeedsReconnect` asks the user to
+  reconnect. A process running with the wrong `APP_KEY` flags each credential
+  it renews or posts with the same way: once the right key is back, reactivate
+  them with `SocialToken::where('status', 'needs_reconnect')->where('last_error',
+  SocialToken::UNDECRYPTABLE)->update(['status' => 'active', 'last_error' =>
+  null, 'renew_at' => now()])`.
 - Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade):
   - It can be run again after failing partway. On MySQL and SQLite a failure (a
     lost connection, a timeout, a rejected key) left the owner columns added and
