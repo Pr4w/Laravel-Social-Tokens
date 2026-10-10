@@ -15,7 +15,9 @@ use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
+use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
 
 /*
  * StoreConnection decided which action stores a provider with instanceof
@@ -58,6 +60,31 @@ class FanOutRoutingAction implements StoresConnections
 }
 
 class NotAConnectionAction {}
+
+/**
+ * 2.x's InstagramConnector docblock invited this for the Instagram API with
+ * Instagram Login: a subclass storing one account per connection, under
+ * provider 'instagram', through StoreAccountFromSocialite. In 3.0 it
+ * inherits FansOutConnections, and naming StoreAccountFromSocialite as its
+ * connection action, as the upgrade guide said, was refused all the same.
+ */
+class OneAccountInstagramConnector extends InstagramConnector
+{
+    public function connectionAction(): string
+    {
+        return StoreAccountFromSocialite::class;
+    }
+
+    public function credentialProvider(): string
+    {
+        return 'instagram';
+    }
+
+    public function exchangeForLongLived(#[SensitiveParameter] string $accessToken): ?RenewalResult
+    {
+        return RenewalResult::success(accessToken: "long-{$accessToken}", expiresAt: now()->addDays(60));
+    }
+}
 
 function fakeRoutingGraph(): void
 {
@@ -138,6 +165,34 @@ it('refuses a fan-out provider in StoreAccountFromSocialite, before writing anyt
     ['instagram', 'StoreInstagramAccounts'],
     ['fanout', 'FanOutRoutingAction'],
 ]);
+
+it('stores one account per connection for a Meta connector subclass that names StoreAccountFromSocialite', function (string $via) {
+    Http::preventStrayRequests();
+    config(['social-tokens.connectors.instagram' => ['driver' => OneAccountInstagramConnector::class]]);
+    $user = socialiteUser(['id' => 'ig-user-1', 'token' => 'short']);
+
+    $account = $via === 'StoreConnection'
+        ? app(StoreConnection::class)->handle('instagram', $user)->sole()
+        : app(StoreAccountFromSocialite::class)->handle('instagram', $user);
+
+    expect($account->provider)->toBe('instagram')
+        ->and($account->provider_user_id)->toBe('ig-user-1')
+        ->and($account->credential->provider)->toBe('instagram')
+        ->and($account->credential->access_token)->toBe('long-short')
+        ->and($account->credential->renew_at)->not->toBeNull();
+})->with(['StoreConnection', 'StoreAccountFromSocialite']);
+
+it('moves the rows of a 2.x Instagram Login subclass to instagram_login with the UPGRADE snippet', function () {
+    $login = SocialAccount::factory()->forProvider('instagram')->credential(['provider' => 'instagram'])->create();
+    $throughPage = SocialAccount::factory()->forProvider('instagram')->heldBy('fb-1')->create();
+
+    UpgradeGuide::run('#### Instagram Login through a subclass of `InstagramConnector`', "update(['provider' => 'instagram_login'])");
+
+    expect($login->fresh()->provider)->toBe('instagram_login')
+        ->and($login->fresh()->credential->provider)->toBe('instagram_login')
+        ->and($throughPage->fresh()->provider)->toBe('instagram')
+        ->and($throughPage->fresh()->credential->provider)->toBe('facebook');
+});
 
 it('stores a 1:1 provider through StoreAccountFromSocialite as before', function () {
     $accounts = app(StoreConnection::class)->handle('tiktok', socialiteUser(['id' => 'tt-1', 'refreshToken' => 'r']));

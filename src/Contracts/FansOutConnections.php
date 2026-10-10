@@ -8,7 +8,8 @@ namespace Pr4w\SocialTokens\Contracts;
  * action of its own instead of StoreAccountFromSocialite, which stores one
  * account keyed on the Socialite user's id. StoreConnection hands the
  * connection to that action, every option included; StoreAccountFromSocialite
- * refuses the provider.
+ * refuses the provider, unless the action is StoreAccountFromSocialite itself
+ * (a subclass of a Meta connector that stores one account per connection).
  */
 interface FansOutConnections
 {

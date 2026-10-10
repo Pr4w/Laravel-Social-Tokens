@@ -394,18 +394,86 @@ connection (`Contracts\FansOutConnections`), and passes every option to it.
    from a short-lived user token stop working within hours, and are stored as
    never expiring.
 2. **`StoreAccountFromSocialite` refuses fan-out providers.** Called with
-   `facebook` or `instagram`, it now throws `InvalidArgumentException` and
-   writes nothing. Call `StoreConnection` (or `StoreFacebookPages` /
-   `StoreInstagramAccounts`) instead. Rows it stored for them under 2.x are
-   useless: see [Fix up your data](#rows-storeaccountfromsocialite-stored-for-facebook-or-instagram).
+   `facebook` or `instagram`, or any key whose connector extends
+   `FacebookConnector` or `InstagramConnector`, it now throws
+   `InvalidArgumentException` and writes nothing. Call `StoreConnection` (or
+   `StoreFacebookPages` / `StoreInstagramAccounts`) instead. Rows it stored
+   for them under 2.x are useless: see [Fix up your data](#rows-storeaccountfromsocialite-stored-for-facebook-or-instagram).
+   A subclass you wrote to store one account per connection (Instagram
+   Login, as 2.x's `InstagramConnector` docblock suggested) is the exception:
+   see [Instagram Login through a subclass of `InstagramConnector`](#instagram-login-through-a-subclass-of-instagramconnector).
 3. **If you construct `StoreConnection` yourself**, its constructor now takes
    the `ConnectorRegistry`, the container and `StoreAccountFromSocialite`.
    Resolve it from the container instead.
-4. **A connector whose connections fan out** (one of your own, or a subclass of
-   `FacebookConnector` / `InstagramConnector` meant to store one account per
-   connection) implements `FansOutConnections::connectionAction()`, returning
-   the class of an action implementing `Contracts\StoresConnections`. A
-   subclass of the Meta connectors inherits theirs; override it to change it.
+4. **A connector whose connections fan out** (one of your own) implements
+   `FansOutConnections::connectionAction()`, returning the class of an
+   action implementing `Contracts\StoresConnections`. A subclass of
+   `FacebookConnector` or `InstagramConnector` inherits theirs, the Page
+   fan-out; one that returns `StoreAccountFromSocialite::class` stores one
+   account per connection instead, through `StoreConnection` and
+   `StoreAccountFromSocialite` alike.
+
+#### Instagram Login through a subclass of `InstagramConnector`
+
+For apps that followed 2.x's `InstagramConnector` docblock ("if you use the
+newer Instagram API with Instagram Login ... swap the request below"): a
+subclass of `InstagramConnector` (or `FacebookConnector`) whose connections
+store one account each through `StoreAccountFromSocialite`, usually with
+`credentialProvider()` returning `'instagram'`. In 3.0 both connectors
+implement `FansOutConnections`, which the subclass inherits:
+`StoreAccountFromSocialite` throws `InvalidArgumentException` ("Connections
+of [instagram] fan out to several accounts"), and `StoreConnection` sends the
+connection to the Facebook Page fan-out on `graph.facebook.com`, which refuses
+an Instagram Login token. Pick one:
+
+1. **Move to `InstagramLoginConnector`**, 3.0's connector for that API
+   (`graph.instagram.com`: `ig_exchange_token` at connect, `ig_refresh_token`
+   a week before expiry, `/me` checks), and drop your subclass. Register it
+   under the key your rows are stored under, so they need no change:
+
+   ```php
+   'connectors' => [
+       'instagram' => [ // the key your subclass was registered under
+           'driver' => \Pr4w\SocialTokens\Connectors\InstagramLoginConnector::class,
+           'credentials' => 'instagram', // the services entry with the Instagram app's id and secret
+           'graph_version' => env('META_GRAPH_VERSION', \Pr4w\SocialTokens\Connectors\MetaGraphConnector::DEFAULT_GRAPH_VERSION),
+       ],
+   ],
+   ```
+
+   It stores and renews its credentials under its own key, as a subclass
+   whose `credentialProvider()` returned it did. To use the
+   `instagram_login` key instead (the Instagram accounts reached through a
+   Page keep `instagram`), register it there, point your Socialite driver,
+   OAuth routes and `StoreConnection` calls at it, and move the rows your
+   subclass stored, once, in the same deploy: left under `instagram`, its
+   credentials would be renewed by `InstagramConnector` on
+   `graph.facebook.com`, and flagged.
+
+   ```php
+   SocialAccount::query()->where('provider', 'instagram')
+       ->whereHas('credential', fn ($credential) => $credential->where('provider', 'instagram'))
+       ->update(['provider' => 'instagram_login']);
+   SocialToken::query()->where('provider', 'instagram')->update(['provider' => 'instagram_login']);
+   ```
+
+   Accounts reached through a Page post with a `facebook` credential and
+   keep `instagram`.
+2. **Keep your subclass**, and have it name `StoreAccountFromSocialite` as
+   its connection action: `StoreConnection` and `StoreAccountFromSocialite`
+   then store one account per connection, as 2.x did.
+
+   ```php
+   public function connectionAction(): string
+   {
+       return \Pr4w\SocialTokens\Actions\StoreAccountFromSocialite::class;
+   }
+   ```
+
+   Check its overrides against [If you wrote a connector](#if-you-wrote-a-connector):
+   `InstagramConnector` now extends `MetaGraphConnector`, whose
+   `refreshCredential()` and `exchangeForLongLived()` call
+   `graph.facebook.com` unless you override them.
 
 #### Disconnected accounts stay disconnected
 

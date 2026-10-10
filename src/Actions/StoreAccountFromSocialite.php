@@ -25,7 +25,9 @@ use RuntimeException;
  * personal profile) the credential and the account are one-to-one: this
  * creates a renewable SocialToken and a SocialAccount that posts with it. A
  * provider whose connections fan out (Facebook, Instagram through a Page) is
- * refused: StoreConnection sends it to its own action.
+ * refused: StoreConnection sends it to its own action. A fan-out connector
+ * whose connectionAction() names this action (a subclass of a Meta connector
+ * that stores one account per connection) is accepted.
  */
 class StoreAccountFromSocialite implements StoresConnections
 {
@@ -58,7 +60,8 @@ class StoreAccountFromSocialite implements StoresConnections
      *                                                  stays unknown with core Socialite's drivers (LinkedIn)
      *                                                  until the first renewal reports it.
      *
-     * @throws InvalidArgumentException for a provider without a connector, or one whose connections fan out.
+     * @throws InvalidArgumentException for a provider without a connector, or one whose connections fan
+     *                                  out to another action.
      */
     public function handle(
         string $provider,
@@ -75,8 +78,9 @@ class StoreAccountFromSocialite implements StoresConnections
         // Keyed on the Socialite user, a Facebook connection would become a
         // Page-less account (an Instagram one with the Facebook user's id),
         // and overwrite the shared Meta user credential with a short-lived
-        // token.
-        if ($connector instanceof FansOutConnections) {
+        // token. Unless the connector names this action itself: a subclass of
+        // a Meta connector that stores one account per connection.
+        if ($connector instanceof FansOutConnections && ! is_a($connector->connectionAction(), self::class, true)) {
             throw new InvalidArgumentException(sprintf(
                 'Connections of [%s] fan out to several accounts: store them with StoreConnection, or %s.',
                 $provider,

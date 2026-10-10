@@ -474,12 +474,18 @@ they add.
   ([UPGRADE](UPGRADE.md#transient-renewal-failures-are-no-longer-reported)).
 - **(breaking)** `StoreAccountFromSocialite` throws `InvalidArgumentException`,
   writing nothing, for a provider whose connections fan out (`facebook`,
-  `instagram`, any connector implementing `FansOutConnections`). It used to
-  store the Facebook user as a Page-less `facebook` account, or as an
+  `instagram`, any connector implementing `FansOutConnections`, subclasses of
+  `FacebookConnector` and `InstagramConnector` included), unless the
+  connector names `StoreAccountFromSocialite` as its connection action. It
+  used to store the Facebook user as a Page-less `facebook` account, or as an
   `instagram` account carrying the Facebook user's id, which nothing could post
   with and the next fan-out connection flagged as no longer managed, and to
   overwrite the shared Meta user credential with Socialite's short-lived token
-  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)). A subclass
+  of `InstagramConnector` that stored one account per connection, as 2.x's
+  docblock suggested for Instagram Login, moves to `InstagramLoginConnector`,
+  or returns `StoreAccountFromSocialite::class` from `connectionAction()`
+  ([UPGRADE](UPGRADE.md#instagram-login-through-a-subclass-of-instagramconnector)).
 - **(breaking)** `StoreConnection` picks the action from the connector
   (`FansOutConnections::connectionAction()`, see Added) instead of checking
   for `FacebookConnector` and `InstagramConnector`; a subclass of either

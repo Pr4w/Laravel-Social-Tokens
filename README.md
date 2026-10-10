@@ -433,7 +433,8 @@ call directly: `StoreAccountFromSocialite` (single account), `StoreFacebookPages
 (page fan-out), and `StoreInstagramAccounts` (Instagram-account fan-out). The
 connector picks the action: one whose connections fan out implements
 `Contracts\FansOutConnections` and names its own, and
-`StoreAccountFromSocialite` refuses it (`InvalidArgumentException`).
+`StoreAccountFromSocialite` refuses it (`InvalidArgumentException`) unless
+that is `StoreAccountFromSocialite` itself.
 
 ### LinkedIn: company pages
 
@@ -1028,7 +1029,10 @@ and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
 A connector whose connections yield several accounts also implements
 `Contracts\FansOutConnections`: its `connectionAction()` names the action
 (implementing `Contracts\StoresConnections`) that `StoreConnection` hands them
-to. `revoke()` must not throw: read the token and send the request inside a
+to. A subclass of `FacebookConnector` or `InstagramConnector` inherits the
+Page fan-out; return `StoreAccountFromSocialite::class` from its
+`connectionAction()` to store one account per connection instead (for the Instagram API with Instagram Login,
+use `InstagramLoginConnector`). `revoke()` must not throw: read the token and send the request inside a
 `try`, and log a failure with `$this->logRevokeFailure($token, $e)`, and an
 answer that does not confirm the revocation with
 `$this->logUnconfirmedRevoke($token, $response)`. It receives a copy of the
