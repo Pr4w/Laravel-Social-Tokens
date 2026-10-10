@@ -22,8 +22,13 @@ use Pr4w\SocialTokens\Support\ConnectorRegistry;
  * never expiring; a Meta or Threads credential has no refresh token.
  * credential() shapes that credential with SocialTokenFactory's states, and
  * Laravel's for($credential, 'credential') points the account at one made
- * beforehand instead (several Instagram accounts of one Facebook user share
- * one).
+ * beforehand instead.
+ *
+ * As at a connection, accounts of one holder share a credential: one already
+ * stored with the same provider, holder, purpose and owner is used instead of
+ * a new one (several Instagram accounts of one Facebook user, the
+ * organizations of one LinkedIn member). credential() shapes only a
+ * credential the factory creates.
  *
  * @extends Factory<SocialAccount>
  */
@@ -68,7 +73,8 @@ class SocialAccountFactory extends Factory
 
     /**
      * A LinkedIn organization the member administers, posting with the
-     * member's organizations credential (StoreLinkedInOrganizations::PURPOSE).
+     * member's organizations credential (StoreLinkedInOrganizations::PURPOSE),
+     * which the member's other organizations of the same owner share.
      */
     public function linkedInOrganization(string $memberId): static
     {
@@ -140,6 +146,51 @@ class SocialAccountFactory extends Factory
             'status' => AccountStatus::Revoked,
             'disconnected_at' => now(),
         ])->credential(fn (SocialTokenFactory $credential) => $credential->revoked());
+    }
+
+    /**
+     * Resolve the credential the states left to be created through
+     * storedLike(), once every state has had its say: credential() may
+     * still change its purpose (linkedInOrganization()).
+     *
+     * @return array<string, mixed>
+     */
+    protected function getRawAttributes(?Model $parent)
+    {
+        $attributes = parent::getRawAttributes($parent);
+        $credential = $attributes['social_token_id'] ?? null;
+
+        if ($credential instanceof Closure) {
+            $attributes['social_token_id'] = fn (array $resolved) => $this->storedLike($credential($resolved));
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * The credential already stored under the unique key the factory would
+     * create one with (provider, holder, purpose, owner), or the factory: a
+     * second one breaks that key under an owner, and stands beside the first
+     * without one, where a connection stores one per holder.
+     */
+    protected function storedLike(mixed $credential): mixed
+    {
+        if (! $credential instanceof SocialTokenFactory || ! $this->expandRelationships) {
+            return $credential; // for() named one, or withoutParents() creates none
+        }
+
+        $attributes = $credential->raw();
+
+        $stored = SocialToken::query()
+            ->where('provider', $attributes['provider'])
+            ->where('provider_holder_id', $attributes['provider_holder_id'])
+            ->where('purpose', $attributes['purpose'] ?? SocialToken::DEFAULT_PURPOSE);
+
+        $stored = ($attributes['ownable_type'] ?? null) === null
+            ? $stored->whereNull('ownable_type')->whereNull('ownable_id')
+            : $stored->where('ownable_type', $attributes['ownable_type'])->where('ownable_id', $attributes['ownable_id']);
+
+        return $stored->first() ?? $credential;
     }
 
     /**

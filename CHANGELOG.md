@@ -854,9 +854,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   token decrypts with none of the keys, which it logs and leaves.
 - **Testing helpers for apps** (README, "Testing your app"):
   - Model factories: `SocialAccount::factory()` makes an active account with
-    a credential of its own that matches it as a connection stores them
-    (provider, holder, owner; a Facebook Page on a never-expiring Page token,
-    an Instagram account on the Meta user credential), and
+    a credential that matches it as a connection stores them (provider,
+    holder, owner; a Facebook Page on a never-expiring Page token, an
+    Instagram account on the Meta user credential), shared by the accounts
+    of one holder as at a connection (the organizations of one LinkedIn
+    member, the Instagram accounts of one Facebook user), and
     `SocialToken::factory()` a credential alone, scheduled with its
     provider's lead time. States: `forProvider()`, `ownedBy()`,
     `connectedBy()`, `heldBy()`, `linkedInOrganization()`, `credential()`,

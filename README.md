@@ -1038,8 +1038,12 @@ The package ships factories for its two models, a fake that answers the
 providers' calls, and a connector that makes no request.
 
 **Factories.** `SocialAccount::factory()` makes an active account posting with
-a credential of its own, created with it and matching it as a connection
-stores them: provider (Instagram's under `facebook`), holder, owner.
+a credential created with it and matching it as a connection stores them:
+provider (Instagram's under `facebook`), holder, owner. As at a connection,
+accounts of one holder share it: the credential already stored with the same
+provider, holder, purpose and owner is used rather than a second one (the
+Instagram accounts of one Facebook user, the organizations of one LinkedIn
+member), and `credential()` shapes only a credential the factory creates.
 `SocialToken::factory()` makes a credential alone.
 
 ```php
@@ -1050,10 +1054,11 @@ SocialAccount::factory()->forProvider('tiktok')->ownedBy($workspace)->create();
 SocialAccount::factory()->forProvider('instagram')->heldBy($facebookUserId)->create(); // on the Meta user credential
 SocialAccount::factory()->forProvider('facebook')->create();                          // a Page, on its own Page token
 SocialAccount::factory()->linkedInOrganization($memberId)->create();                  // on the organizations' credential
+SocialAccount::factory()->count(3)->linkedInOrganization($memberId)->ownedBy($workspace)->create(); // all three on one
 
 // Shape the credential made with the account with SocialToken::factory()'s states,
 SocialAccount::factory()->credential(fn ($credential) => $credential->expired())->create();
-// or share one: several Instagram accounts of one Facebook user.
+// or point the accounts at one made beforehand: several Instagram accounts of one Facebook user.
 $metaUserCredential = SocialToken::factory()->forProvider('facebook', $facebookUserId)->withoutRefreshToken()->create();
 SocialAccount::factory()->count(2)->forProvider('instagram')->heldBy($facebookUserId)
     ->for($metaUserCredential, 'credential')->create();

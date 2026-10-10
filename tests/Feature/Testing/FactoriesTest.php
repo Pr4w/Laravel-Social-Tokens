@@ -85,6 +85,40 @@ it('stores a LinkedIn organization on the member\'s organizations credential', f
         ->and($organization->credential->purpose)->toBe(StoreLinkedInOrganizations::PURPOSE);
 });
 
+it('puts several organizations of one member on one organizations credential, under an owner', function () {
+    // One credential per member and purpose under an owner (the unique key):
+    // a second one failed to insert.
+    $owner = Owner::create(['name' => 'acme']);
+
+    $organizations = SocialAccount::factory()->count(2)->linkedInOrganization('member-1')->ownedBy($owner)->create();
+
+    expect($organizations->pluck('social_token_id')->unique())->toHaveCount(1)
+        ->and(SocialToken::ownedBy($owner)->sole()->purpose)->toBe(StoreLinkedInOrganizations::PURPOSE);
+});
+
+it('puts the accounts of one holder on one credential, as a connection stores them', function (?string $ownerName) {
+    $owner = $ownerName === null ? null : Owner::create(['name' => $ownerName]);
+
+    $organizations = SocialAccount::factory()->count(2)->linkedInOrganization('member-1')->ownedBy($owner)->create();
+    $instagram = SocialAccount::factory()->count(2)->forProvider('instagram')->heldBy('fb-user-1')->ownedBy($owner)->create();
+
+    expect($organizations->pluck('social_token_id')->unique())->toHaveCount(1)
+        ->and($instagram->pluck('social_token_id')->unique())->toHaveCount(1)
+        ->and(SocialToken::count())->toBe(2);
+})->with(['owner-less' => null, 'with an owner' => 'acme']);
+
+it('keeps the credentials of a member\'s profile and organizations, and of each owner, apart', function () {
+    $owner = Owner::create(['name' => 'acme']);
+
+    $profile = SocialAccount::factory()->forProvider('linkedin')->ownedBy($owner)->create(['provider_user_id' => 'member-1']);
+    $organization = SocialAccount::factory()->linkedInOrganization('member-1')->ownedBy($owner)->create();
+    $elsewhere = SocialAccount::factory()->linkedInOrganization('member-1')->create();
+
+    expect(collect([$profile, $organization, $elsewhere])->pluck('social_token_id')->unique())->toHaveCount(3)
+        ->and($profile->credential->purpose)->toBe(SocialToken::DEFAULT_PURPOSE)
+        ->and($elsewhere->credential->ownable_type)->toBeNull();
+});
+
 it('shapes the credential with its own states, which add up', function () {
     $account = SocialAccount::factory()
         ->credential(['scopes' => ['youtube.upload']])
