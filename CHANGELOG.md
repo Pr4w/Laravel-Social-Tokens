@@ -79,7 +79,10 @@ they add.
   account of a Facebook user revokes the Meta user credential, firing one more
   `CredentialRevoked`. Disconnecting a user's last Instagram account no longer
   revokes that credential while a Page of the same user and owner is
-  connected; 2.x revoked it then, although the Pages kept it renewed
+  connected; 2.x revoked it then, although the Pages kept it renewed. An
+  `instagram` connection stores the Facebook Page linked to each Instagram
+  account as a `facebook` account, so an app that shows Instagram accounts
+  only must disconnect those Pages too for the token to be revoked
   ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
 
 ### Added

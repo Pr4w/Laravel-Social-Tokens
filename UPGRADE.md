@@ -359,7 +359,14 @@ revoked.
    `provider_holder_id` the Facebook user id): a listener that notifies the
    user on `CredentialRevoked` gets one event for it. Disconnecting the last
    Instagram account no longer revokes that credential while one of the user's
-   Pages is still connected under that owner.
+   Pages is still connected under that owner, **including the Page an
+   `instagram` connection stored with each Instagram account** (a `facebook`
+   account, returned by `StoreConnection` with the Instagram ones). An app
+   that shows Instagram accounts only, and relied on 2.x revoking the token
+   with the last of them, must disconnect those Pages as well (the README,
+   "Account status", shows how), or revoke the credential
+   (`revoke($instagram->credential)`); otherwise the token stays active and
+   renewed.
 
 #### Revocation is recorded before the provider call
 

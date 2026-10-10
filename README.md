@@ -338,7 +338,10 @@ Route::get('/oauth/{provider}/callback', function (string $provider, StoreConnec
 
 `handle()` always returns a `Collection<SocialAccount>` — a connection can yield
 more than one account. Most providers give exactly one, so use
-`$accounts->sole()` if you want the single row; Facebook gives one per page.
+`$accounts->sole()` if you want the single row; Facebook gives one per page,
+and Instagram one per Instagram account plus one `facebook` account per
+Facebook Page linked to it (see the fan-out below): filter on `provider`
+before counting or listing Instagram accounts.
 
 ### X (Twitter)
 
@@ -419,7 +422,13 @@ Instagram Login calls (`graph.instagram.com`) are not signed.
   connection stores that same renewable user credential too (holder = Facebook
   user id), so a Facebook reconnect also refreshes the token the user's Instagram
   accounts post with. Its `accounts` relation can be empty (Pages point at their
-  page tokens); find them by `provider_holder_id`. If you use distinct Facebook
+  page tokens); find them by `provider_holder_id`. An `instagram` connection
+  stores the Facebook Page each Instagram account is linked to as well: a
+  `facebook` account on its own Page token, returned with the Instagram
+  accounts (its `profile['ig_account_id']` names the Instagram account, and
+  the Instagram account's `profile['fb_page_id']` names it). Such a Page keeps
+  the Meta user credential connected until it is disconnected too (see
+  [Account status](#account-status)). If you use distinct Facebook
   Login for Business configurations for Facebook and Instagram, check the
   Facebook flow's token also carries the `instagram_*` permissions, since it
   replaces the shared credential. Every account records the Facebook user id, so
@@ -836,6 +845,22 @@ posting, and the reverse:
 
 ```php
 app(SocialTokens::class)->disconnect($account);
+```
+
+An Instagram connection also stored the Facebook Page linked to each Instagram
+account (see [What `StoreConnection` handles for you](#what-storeconnection-handles-for-you)),
+and that Page keeps the Meta user credential, a 60-day token that can mint a
+Page token for every Page the user manages, connected and renewed. If your
+app shows Instagram accounts only, disconnect the Page with the Instagram
+account, or the token stays active once every Instagram account is gone:
+
+```php
+$tokens = app(SocialTokens::class);
+$tokens->disconnect($instagram);
+
+SocialAccount::ownedBy($instagram->ownable)->where('provider', 'facebook')
+    ->where('provider_user_id', $instagram->profile['fb_page_id'] ?? null)
+    ->get()->each(fn (SocialAccount $page) => $tokens->disconnect($page));
 ```
 
 A disconnected account stays disconnected. A reconnect of the same Facebook,
