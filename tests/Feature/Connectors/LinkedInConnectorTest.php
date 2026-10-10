@@ -33,6 +33,21 @@ it('derives its strategy from config', function () {
         ->toBe(RenewalStrategy::ReauthOnly);
 });
 
+it('reads refresh_enabled as every other boolean setting, so a string that says no turns refresh off', function (mixed $value, RenewalStrategy $strategy) {
+    // env() returns LINKEDIN_REFRESH_ENABLED=off as the string 'off', which
+    // plain truthiness took for true.
+    expect((new LinkedInConnector(['refresh_enabled' => $value], 'linkedin'))->renewalStrategy())->toBe($strategy);
+})->with([
+    'off' => ['off', RenewalStrategy::ReauthOnly],
+    'no' => ['no', RenewalStrategy::ReauthOnly],
+    'false' => ['false', RenewalStrategy::ReauthOnly],
+    '0' => ['0', RenewalStrategy::ReauthOnly],
+    'null' => [null, RenewalStrategy::ReauthOnly],
+    'on' => ['on', RenewalStrategy::StableRefreshToken],
+    'true' => ['true', RenewalStrategy::StableRefreshToken],
+    '1' => ['1', RenewalStrategy::StableRefreshToken],
+]);
+
 it('renews via the refresh token grant', function () {
     Http::fake(['linkedin.com/oauth/v2/accessToken' => Http::response([
         'access_token' => 'new-access',

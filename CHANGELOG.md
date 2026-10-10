@@ -639,7 +639,11 @@ they add.
   `'log_unknown_errors' => 'false'` in a published config, or
   `SOCIAL_TOKENS_CHECK_RENEWABLE=off` (which `env()` returns as the string
   `'off'`), used to count as true. `'false'`, `'no'`, `'off'` and `'0'` are now
-  false ([UPGRADE](UPGRADE.md#check-your-published-config)).
+  false, in `log_unknown_errors`, `check_renewable` and the LinkedIn
+  connector's `refresh_enabled`: `LINKEDIN_REFRESH_ENABLED=off` renewed every
+  member credential holding a refresh token through LinkedIn's token
+  endpoint, which flagged them days early once the app had lost its refresh
+  tokens ([UPGRADE](UPGRADE.md#check-your-published-config)).
 - **(breaking)** A connector `driver` naming a class that does not exist (a
   renamed custom connector) or does not implement `ProviderConnector` passed
   every "no connector" guard, which then threw `InvalidArgumentException`:

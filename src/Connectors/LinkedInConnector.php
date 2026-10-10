@@ -7,6 +7,7 @@ use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 
 /**
  * LinkedIn publishing via the Posts API (part of the Community Management API).
@@ -53,9 +54,13 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
         'RECRUITING_POSTER',
     ];
 
+    /**
+     * `refresh_enabled` is read as every boolean setting (Settings::flag()):
+     * LINKEDIN_REFRESH_ENABLED=off reaches the config as the string 'off'.
+     */
     public function renewalStrategy(): RenewalStrategy
     {
-        return ($this->config['refresh_enabled'] ?? false)
+        return Settings::flag($this->config['refresh_enabled'] ?? false, false)
             ? RenewalStrategy::StableRefreshToken
             : RenewalStrategy::ReauthOnly;
     }

@@ -200,13 +200,16 @@ being misread:
   example `'tries' => env('SOCIAL_TOKENS_TRIES')` with the variable unset.
   Write `0` to keep unlimited retries.
 - Boolean settings holding a string are read as booleans. If
-  `log_unknown_errors` or `check_renewable` holds a string such as `'false'`,
-  `'no'` or `'off'`, either written in the file or coming from `env()` (which
-  converts only `true`, `false`, `null` and `empty`, and returns any other
-  value as a string: `SOCIAL_TOKENS_CHECK_RENEWABLE=off` gives `'off'`), 2.x
-  treated it as true: uncatalogued errors were logged, renewable credentials
-  were checked. 3.0 reads it as false. Write `true` (or
-  `SOCIAL_TOKENS_CHECK_RENEWABLE=true`) to keep the 2.x behaviour.
+  `log_unknown_errors`, `check_renewable` or the `linkedin` connector's
+  `refresh_enabled` holds a string such as `'false'`, `'no'` or `'off'`,
+  either written in the file or coming from `env()` (which converts only
+  `true`, `false`, `null` and `empty`, and returns any other value as a
+  string: `SOCIAL_TOKENS_CHECK_RENEWABLE=off` gives `'off'`), 2.x treated it
+  as true: uncatalogued errors were logged, renewable credentials were
+  checked, LinkedIn member credentials holding a refresh token were renewed
+  with it. 3.0 reads it as false. Write `true` (or
+  `SOCIAL_TOKENS_CHECK_RENEWABLE=true`, `LINKEDIN_REFRESH_ENABLED=true`) to
+  keep the 2.x behaviour.
 - A connector `driver` that names a missing class, or a class that does not
   implement `ProviderConnector`, now counts as no connector, like
   `driver => null`: the dispatcher skips its credentials, `disconnect()` and
