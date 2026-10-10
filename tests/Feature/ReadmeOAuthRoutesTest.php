@@ -78,3 +78,17 @@ it('declares the services entry the LinkedIn OpenID Connect driver reads', funct
     expect(readmeConnectingSection())->toContain("'linkedin-openid'")
         ->and((string) file_get_contents(__DIR__.'/../../README.md'))->toMatch("/'linkedin-openid' => \['client_id' => env\('LINKEDIN_CLIENT_ID'\)/");
 });
+
+it('requests the scopes Meta needs to publish to a Page or an Instagram account', function () {
+    // Page posts need pages_manage_posts and pages_read_engagement, Instagram
+    // content publishing instagram_basic, instagram_content_publish and
+    // pages_read_engagement: without the last, the token is stored and
+    // publishing fails with a permissions error.
+    expect(preg_match('/\$scopes = \[(.*?)\n\];/s', readmeConnectingSection(), $block))->toBe(1, 'The README routes have no $scopes map.');
+
+    preg_match_all("/^\s*'([\w-]+)' => \[([^\]]*)\]/m", $block[1], $entries, PREG_SET_ORDER);
+    $scopes = collect($entries)->mapWithKeys(fn (array $entry) => [$entry[1] => preg_match_all("/'([^']+)'/", $entry[2], $m) ? $m[1] : []]);
+
+    expect($scopes['facebook'])->toContain('pages_manage_posts', 'pages_read_engagement')
+        ->and($scopes['instagram'])->toContain('instagram_basic', 'instagram_content_publish', 'pages_read_engagement');
+});

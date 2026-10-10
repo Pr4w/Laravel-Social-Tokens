@@ -290,8 +290,8 @@ $scopes = [
     'tiktok' => ['user.info.basic', 'video.publish'],
     'google' => ['openid', 'https://www.googleapis.com/auth/youtube.upload'],
     'x' => ['tweet.read', 'tweet.write', 'users.read', 'media.write', 'offline.access'],
-    'facebook' => ['pages_show_list', 'pages_manage_posts', 'business_management'],
-    'instagram' => ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'business_management'],
+    'facebook' => ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement', 'business_management'],
+    'instagram' => ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'pages_read_engagement', 'business_management'],
     'linkedin' => ['w_member_social'], // added to the driver's openid, profile and email
     // ...one entry per provider you support
 ];
