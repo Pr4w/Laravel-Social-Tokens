@@ -34,7 +34,7 @@ refresh token + cron" design breaks on at least one of them:
 | Instagram (through a Facebook Page) | 60 days, or no expiry | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Instagram (Instagram Login, no Page) | 60 days | extend the long lived token (`ig_refresh_token`), no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
-| LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` |
+| LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` (`StableRefreshToken` with refresh tokens) |
 
 The package models "how do I keep this token alive" as a per-provider strategy,
 where one valid answer is "I cannot, the user must reconnect." That last case is
@@ -1001,8 +1001,9 @@ which extends the user token with `fb_exchange_token`; a Meta API whose
 long-lived token extends itself with a `refresh_access_token` call can extend
 `LongLivedTokenConnector` (the base of `ThreadsConnector` and
 `InstagramLoginConnector`). For anything else, extend
-`AbstractConnector` and implement `refreshCredential()`. Register the class under its key in the config: at most 50
-characters, since it is stored in the `provider` columns. Nothing else in the package needs to change. Build
+`AbstractConnector` and implement `refreshCredential()`. Register the class
+under its key in the config: at most 50 characters, since it is stored in the
+`provider` columns. Nothing else in the package needs to change. Build
 requests from `$this->http()` rather than the `Http` facade so they carry the
 configured timeouts, and wrap them in `$this->attempt()` so network errors, 5xx
 and 429 come back as transient failures. Mark every parameter that carries a
@@ -1023,7 +1024,12 @@ to. `revoke()` must not throw: read the token and send the request inside a
 answer that does not confirm the revocation with
 `$this->logUnconfirmedRevoke($token, $response)`. It receives a copy of the
 credential taken before the revocation: the stored row no longer holds the
-tokens.
+tokens. Two capabilities are opt-in: `Contracts\ChecksCredential`
+(`checkCredential()`, see [Renewing](#renewing)) for `check-static` and
+`reportRejected()`, and `Contracts\VerifiesSignedRequests`
+(`parseSignedRequest()`) for the [deauthorize and data deletion
+callbacks](#when-a-user-removes-your-app-meta-threads), which answer a 404 for
+a provider whose connector lacks it.
 
 ### Using a connector on its own
 

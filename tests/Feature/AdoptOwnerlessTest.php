@@ -19,7 +19,7 @@ use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Tests\Fixtures\Owner;
 use Pr4w\SocialTokens\Tests\Fixtures\UpgradeGuide;
 
-const ATTACHED_BY_HAND = '### Owner-less rows you attached by hand';
+const ATTACHED_BY_HAND = '#### Owner-less rows you attached by hand';
 
 beforeEach(fn () => $this->owner = Owner::create(['name' => 'acme']));
 

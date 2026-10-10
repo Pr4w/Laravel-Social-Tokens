@@ -5,7 +5,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 ## [Unreleased]
 
-**Breaking:** see [UPGRADE.md, From 2.x to 3.0](UPGRADE.md#from-2x-to-30).
+3.0.0 adds X (Twitter), Instagram accounts without a Facebook Page, and
+answers to Meta's deauthorize and data deletion callbacks. Most of the rest
+closes ways a working credential was lost, a dead one kept, or a token leaked.
+
+**Breaking.** Entries marked **(breaking)** can need a change in your code,
+config or data: [UPGRADE.md, From 2.x to 3.0](UPGRADE.md#from-2x-to-30) takes
+you through them in order. Run the migrations as part of the deploy, before
+the 3.0 code serves requests or runs jobs: it reads and writes the columns
+they add.
 
 ### Security
 - **No package frame records a token in an exception trace any more.** PHP
@@ -27,249 +35,395 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   only see ciphertext. Frames the package does not control (your own code
   handling a token, another package) can still record one:
   `zend.exception_ignore_args=On` in production is the complete fix.
-- **Queued listeners no longer copy whole models into the queue.** The seven
-  events lacked `SerializesModels`, so a `ShouldQueue` listener had the event
-  PHP-serialised with every attribute and loaded relation: the credential's
-  token ciphertext, and on `AccountConnected` the owner and `connectedBy`
-  models (your User's password hash, `remember_token`, email). It sat in Redis
-  or the jobs table, in Horizon, and in `failed_jobs` for good. Every event
-  now uses `SerializesModels`: the payload holds the class and key, and the
-  listener re-reads the row when it runs (see Changed (breaking), and
-  [UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
-- **Revoking a credential erases its tokens.** `revoke()`, `disconnect()`
-  when it revokes a credential, and the deauthorize callbacks
+- **(breaking)** **Queued listeners no longer copy whole models into the
+  queue.** The seven events lacked `SerializesModels`, so a `ShouldQueue`
+  listener had the event PHP-serialised with every attribute and loaded
+  relation: the credential's token ciphertext, and on `AccountConnected` the
+  owner and `connectedBy` models (your User's password hash,
+  `remember_token`, email). It sat in Redis or the jobs table, in Horizon, and
+  in `failed_jobs` for good. Every event now uses `SerializesModels`: the
+  payload holds the class and key, and a queued listener receives the account
+  or credential as it is in the database when the listener runs, not a copy
+  taken at dispatch. It fails with `ModelNotFoundException` if the row was
+  deleted in between, or not yet committed when the event fired inside your
+  own transaction. Payloads queued by 2.x still run
+  ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
+- **(breaking)** **Revoking a credential erases its tokens.** `revoke()`,
+  `disconnect()` when it revokes a credential, and the deauthorize callbacks
   (`revokeExternalUser()`) changed the status only: the access and refresh
   tokens stayed in the row, decryptable with `APP_KEY`, and often still valid
   at the provider, since Facebook, Instagram, Threads and LinkedIn have no
   provider-side revocation and Google and TikTok skip it while another owner
   holds a grant. A Facebook Page token never expires. The write that marks a
   credential revoked now also sets `access_token`, `refresh_token`,
-  `expires_at`, `refresh_expires_at` and `renew_at` to null; the provider is
-  called with a copy taken before. Migration
+  `expires_at`, `refresh_expires_at` and `renew_at` to null, so they are null
+  in a `CredentialRevoked` listener too; the provider is called with a copy
+  taken before. Migration
   `2025_01_01_000010_clear_tokens_of_revoked_credentials` erases the tokens of
-  the credentials revoked before (see Changed (breaking), and
-  [UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
-- **Disconnecting a user's last Facebook Page revokes the Meta user token
-  behind it.** `disconnect()` followed only the Page's own credential, so the
-  user credential (`provider` `facebook`, `provider_holder_id` the Facebook
-  user) stayed `active`, holding a 60-day token that can mint a Page token for
-  every Page the user manages, no longer renewed nor checked. It is now
-  revoked, and its tokens erased, once no Page and no Instagram account of that
-  user is connected under the same owner (see Changed (breaking)).
+  the credentials revoked before (it can be run again, keeps `updated_at`, and
+  cannot be rolled back). Code that read the token of a revoked credential (to
+  call the provider itself, for example Meta's `DELETE /{user-id}/permissions`)
+  must read it before revoking, or do it in a connector's `revoke()`, which
+  still receives a copy holding the tokens. A reconnect no longer finds a
+  revoked credential's refresh token to fall back on when the provider sends
+  none: a Google reconnect without `prompt=consent` then stores no refresh
+  token ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
+- **(breaking)** **Disconnecting a user's last Facebook Page revokes the Meta
+  user token behind it.** `disconnect()` followed only the Page's own
+  credential, so the user credential (`provider` `facebook`,
+  `provider_holder_id` the Facebook user) stayed `active`, holding a 60-day
+  token that can mint a Page token for every Page the user manages, no longer
+  renewed nor checked. `disconnect()` now also revokes, tokens erased, the
+  credential the account's holder keeps under the same owner once no account
+  of that holder and owner is connected: the last Facebook Page or Instagram
+  account of a Facebook user revokes the Meta user credential, firing one more
+  `CredentialRevoked`. Disconnecting a user's last Instagram account no longer
+  revokes that credential while a Page of the same user and owner is
+  connected; 2.x revoked it then, although the Pages kept it renewed
+  ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
 
-### Changed (breaking)
-- `provider` is `varchar(50)` on `social_accounts` and `social_tokens` on MySQL,
-  MariaDB and PostgreSQL (migration `2025_01_01_000006_shorten_provider_columns`).
-  A connector key must be at most 50 characters; the migration refuses,
-  changing nothing, while a longer one is stored. SQLite declares no length and
-  SQL Server has no key-length cap, so both are left as is. Rolling the
-  migration back keeps `varchar(50)`, which 2.x reads fine.
-- Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade) no
-  longer runs as one transaction on PostgreSQL: a failure partway no longer
-  rolls everything back. Run `php artisan migrate` again; it resumes where it
-  stopped (see Fixed).
-- On an install with a table prefix and `prefix_indexes`, the owner-scoped
-  unique keys 000007 creates carry the prefix
-  (`acme_social_accounts_owner_identity_unique`, not
-  `social_accounts_owner_identity_unique`). Only 1.x installs migrating with
-  3.0 get the new names; keys 2.0.0 created keep theirs, and `down()` finds
-  either by its columns.
-- `TransientRenewalException` implements `ShouldntReport`: a transient renewal
-  failure no longer reaches your exception handler or error tracker; alert on
-  the `Renewal failed after retries` warning instead (see Changed, and
-  [UPGRADE](UPGRADE.md#transient-renewal-failures-are-no-longer-reported)).
-- Boolean settings holding a string, written in the config or coming from
-  `env()` (`'false'`, `'no'`, `'off'`), are read as false; 2.x read them as
-  true (see Fixed, and
-  [UPGRADE](UPGRADE.md#check-your-published-config)).
-- `queue.tries` set to `null`, an empty string or a non-numeric value means 4
-  attempts; 2.x read it as 0, unlimited. Write `0` to keep unlimited retries
-  ([UPGRADE](UPGRADE.md#check-your-published-config)).
-- A connector `driver` that is not a resolvable `ProviderConnector` class counts
-  as no connector: `disconnect()`, `revoke()` and `validAccessTokenFor()` no
-  longer throw `InvalidArgumentException` for it (see Fixed, and
-  [UPGRADE](UPGRADE.md#check-your-published-config)).
-- A `dispatch_schedule` or `check_static_schedule` value that is neither a cron
-  expression nor a frequency method without arguments (a scheduler macro, a
-  method that only picks the days such as `weekdays`) logs an error and keeps
-  the default schedule (see Fixed, and
-  [UPGRADE](UPGRADE.md#check-your-published-config)).
-- A queued listener of a package event receives the account or credential as
-  it is in the database when the listener runs, not a copy taken at dispatch
-  (see Security). It fails with `ModelNotFoundException` if the row was
-  deleted in between, or not yet committed when the event fired inside your
-  own transaction ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
-- `SocialAccount::connectedBy()` is a relation named `connectedBy`, after its
-  method (it was named `connected_by`). Code reading the loaded relation by
-  its old name (`getRelation('connected_by')`, `relationLoaded('connected_by')`,
-  `setRelation('connected_by', ...)`) must use `connectedBy`. So must code
-  reading the snake-case property: `$account->connected_by`, which returned the
-  model after `associate()` or `with('connectedBy')`, now returns null (or
-  throws `MissingAttributeException` under
-  `Model::preventAccessingMissingAttributes()`); read `$account->connectedBy`.
-  `toArray()` still shows it as `connected_by` (see Fixed, and
-  [UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
-- `revoke()` fires `CredentialRevoked` and `AccountRevoked` before the
-  provider-side revocation instead of after it, and hands the connector the
-  credential as it was before those events (a listener that wipes the token
-  no longer affects the provider call). A provider revocation that throws is
-  no longer rethrown: it is logged (`[social-tokens] {provider} token
-  revocation failed`, with `provider`, `token_id`, `exception` and a redacted
-  `message`); the X connector's own failure log takes that form too. A
-  revocation listener that throws no longer stops the provider call either:
-  `revoke()` and `disconnect()` still make it, then rethrow the listener's
-  exception (see Fixed, and
-  [UPGRADE](UPGRADE.md#revocation-is-recorded-before-the-provider-call),
-  [If you wrote a connector](UPGRADE.md#if-you-wrote-a-connector)).
-- `reportRejected(terminal: false)` flags only on a definitive answer from the
-  provider (a Meta session subcode, LinkedIn's `revoked`), the standard
-  `check-static` has applied since 1.2. A bare Meta 190/102, which Meta also
-  sends to valid tokens during an incident, is now one strike against the
-  token and the call returns `false`. Only `social-tokens:check-static`
-  confirms it, flagging the credential if Meta still rejects the token
-  (renewable credentials only with `check_renewable`), and reports never
-  confirm each other: an app that set `check_static_schedule` to `null` must
-  schedule or run the command itself, or such a report never flags.
-  It used to flag at once, with no breaker, so every credential that
-  published during such an incident was flagged. A report naming a token the
-  credential no longer holds now returns `false` without asking the provider
-  ([UPGRADE](UPGRADE.md#review-your-reportrejected-calls)).
-- Graph calls the package makes with a user or Page token now send
-  `appsecret_proof` by default (see Added). Meta accepts it whether or not
-  "Require App Secret" is on, but it only matches tokens issued to the
-  configured app: tokens issued by another Meta app fail
-  `social-tokens:check-static` with "Invalid appsecret_proof" until you set
-  `META_APPSECRET_PROOF=false`
+### Added
+- **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
+  (Socialite's `x` driver, `services.x`). 2-hour access tokens renewed 30
+  minutes ahead; single-use rotating refresh tokens (`offline.access` required);
+  HTTP Basic client authentication on `api.x.com`; X's dead-refresh-token answer
+  (`invalid_request` "Value passed for the token was invalid.") is terminal,
+  while a request built wrong, a missing Authorization header or a suspended app
+  is an app-client failure (retried, alerted, never flagged); best-effort revoke
+  that logs a failure. OAuth 1.0a is not supported. A published config needs
+  the `x` entry ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- **Instagram without a Facebook Page**, through the Instagram API with
+  Instagram Login: `InstagramLoginConnector`, registered as `instagram_login`
+  (its own credentials, `services.instagram_login`: the Instagram app id and
+  secret). `StoreConnection` stores one account per connection, never the
+  Facebook Page fan-out; the 1-hour token is exchanged at connect
+  (`ig_exchange_token`), and the 60-day token is extended a week ahead
+  (`ig_refresh_token`, once it is 24 hours old) and checked on
+  `graph.instagram.com/me`. A creator or business account not linked to a
+  Page could not be connected before: the `InstagramConnector` docblock said
+  swapping its renewal request was enough, but `StoreConnection` sent every
+  `InstagramConnector` to the Facebook Page fan-out and renewed it on
+  `graph.facebook.com`, which refused the token.
+- **Meta deauthorize and data deletion callbacks.** When a user removed the
+  app, or asked for their data to be deleted, the package could not act on
+  Meta's callback: it had no `signed_request` verifier, no handler, and no way
+  to reach every row of one external user across owners (a user's Page
+  credentials are keyed by the Page, and revoking the user credential did not
+  reach them). Until a post failed or a renewal ran, their accounts stayed
+  usable. Now:
+  - `SocialTokens::revokeExternalUser($provider, $externalId)` revokes,
+    locally and under every owner, the credentials the user holds, the
+    accounts recorded under them (`provider_holder_id`: Pages and Instagram
+    accounts), the credentials those accounts post with (the Pages' tokens)
+    and every account posting with one of those. `facebook` and `instagram`
+    reach the same rows. The provider is not called.
+  - `SocialTokens::purgeExternalUser($provider, $externalId, $deleted = null)`
+    deletes those credentials and revokes those accounts, which keep their
+    rows without a credential. The `$deleted` closure receives the accounts as
+    soon as the tokens are deleted, even when a listener throws.
+  - `Actions\HandleDeauthorizeCallback` (Deauthorize, Threads' Uninstall) and
+    `Actions\HandleDataDeletionCallback` (Data Deletion Request, Threads'
+    Delete), which verify the `signed_request` with the connector's app
+    secret; the second answers `{url, confirmation_code}` and fires
+    `Events\ExternalUserDataDeleted` for the app to delete the rest, even
+    when an `AccountRevoked` listener throws (its exception is reported).
+    `Actions\ShowDataDeletionStatus` serves the status page, recognising only
+    codes signed with the app key (`Support\DeletionConfirmation`).
+  - Their routes, `POST {prefix}/{provider}/deauthorize`,
+    `POST {prefix}/{provider}/delete` and
+    `GET {prefix}/{provider}/deletion/{code}`, registered only with
+    `callbacks.enabled` (`SOCIAL_TOKENS_CALLBACKS`, off by default), under
+    `callbacks.prefix` (`social-tokens/meta`) with `callbacks.middleware`
+    (none); `callbacks.deletion_status_url` points the answer at the app's
+    own page (`{provider}` and `{code}` in it are replaced; without `{code}`,
+    `?code=` is appended). `Support\CallbackRoutes::register()` registers
+    them anywhere.
+  - `Support\MetaSignedRequest::parse($signedRequest, $secret)` (and
+    `make()`), `Exceptions\InvalidSignedRequestException`, and the
+    `Contracts\VerifiesSignedRequests` connector capability, implemented by
+    the Facebook, Instagram, Instagram Login and Threads connectors.
+- **(breaking)** **Meta "Require App Secret" support.** Graph calls made with
+  a user or Page token (`/me` at connect and in `check-static`, `/me/accounts`
+  and its `paging.next` pages) carry `appsecret_proof`, the HMAC-SHA256 of the
+  token keyed with the Meta app secret. Turning the setting on used to break
+  every Facebook and Instagram connection and leave every Page unchecked. It
+  is sent by default, through the `appsecret_proof` option of the `facebook`
+  and `instagram` connectors (`META_APPSECRET_PROOF`, on even when a published
+  config lacks it), and `appSecretProof($token)` on both connectors signs your
+  own Graph calls. Meta accepts a proof whether or not "Require App Secret" is
+  on, but it only matches tokens issued to the configured app: tokens issued
+  by another Meta app fail `social-tokens:check-static` with "Invalid
+  appsecret_proof" until you set `META_APPSECRET_PROOF=false`
   ([UPGRADE](UPGRADE.md#meta-calls-carry-appsecret_proof)).
-- `renewCredential()` re-reads the credential under the renewal lock with
-  `SELECT ... FOR UPDATE` (SQLite has no row locks and reads as before), so it
-  sees a renewal committed after the caller's transaction began and waits for
-  one not committed yet (see Fixed). It waits as long as the database lets it:
-  up to `innodb_lock_wait_timeout` on MySQL (50 seconds by default); on
-  PostgreSQL up to 30 seconds outside your transaction (the read sets
-  `lock_timeout` for its own short transaction unless you set one), and inside
-  it until the transaction holding the row ends, unless `lock_timeout` is set.
-  A wait of more than 30 seconds is a transient failure ("Could not lock the
-  credential for renewal."), since the 60-second renewal lock could lapse
-  during the provider call. Outside your transaction, a lock wait timeout or a
-  deadlock on that read (PostgreSQL's `55P03` lock timeout included) is a
-  transient failure too. Inside it, that error is thrown instead (its
-  `QueryException`, or a `DeadlockException` from a nested
-  `DB::transaction()`), from `validAccessTokenFor()` as well: the database may
-  have rolled your transaction back, and a transient result would let you
-  commit the rest of it alone. There the row also stays locked until your
-  transaction ends. Renewing a TikTok or X credential inside a database
-  transaction logs a warning (`Renewing a single-use refresh token inside a
-  database transaction`), since a rollback discards a refresh token the
-  provider has already replaced
-  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
-- `applyRenewal()` writes only while the credential still holds the access and
-  refresh tokens the instance was loaded with (compared in a transaction, under
-  a row lock; the same tokens re-encrypted under a new `APP_KEY` still count),
-  and not over a revoke, as before. Otherwise it writes nothing,
-  fires no `CredentialRenewed`, and reloads the instance with the stored row. A
-  credential deleted meanwhile throws `ModelNotFoundException`; 2.x saved
-  silently. Load the credential right before refreshing it
-  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
-- After a terminal renewal failure, `RenewCredential` and
-  `validAccessTokenFor()` flag the credential only while it still holds the
-  refused token (`markNeedsReconnectOnce($reason, $token)`). When a reconnect
-  replaced it meanwhile, nothing is flagged and `validAccessTokenFor()` throws
-  a transient `NeedsReconnectException` (retry) instead of a non-transient one.
-  `renewCredential()` reloads the `$token` it is given under the lock, so
-  `$token->access_token` is that token; flag it the same way if you call
-  `renewCredential()` yourself
-  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
-- **A LinkedIn member's personal profile and organizations have separate
-  credentials.** A credential is unique per `(provider, provider_holder_id,
-  purpose, owner)`: `StoreLinkedInOrganizations` stores the member token on a
-  credential with `purpose = 'organizations'`
+- **Meta's data access deadline is tracked and announced.** Meta stops
+  sharing a user's data with the app 90 days after the user was last active
+  (`data_access_expires_at`), although the token keeps working and renewing;
+  only a new login moves it. Nothing in the package read it, so a credential
+  could lose data access while it looked healthy, with no warning. It is now
+  stored on the credential at connect and after each renewal; a reconnect
+  whose `debug_token` call fails clears the old one (unknown) rather than keep
+  a deadline the new login has moved. `social-tokens:dispatch-renewals` fires
+  `CredentialDataAccessExpiring` once, seven days before it, for a credential
+  an active account posts with (the Instagram accounts), after dispatching the
+  run's renewals: a failure of that check never holds them back. It is a
+  warning only: Meta does not say which calls a lapse blocks for an app with
+  business permissions, so the credential is not flagged. With it:
+  - `Events\CredentialDataAccessExpiring($token, $dataAccessExpiresAt)`, fired
+    once per deadline, and the `data_access_warning` config block (`enabled`,
+    `SOCIAL_TOKENS_DATA_ACCESS_WARNING`, default on; `lead_days`, default 7).
+  - `social_tokens.data_access_expires_at` and `data_access_warned_at`
+    (migration `2025_01_01_000009_add_data_access_expiry_to_social_tokens`),
+    `SocialToken::isDataAccessExpired()`,
+    `SocialToken::warnDataAccessExpiring()` and the
+    `dataAccessExpiringBefore($date)` scope. Storing a new
+    `data_access_expires_at` re-arms the warning.
+- **(breaking)** `social-tokens:prune` deletes the credentials nothing will
+  use again, once they have not changed for `prune_after_days` (30, at least
+  1; `--days` overrides it): revoked ones, ones flagged `needs_reconnect`, and
+  ones no connected account depends on, by `social_token_id` or as the holder
+  of its accounts under the same owner (left behind by a reconnect, or by
+  accounts the app deleted). Nothing removed a credential before, and a
+  renewable one with a past `renew_at` was read again by every dispatcher
+  run. The scheduler runs it daily (`prune_schedule`, any form
+  `dispatch_schedule` takes; `null` disables it), `withoutOverlapping()` and
+  `onOneServer()`. The query is `SocialToken::prunable($before)`. Accounts are
+  never deleted: one whose credential is deleted keeps its row, without a
+  credential (`social_token_id` null), so `$account->credential` can be null,
+  as it already could after a data deletion request. Such an account keeps no
+  other credential of its holder in use either (`inUse()`, `prunable()`,
+  `disconnect()`): a Facebook Page whose Page token was pruned no longer keeps
+  the Meta user token renewed, nor do LinkedIn organizations whose credential
+  was pruned keep the member's personal one, and disconnecting the profile
+  revokes it
+  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
+- `social-tokens:reencrypt` re-encrypts every stored token with the current
+  `APP_KEY`, decrypting with `APP_PREVIOUS_KEYS`, so a previous key can be
+  retired. The `encrypted` cast only re-encrypts a value it writes, and a
+  Google refresh token or a Facebook Page token is never written again: once
+  the old key was dropped, those credentials no longer decrypted. Tokens
+  already under the current key are left as they are, and `updated_at` is
+  kept. It runs alongside renewals and reconnects: a row is written only while
+  it holds the ciphertext that was read, a row changed meanwhile is read again
+  and rewritten (a Google renewal leaves the refresh token under the old key),
+  and a renewal in flight still stores its result over the rewritten tokens
+  (for TikTok and X, the only copy of the rotated refresh token). It exits
+  with a failure code when a row kept changing (run it again), and when a
+  token decrypts with none of the keys, which it logs and leaves.
+- `SocialTokens::forgetOwner(Model $owner)` tears down what an owner holds,
+  for when the owner itself is deleted: its credentials are revoked (tokens
+  erased, the provider called unless another owner still holds a grant for
+  the same external user), its accounts revoked, then both are deleted, and
+  the deleted accounts returned. The owner columns carry no foreign key, so
+  a deleted workspace used to leave its accounts active and its credentials
+  renewed for good, each counting as a grant that kept every other owner's
+  `revoke()` and `disconnect()` of the same TikTok or Google user from
+  reaching the provider. `CredentialRevoked` and `AccountRevoked` fire before
+  the rows are deleted, so a queued listener of either fails with
+  `ModelNotFoundException`
+  ([UPGRADE](UPGRADE.md#tear-down-the-owners-you-delete)).
+- `SocialTokens::adopt(SocialAccount $account, Model $owner)` gives an
+  owner-less account an owner, with the credentials it depends on (the one
+  it posts with, and the Meta user token behind a Facebook Page) once no
+  other owner-less account uses them, in one transaction. A LinkedIn
+  member's profile and organizations post with separate credentials: each
+  moves with its own accounts, to whichever owner adopts them. It refuses an
+  account of another owner, and one the owner already has (a reconnect
+  stored a row of its own). Given an account the owner already has, it
+  moves its owner-less credentials, which finishes an adoption made with
+  `associate()` ([UPGRADE](UPGRADE.md#owner-less-rows-you-attached-by-hand)).
+- **Testing helpers for apps** (README, "Testing your app"):
+  - Model factories: `SocialAccount::factory()` makes an active account with
+    a credential that matches it as a connection stores them (provider,
+    holder, owner; a Facebook Page on a never-expiring Page token, an
+    Instagram account on the Meta user credential), shared by the accounts
+    of one holder as at a connection (the organizations of one LinkedIn
+    member, the Instagram accounts of one Facebook user), and
+    `SocialToken::factory()` a credential alone, scheduled with its
+    provider's lead time. States: `forProvider()`, `ownedBy()`,
+    `connectedBy()`, `heldBy()`, `linkedInOrganization()`, `credential()`,
+    `needsReconnect()`, `revoked()`, `disconnected()` on accounts;
+    `forProvider()`, `ownedBy()`, `forPurpose()`, `dueForRenewal()`,
+    `expired()`, `neverExpiring()`, `withoutRefreshToken()`,
+    `needsReconnect()`, `revoked()` on credentials. They live in
+    `Pr4w\SocialTokens\Database\Factories` and need no Faker.
+  - `Pr4w\SocialTokens\Facades\SocialTokens`, registered as the
+    `SocialTokens` alias. Its `fake()` swaps in `Testing\SocialTokensFake`:
+    the real service against the test database, with the real connectors,
+    whose renewals, provider-side revocations and `reportRejected()` checks
+    are answered without a request (`renewWith()`, `checkWith()`) and
+    recorded (`assertRenewed()`, `assertNotRenewed()`,
+    `assertRevokedAtProvider()`, `assertNotRevokedAtProvider()`,
+    `assertChecked()`, `assertNotChecked()`).
+  - `Testing\FakeConnector`, a connector that makes no request, for a
+    provider key of an app's tests: scripted renewals, connect-time
+    exchange and revocation, and the same assertions.
+- `social_accounts.disconnected_at` (migration
+  `2025_01_01_000011_add_disconnected_at_to_social_accounts`, nullable, no
+  index), set by `disconnect()` through `SocialAccount::markDisconnected()`
+  (also on an account already revoked, without a second `AccountRevoked`).
+  `SocialAccount::wasDisconnected()` tells, and
+  `SocialAccount::clearDisconnected()` forgets it (unsaved), so that the next
+  reconnect restores that account. A `restoreDisconnected` option on
+  `StoreConnection::handle()`, `StoreFacebookPages::handle()`,
+  `StoreInstagramAccounts::handle()`, `StoreLinkedInOrganizations::handle()`
+  and `StoresConnections::storeConnection()` brings back every disconnected
+  target of a connection: see "A reconnect no longer brings back an account
+  the user disconnected" under Changed.
+- `social_tokens.purpose`, `SocialToken::DEFAULT_PURPOSE` (`''`),
+  `StoreLinkedInOrganizations::PURPOSE` (`'organizations'`) and the
+  `SocialToken::forPurpose($purpose = '')` scope (migration
+  `2025_01_01_000008_add_purpose_to_social_tokens`): see "A LinkedIn member's
+  personal profile and organizations have separate credentials" under Changed.
+  `persistCredential()` keys without a purpose name the default credential.
+- `OAuth2Connector`, the base for OAuth 2.0 refresh-token providers. TikTok,
+  Google, LinkedIn and X now share one refresh request, response parsing and
+  error-classification flow; a provider declares its endpoint, parameters and
+  error codes (`classifyError()`).
+- `Connectors\MetaGraphConnector`, the base of `FacebookConnector` and
+  `InstagramConnector` (the Facebook Login path). It holds the one
+  `fb_exchange_token` call, `exchangeUserToken($userToken)` (a
+  `RenewalResult`), the Graph version, `graphVersion()` with the
+  `MetaGraphConnector::DEFAULT_GRAPH_VERSION` default (`v23.0`), the
+  `appsecret_proof` signing, `debugToken($userToken)` (debug_token's `data`),
+  the static `tokenLifetime($data)` (`never_expires`, `expires_at`,
+  `data_access_expires_at`, in the app's timezone) and
+  `withTokenLifetime($result)`. The two connectors carried a copy each of the
+  call and of the version default, so a fix made to one missed the other.
+  `FacebookConnector::grantedScopesFrom($data, $accountIds)` reads the
+  per-account scopes from a `debug_token` reply, and `grantedScopesByAccount()`
+  now uses it: the connect-time actions call `debugToken()` once and read the
+  scopes and the lifetime from its reply. `FacebookConnector::extendUserToken()`
+  keeps its array shape, for your own code: the package calls
+  `exchangeUserToken()` (see Changed).
+- `Connectors\LongLivedTokenConnector`, the base of `ThreadsConnector` and
+  `InstagramLoginConnector`: a Meta API whose long-lived token extends itself
+  with a `refresh_access_token` call, guarded by the 24-hour minimum age, with
+  a connect-time exchange and a `/me` check. A product declares its URLs,
+  grant names and label.
+- `Contracts\FansOutConnections`, a connector capability: a connector whose
+  connections yield several accounts names the action that stores them
+  (`connectionAction()`). `FacebookConnector` names `StoreFacebookPages`,
+  `InstagramConnector` names `StoreInstagramAccounts`. That action implements
+  `Contracts\StoresConnections`: `storeConnection($provider, $user, $owner,
+  $connectedBy, $longLived, $refreshExpiresAt, $restoreDisconnected)`,
+  implemented by `StoreAccountFromSocialite`, `StoreFacebookPages` and
+  `StoreInstagramAccounts`. `StoreConnection` hands a connection to that
+  action with every option; `StoreAccountFromSocialite` refuses it.
+- `SocialToken::persistCredential($keys, $values, $connector = null)`:
+  `updateOrCreate()` for a token the provider has just issued, which encrypts
+  it before the write so a failed write leaves no plaintext token in the
+  exception trace (see Security). Unless `$values` says otherwise, the
+  credential comes back active, with no `last_error`, no `check-static` strike
+  and `last_renewed_at` set to now; given the connector, `renew_at` is
+  scheduled for the credential as stored, with its own strategy. The `Store*`
+  actions use it; use it too if you store credentials yourself.
+- `SocialToken::tryApplyRenewal($result, $connector)`: `applyRenewal()` that
+  returns whether it stored the renewal (see Fixed, "A reconnect during a
+  renewal is no longer undone").
+- `AbstractConnector::renewalStrategyFor(SocialToken $token)`: the strategy for
+  one credential, `renewalStrategy()` by default. `LinkedInConnector` returns
+  `ReauthOnly` for a credential without a refresh token (see Fixed).
+  `SocialToken::renewalStrategyWith($connector)` asks it of any connector, and
+  `SocialToken::renewAtFor()` takes the credential's strategy as a fourth
+  argument.
+- `refreshExpiresAt:` on `StoreConnection::handle()` and
+  `StoreAccountFromSocialite::handle()`: the refresh token's expiry, which
+  core Socialite's drivers do not expose. The 1.2 entry saying
+  `StoreAccountFromSocialite` reads LinkedIn's `refresh_token_expires_in` holds
+  only for a driver that exposes the token response
+  (`accessTokenResponseBody`, SocialiteProviders); core Socialite's `linkedin`
+  and `linkedin-openid` drivers drop it, and so did the README's
+  `StoreLinkedInOrganizations` example, which now passes it.
+- `RenewalResult::success()` takes `neverExpires:` (the provider says the token
+  does not expire: the credential is stored static) and `dataAccessExpiresAt:`;
+  both are readable on the result.
+- Revocation logging. `GoogleConnector`, `TikTokConnector` and `XConnector` log
+  a warning when the provider answers a revocation without confirming it (an
+  HTTP error, or an `error` in the body, which TikTok may send with a 200):
+  `[social-tokens] {provider} did not confirm the token revocation`, with
+  `provider`, `token_id`, `status` and the `error` code, never the body. 2.x
+  ignored Google's and TikTok's answer. A connector of your own logs the same
+  with `AbstractConnector::logUnconfirmedRevoke()`, and a failure with
+  `logRevokeFailure()`; `ProviderConnector::revoke()` is documented as best
+  effort that must not throw.
+- `Support\Settings::flag()`: reads a boolean config value the way the
+  package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
+- `SocialTokens` reaches the providers through two protected methods,
+  `refreshAtProvider()` (renewals) and `checkAtProvider()` (the check of
+  `reportRejected()`), next to `revokeAtProvider()`, so that a subclass can
+  answer in their place.
+- Migration `2025_01_01_000006_index_social_token_id_on_social_accounts`: an
+  index on `social_accounts.social_token_id`. PostgreSQL and SQLite do not index
+  a foreign key column, so finding a credential's accounts (the renewal
+  dispatcher, `revoke()`, `disconnect()`, deleting a credential, the 000007
+  backfill) scanned the whole table. On MySQL the foreign key's own index is
+  kept and nothing is added.
+
+### Changed
+- **(breaking)** The 3.0 code needs the 3.0 schema: run the migrations before,
+  or together with, the code deploy. Until
+  `2025_01_01_000008_add_purpose_to_social_tokens` has run, every connection
+  throws a `QueryException` (unknown column `purpose`). Until
+  `2025_01_01_000009_add_data_access_expiry_to_social_tokens` has run,
+  Facebook and Instagram (Facebook Login) connections throw one too (unknown
+  column `data_access_expires_at`), the renewal of a Meta user credential fails
+  and is retried, and each dispatcher run still dispatches all renewals, then
+  reports the failed data access check and exits with a failure code (on
+  SQLite the check silently finds nothing). Until
+  `2025_01_01_000011_add_disconnected_at_to_social_accounts` has run,
+  `disconnect()` throws (unknown column `disconnected_at`), changing nothing
+  ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
+- **(breaking)** `provider` is `varchar(50)` on `social_accounts` and
+  `social_tokens` on MySQL, MariaDB and PostgreSQL (migration
+  `2025_01_01_000006_shorten_provider_columns`). As `varchar(255)` it left no
+  room in the owner-scoped unique keys for a uuid or ulid owner id: a fresh
+  install on MySQL with uuid or ulid owner keys failed in migration 000007 with
+  "Specified key was too long". A connector key must be at most 50 characters;
+  the migration refuses, changing nothing, while a longer one is stored. SQLite
+  declares no length and SQL Server has no key-length cap, so both are left as
+  is. Rolling the migration back keeps `varchar(50)`, which 2.x reads fine. The
+  README Install section now says to call `Schema::morphUsingUuids()` /
+  `morphUsingUlids()`, or to declare the accounts' owner columns as uuid or
+  ulid, before migrating.
+- **(breaking)** **A LinkedIn member's personal profile and organizations have
+  separate credentials.** The profile (Socialite: OpenID scopes and
+  `w_member_social`) and the organizations (an app-side exchange with
+  `w_organization_social`) are two authorizations, which 2.x stored on one
+  shared credential: whichever flow ran last replaced the other's access
+  token, refresh token, expiry and scopes. Posts as the organizations then
+  failed with a 403 while their rows still listed `w_organization_social` in
+  `hasScope()`, `usable()` still returned them, and LinkedIn introspection
+  answered `active`, so nothing was flagged. A credential is now unique per
+  `(provider, provider_holder_id, purpose, owner)`: `StoreLinkedInOrganizations`
+  stores the member token on a credential with `purpose = 'organizations'`
   (`StoreLinkedInOrganizations::PURPOSE`), and the profile stored through
   `StoreConnection` / `StoreAccountFromSocialite` keeps the default one
   (`purpose = ''`). Migration `2025_01_01_000008_add_purpose_to_social_tokens`
   adds the column, replaces the unique key `social_tokens_owner_identity_unique`
-  with `social_tokens_identity_purpose_unique`, and splits the LinkedIn
-  credentials 2.x shared between the two (see Fixed). A lookup of a credential
-  by `(provider, provider_holder_id, owner)` may now find two rows for a
-  LinkedIn member: name the purpose (`forPurpose()`). The two credentials
-  renew, warn (`CredentialExpiringSoon`), get flagged and are reconnected
-  separately; disconnecting the personal row revokes the profile's credential,
-  and revoking an organization's credential no longer revokes the personal row
+  with `social_tokens_identity_purpose_unique`, and splits the credentials 2.x
+  shared between the two flows. On MySQL and MariaDB it checks that the new key
+  fits InnoDB's 3072-byte limit before changing anything; it can be run again
+  after a failure, splits in chunks of 100 credentials, each in its own
+  transaction, and its `down()` refuses while a member has two credentials for
+  one owner. A lookup of a credential by `(provider, provider_holder_id,
+  owner)` may now find two rows for a LinkedIn member: name the purpose
+  (`forPurpose()`). The two credentials renew, warn
+  (`CredentialExpiringSoon`), get flagged and are reconnected separately, and
+  each is kept alive by the accounts posting with it, so the organizations'
+  token is no longer renewed (nor warned about) for a member who only keeps
+  the profile. Disconnecting the personal row revokes the profile's
+  credential, and revoking an organization's credential no longer revokes the
+  personal row
   ([UPGRADE](UPGRADE.md#linkedin-profiles-and-organizations-have-separate-credentials)).
-- `FacebookConnector` and `InstagramConnector` extend
-  `Connectors\MetaGraphConnector`, and `ThreadsConnector` extends
-  `Connectors\LongLivedTokenConnector`; the methods they shared moved there
-  (see Added). The package no longer calls
-  `FacebookConnector::extendUserToken()` or `grantedScopesByAccount()`, at
-  connect or at renewal, so a subclass overriding either is skipped: override
-  `exchangeUserToken()` (a `RenewalResult`), and `debugToken()` or the static
-  `grantedScopesFrom()`, instead. The `Store*` actions call
-  `grantedScopesFrom()` and `tokenLifetime()` on the configured connector
-  class, so a subclass's own versions are used
-  ([UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
-- A Meta user token that `debug_token` reports as never expiring
-  (`expires_at: 0`) becomes static at its next renewal: `renew_at` null, no
-  more weekly `fb_exchange_token` call nor `CredentialRenewed` event. Only
-  `social-tokens:check-static` watches it from then on; an app that set
-  `check_static_schedule` to `null` must schedule the command itself (see
-  Fixed, and
-  [UPGRADE](UPGRADE.md#meta-data-access-and-tokens-that-never-expire)).
-- Migration `2025_01_01_000009_add_data_access_expiry_to_social_tokens` is
-  required: the Meta connectors write its columns and
-  `social-tokens:dispatch-renewals` reads them. Until it has run, Facebook
-  and Instagram (Facebook Login) connections throw a `QueryException`
-  (unknown column `data_access_expires_at`), and the renewal of a Meta user
-  credential fails and is retried. Other providers keep connecting and
-  renewing. Each dispatcher run still dispatches all renewals, then reports
-  the failed data access check and exits with a failure code (on SQLite the
-  check silently finds nothing). Run the migration before, or together with,
-  the code deploy ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
-- `InstagramConnector`'s reason for an `fb_exchange_token` reply without a
-  token reads "Malformed token extension response." (it was "Malformed
-  response, no access_token."; see Changed, and
-  [UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
-- A revoked credential holds no tokens and no schedule: `access_token`,
-  `refresh_token`, `expires_at`, `refresh_expires_at` and `renew_at` are null
-  from the revocation on, in a `CredentialRevoked` listener too (see
-  Security). Code that read the token of a revoked credential (to call the
-  provider itself, for example Meta's `DELETE /{user-id}/permissions`) must
-  read it before revoking, or do it in a connector's `revoke()`, which still
-  receives a copy holding the tokens. A reconnect no longer finds a revoked
-  credential's refresh token to fall back on when the provider sends none: a
-  Google reconnect without `prompt=consent` then stores no refresh token
-  ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
-- `disconnect()` also revokes the credential the account's holder keeps under
-  the same owner once no account of that holder and owner is connected: the
-  last Facebook Page (or Instagram account) of a Facebook user revokes the
-  Meta user credential, firing one more `CredentialRevoked`. Disconnecting a
-  user's last Instagram account no longer revokes that credential while a
-  Page of the same user and owner is connected; 2.x revoked it then, although
-  the Pages kept it renewed
-  ([UPGRADE](UPGRADE.md#revoked-credentials-keep-no-tokens)).
-- `StoreConnection` passes `longLived` to the Facebook and Instagram fan-outs
-  (their `extend`): `longLived: false` now skips the `fb_exchange_token` call
-  there too, and stores the user token as given. 2.x ignored it on those two
-  providers and always extended. Pass it only with a token that already is
-  long-lived: Page tokens minted from a short-lived user token die with it,
-  within hours, although they are stored as never expiring
-  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
-- `StoreAccountFromSocialite` throws `InvalidArgumentException`, writing
-  nothing, for a provider whose connections fan out (`facebook`, `instagram`,
-  any connector implementing `FansOutConnections`). It used to store the
-  Facebook user as a Page-less `facebook` account, or as an `instagram`
-  account carrying the Facebook user's id, and to overwrite the shared Meta
-  user credential with Socialite's short-lived token
-  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
-- `StoreConnection` picks the action from the connector
-  (`FansOutConnections::connectionAction()`, see Added) instead of checking
-  for `FacebookConnector` and `InstagramConnector`; a subclass of either
-  inherits its action. Its constructor takes the `ConnectorRegistry`, the
-  container and `StoreAccountFromSocialite`, no longer the two Meta actions:
-  resolve it from the container.
-- **A reconnect no longer brings back an account the user disconnected.**
-  `disconnect()` records when (`social_accounts.disconnected_at`, migration
-  `2025_01_01_000011_add_disconnected_at_to_social_accounts`), and the
-  fan-out actions (`StoreFacebookPages`, `StoreInstagramAccounts`,
+- **(breaking)** **A reconnect no longer brings back an account the user
+  disconnected.** The fan-out actions store every target the provider lists
+  and wrote `active` over each row and its credential, so the Page, Instagram
+  account or LinkedIn organization a user removed came back, usable, returned
+  and announced by `AccountConnected`, at the next reconnect of the same
+  login: to refresh the token, to add a Page, or the ones Meta's 90-day data
+  access and LinkedIn's 60-day re-authorisation force. `disconnect()` now
+  records when (`social_accounts.disconnected_at`, see Added), and the fan-out
+  actions (`StoreFacebookPages`, `StoreInstagramAccounts`,
   `StoreLinkedInOrganizations`, and `StoreConnection` for Facebook and
   Instagram) leave such an account out: it stays revoked, with its revoked
   credential, is not returned, and fires no `AccountConnected`. Pass
@@ -278,86 +432,262 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   restores it, and so does any reconnect of an account revoked otherwise (a
   deauthorization, `revoke()`, `markRevoked()`). A connection that lists only
   disconnected targets returns an empty collection, and stores no shared
-  credential unless the stored one still backs another account (see Fixed,
-  and [UPGRADE](UPGRADE.md#disconnected-accounts-stay-disconnected)).
-- Migration `2025_01_01_000011_add_disconnected_at_to_social_accounts` must
-  run before, or together with, the code deploy: `disconnect()` writes its
-  column, and throws a `QueryException` (unknown column `disconnected_at`),
-  changing nothing, until it has run. Connections are not affected
-  ([UPGRADE](UPGRADE.md#run-the-new-migrations)).
-- The scheduler runs `social-tokens:prune` daily (see Added): credentials
-  revoked, flagged `needs_reconnect`, or used by no connected account are
-  deleted once they have not changed for 30 days. An account whose credential
-  is deleted keeps its row, without a credential (`social_token_id` null), so
-  `$account->credential` can be null; it already could after a data deletion
-  request. Such an account keeps no other credential of its holder in use
-  either (`inUse()`, `prunable()`, `disconnect()`): a Facebook Page whose
-  Page token was pruned no longer keeps the Meta user token renewed, nor do
-  LinkedIn organizations whose credential was pruned keep the member's
-  personal one; disconnecting the profile revokes it. Set `prune_schedule` to
-  `null` to keep every credential
-  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
-- `social-tokens:dispatch-renewals` unschedules a due credential no active
-  account depends on (`renew_at` null) instead of leaving it due, where every
-  run read it again through two correlated subqueries, for good. A reconnect
-  schedules it again, and so does a re-sync of LinkedIn organizations with
-  the stored member token. An account made active by hand (an `UPDATE`)
-  leaves its credential unscheduled until its token expires and
-  `validAccessTokenFor()` renews it: set the credential's `renew_at` to now
-  as well
-  ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
+  credential unless the stored one still backs another account. Accounts
+  disconnected under 2.x carry no date, so a reconnect still brings them back
+  ([UPGRADE](UPGRADE.md#disconnected-accounts-stay-disconnected)).
+- **(breaking)** `reportRejected(terminal: false)` flags only on a definitive
+  answer from the provider (a Meta session subcode, LinkedIn's `revoked`), the
+  standard `check-static` has applied since 1.2. A bare Meta 190/102, which
+  Meta also sends to valid tokens during an incident, is now one strike
+  against the token and the call returns `false`. Only
+  `social-tokens:check-static` confirms it, flagging the credential if Meta
+  still rejects the token (renewable credentials only with `check_renewable`),
+  and reports never confirm each other: an app that set
+  `check_static_schedule` to `null` must schedule or run the command itself,
+  or such a report never flags. It used to flag at once, with no breaker, so
+  every credential that published during such an incident was flagged. A
+  report naming a token the credential no longer holds now returns `false`
+  without asking the provider
+  ([UPGRADE](UPGRADE.md#review-your-reportrejected-calls)).
+- **(breaking)** A transient renewal failure throws
+  `Exceptions\TransientRenewalException`, a `RuntimeException` with the same
+  "Transient renewal failure: ..." message, instead of a plain
+  `RuntimeException`. It implements `ShouldntReport`, so it no longer reaches
+  your exception handler or error tracker: a provider outage used to send one
+  event per credential per attempt and per cycle. Instead,
+  `RenewCredential::failed()` logs one warning ("Renewal failed after retries;
+  retrying later") when it backs a credential off: alert on it. Uncatalogued
+  errors are still logged as they occur (`log_unknown_errors`)
+  ([UPGRADE](UPGRADE.md#transient-renewal-failures-are-no-longer-reported)).
+- **(breaking)** `StoreAccountFromSocialite` throws `InvalidArgumentException`,
+  writing nothing, for a provider whose connections fan out (`facebook`,
+  `instagram`, any connector implementing `FansOutConnections`). It used to
+  store the Facebook user as a Page-less `facebook` account, or as an
+  `instagram` account carrying the Facebook user's id, which nothing could post
+  with and the next fan-out connection flagged as no longer managed, and to
+  overwrite the shared Meta user credential with Socialite's short-lived token
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+- **(breaking)** `StoreConnection` picks the action from the connector
+  (`FansOutConnections::connectionAction()`, see Added) instead of checking
+  for `FacebookConnector` and `InstagramConnector`; a subclass of either
+  inherits its action. Its constructor takes the `ConnectorRegistry`, the
+  container and `StoreAccountFromSocialite`, no longer the two Meta actions:
+  resolve it from the container
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+- **(breaking)** `social-tokens:dispatch-renewals` unschedules a due credential
+  no active account depends on (`renew_at` null) instead of leaving it due,
+  where every run read it again through two correlated subqueries, for good. A
+  reconnect schedules it again, and so does a re-sync of LinkedIn
+  organizations with the stored member token. An account made active by hand
+  (an `UPDATE`) leaves its credential unscheduled until its token expires and
+  `validAccessTokenFor()` renews it: set the credential's `renew_at` to now as
+  well ([UPGRADE](UPGRADE.md#unused-credentials-are-unscheduled-then-pruned)).
+- **(breaking)** Config values are read and normalised in one place,
+  `Support\Settings`. Numeric strings work for `queue.tries`, the HTTP timeouts
+  and the breaker, and the HTTP timeouts keep fractional seconds
+  (`'connect_timeout' => 2.5` used to be cut to 2). `queue.tries` set to
+  `null`, an empty string or a non-numeric value means 4 attempts; 2.x read it
+  as 0, unlimited: write `0` to keep unlimited retries
+  ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- **(breaking)** The connectors share base classes. `FacebookConnector` and
+  `InstagramConnector` extend `Connectors\MetaGraphConnector`,
+  `ThreadsConnector` extends `Connectors\LongLivedTokenConnector`, and
+  `TikTokConnector`, `GoogleConnector`, `LinkedInConnector` and `XConnector`
+  extend `OAuth2Connector` (see Added); the methods they shared moved there.
+  What a subclass of a built-in connector must change
+  ([UPGRADE](UPGRADE.md#if-you-wrote-a-connector)):
+  - The package no longer calls `FacebookConnector::extendUserToken()` or
+    `grantedScopesByAccount()`, at connect or at renewal, so an override of
+    either is skipped: override `exchangeUserToken()` (a `RenewalResult`), and
+    `debugToken()` or the static `grantedScopesFrom()`, instead. The `Store*`
+    actions call `grantedScopesFrom()` and `tokenLifetime()` on the configured
+    connector class, so a subclass's own versions are used.
+  - `InstagramConnector` reads an `fb_exchange_token` reply exactly as
+    `FacebookConnector` does: a reply without a token is "Malformed token
+    extension response." (it was "Malformed response, no access_token."), and
+    an `expires_in` that is not a number means an unknown expiry. A
+    `graph_version` set to an empty string takes the default version instead
+    of building a URL without one.
+  - `ThreadsConnector`'s requests and failure reasons are unchanged;
+    `refreshWithToken()` is protected instead of private, and an `expires_in`
+    that is not a number means an unknown expiry.
+  - The one-argument `mapError()` of `GoogleConnector` and `TikTokConnector`
+    is gone (see Removed).
+- A Meta user credential's renewal makes a second call, `debug_token` on the
+  new token, to read its lifetime (see Fixed). A failure of that call leaves
+  the renewal as it was, the stored data access deadline included.
+- The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
+  are known transient failures: still retried, no longer logged as uncatalogued.
+- OAuth token-endpoint failures carry the HTTP `status` in their context, and
+  terminal ones carry `error` / `error_description` too.
+- `CHANGELOG.md` ships in the package (it was export-ignored), next to
+  `README.md` and `UPGRADE.md`, which link to it.
+- The models' `@property` blocks list every column (`id`, `created_at`,
+  `updated_at`, and `connected_by_type` / `connected_by_id` on
+  `SocialAccount`), and the package's own analysis checks every column name
+  it writes or filters on (Larastan's `checkModelProperties`).
+  `SocialToken::persistCredential()` declares `$keys` and `$values` as arrays
+  keyed by the model's columns: with `checkModelProperties` on in your own
+  PHPStan setup, pass it literal arrays or annotate yours accordingly. No
+  runtime change.
 
 ### Fixed
-- UPGRADE.md's "From 1.x to 2.0", where the README sends every 1.x user,
-  skipped 1.2: its breaking changes (`StoreConnection` refusing a provider
-  without a connector, `markNeedsReconnect()` / `markRevoked()` no longer
-  saving, `toArray()` hiding the tokens, `renewCredential()` refusing an
-  unsaved token) and its one-off steps (rotating the Meta and Threads
-  secrets 1.1 leaked into logs, scheduling static Meta user credentials,
-  repairing flagged rows) were only in the changelog, which the package did
-  not ship. A 1.1 app following the guide kept static Meta credentials that
-  died about 60 days later. The guide now has a "Coming from 1.0 or 1.1"
-  section, with redaction and reactivation snippets of its own, run once 3.0
-  is deployed (1.1 has no `redactQueryStrings()`). Its snippets page with
-  `eachById()`, not `each()`, which pages by offset and, past the first
-  thousand rows, skips rows a page's own changes took out of the query. The
-  scopes clean-up in the 1.2 changelog turned Meta's known-empty `[]` into
-  `null` (unknown), against its own advice; the guide's leaves `[]` alone,
-  and a row the old one changed gets its list back at the next reconnect.
-- README: the OAuth routes used the connector key from the URL as the
-  Socialite driver name, which broke two keys. `/oauth/instagram/redirect`
-  threw "Driver [instagram] not supported" (Instagram through a Page logs in
-  with the `facebook` driver), and `linkedin` resolved Socialite's legacy
-  driver, which always asks for `r_liteprofile` and `r_emailaddress`, refused
-  to LinkedIn apps created since 2023. The routes now map those keys to their
-  driver (`linkedin-openid` for the profile, reading
-  `services.linkedin-openid`), hand `StoreConnection` the connector key, and
-  send each key back to its own callback, so that a Facebook login for
-  Instagram is not stored as a Facebook one. The LinkedIn organizations
-  paragraph no longer contradicts the profile's flow.
-- UPGRADE and README: attaching an owner-less row with
-  `$account->ownable()->associate($owner)`, as 2.0's notes advised, saved
-  nothing until `save()`, then moved the account without its credential: the
-  owner's next reconnect stored a second credential and left the first one
-  behind, a Facebook Page's Meta user token stopped being renewed, and an
-  account the owner had already reconnected hit the owner-scoped unique key.
-  The notes now point at `adopt()` (see Added).
-- An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
-  the TikTok, Google and LinkedIn connectors with "Array to string conversion";
-  it is now an unknown, retried failure.
-- TikTok `unauthorized_client` is an app-client failure, as the 1.2 changelog
-  already stated (it was retried as an unknown error).
-- Google `admin_policy_enforced` (a Workspace admin blocked the app for the
-  user) is terminal instead of being retried forever.
-- README: the Google redirect now asks for offline access
-  (`access_type=offline`, `prompt=consent`); without it Google issues no refresh
-  token and every Google credential was flagged within the hour.
+- **(breaking)** **A reconnect during a renewal is no longer undone.** The
+  renewal lock only kept renewals apart: a reconnect (any `Store*` action) that
+  wrote the credential while its renewal waited on the provider was
+  overwritten when the renewal succeeded, bringing back the old grant's tokens
+  under the new grant's scopes (a TikTok reconnect that added `video.publish`
+  was lost, and publishing failed on a scope `hasScope()` reported as granted).
+  When the provider refused the old refresh token instead, the credential that
+  had just been reconnected was flagged `needs_reconnect` and
+  `CredentialNeedsReconnect` fired. The reconnect now wins either way
+  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)):
+  - `applyRenewal()` writes only while the credential still holds the access
+    and refresh tokens the instance was loaded with (compared in a
+    transaction, under a row lock; the same tokens re-encrypted under a new
+    `APP_KEY` still count), and not over a revoke, as before. Otherwise it
+    writes nothing, fires no `CredentialRenewed`, and reloads the instance
+    with the stored row (`tryApplyRenewal()` says which, see Added). A
+    credential deleted meanwhile throws `ModelNotFoundException`; 2.x saved
+    silently. Load the credential right before refreshing it.
+  - After a terminal renewal failure, `RenewCredential` and
+    `validAccessTokenFor()` flag the credential only while it still holds the
+    refused token (`markNeedsReconnectOnce($reason, $token)`). When a reconnect
+    replaced it meanwhile, nothing is flagged and `validAccessTokenFor()`
+    hands out the reconnected token, or throws a transient
+    `NeedsReconnectException` (retry) instead of a non-transient one.
+    `renewCredential()` reloads the `$token` it is given under the lock, so
+    `$token->access_token` is that token; flag it the same way if you call
+    `renewCredential()` yourself.
+- **(breaking)** **A renewal requested inside a database transaction no longer
+  spends a rotated refresh token.** The re-read under the renewal lock was a
+  plain read. On MySQL (REPEATABLE READ), a caller inside a transaction read
+  its snapshot, which still held the TikTok or X refresh token another process
+  had just rotated; on any database, a renewal stored inside a transaction not
+  yet committed was missed. The caller refreshed with the spent token, got
+  `invalid_grant`, and flagged a working credential. `renewCredential()` now
+  re-reads the credential with `SELECT ... FOR UPDATE` (SQLite has no row
+  locks and reads as before), so it sees a renewal committed after the
+  caller's transaction began and waits for one not committed yet. It waits as
+  long as the database lets it: up to `innodb_lock_wait_timeout` on MySQL (50
+  seconds by default); on PostgreSQL up to 30 seconds outside your transaction
+  (the read sets `lock_timeout` for its own short transaction unless you set
+  one), and inside it until the transaction holding the row ends, unless
+  `lock_timeout` is set. A wait of more than 30 seconds is a transient failure
+  ("Could not lock the credential for renewal."), since the 60-second renewal
+  lock could lapse during the provider call. Outside your transaction, a lock
+  wait timeout or a deadlock on that read (PostgreSQL's `55P03` lock timeout
+  included) is a transient failure too. Inside it, that error is thrown
+  instead (its `QueryException`, or a `DeadlockException` from a nested
+  `DB::transaction()`), from `validAccessTokenFor()` as well: the database may
+  have rolled your transaction back, and a transient result would let you
+  commit the rest of it alone. There the row also stays locked until your
+  transaction ends. Renewing a TikTok or X credential inside a database
+  transaction logs a warning (`Renewing a single-use refresh token inside a
+  database transaction`), since a rollback discards a refresh token the
+  provider has already replaced
+  ([UPGRADE](UPGRADE.md#renewals-transactions-and-the-cache-store)).
+- **(breaking)** `revoke()` and `disconnect()` record the revocation even when
+  the provider-side call fails. They called the provider first, unguarded, and
+  the TikTok, Google and X connectors decrypted the token outside their `try`:
+  a credential that no longer decrypted (an `APP_KEY` change without
+  `APP_PREVIOUS_KEYS`), or a custom connector that threw, made `revoke()` throw
+  `DecryptException` with the credential and every account still active, and
+  `disconnect()` throw with the credential still active. The credential and
+  its accounts are now revoked first, firing `CredentialRevoked` and
+  `AccountRevoked`; the provider call follows, on the credential as it was
+  before those events (a listener that wipes the token no longer affects it).
+  A provider revocation that throws is no longer rethrown: it is logged as a
+  warning (`[social-tokens] {provider} token revocation failed; the credential
+  is revoked locally`, with `provider`, `token_id`, `exception` and a redacted
+  `message`); the Google, TikTok and X connectors catch their own failures
+  and log them the same way (`[social-tokens] {provider} token revocation
+  failed`, `logRevokeFailure()`). A revocation listener that throws (a mail
+  server down, a queued listener whose push fails) no longer skips the
+  provider call either, which a retried `disconnect()` would never have made
+  since the row was already revoked: `revoke()` and `disconnect()` make it,
+  then rethrow the listener's exception
+  ([UPGRADE](UPGRADE.md#revocation-is-recorded-before-the-provider-call),
+  [If you wrote a connector](UPGRADE.md#if-you-wrote-a-connector)).
+- **(breaking)** **A Meta user token that never expires is no longer extended
+  every week.** Some Facebook Login configurations issue user tokens that
+  `debug_token` reports with `expires_at: 0`. `fb_exchange_token` returns them
+  without `expires_in`, so the credential behind the user's Instagram accounts
+  was stored with an unknown expiry and checked back after one lead time,
+  forever: a pointless `fb_exchange_token` call and a "Renewal returned no
+  expiry" warning every seven days. The package already called `debug_token`
+  at every Facebook and Instagram connection, for the scopes, and threw its
+  lifetime away. It now reads it there and after each renewal: a token that
+  never expires is stored static (`renew_at` null, no more weekly
+  `CredentialRenewed`), and an expiry the exchange left out is taken from
+  `debug_token`. When the exchange reports an expiry, that one wins.
+  Credentials stored by 2.x become static at their next renewal, within a week
+  of the upgrade. Only `social-tokens:check-static` watches such a credential
+  from then on: an app that set `check_static_schedule` to `null` must
+  schedule the command itself
+  ([UPGRADE](UPGRADE.md#meta-data-access-and-tokens-that-never-expire)).
+- **(breaking)** `StoreConnection::handle('facebook' | 'instagram', $user,
+  longLived: false)` still called `fb_exchange_token`, and threw "Could not
+  extend the Facebook user token" when Meta refused it: 2.x ignored
+  `longLived` on those two providers and always extended. It now passes it to
+  the fan-outs (their `extend`), skipping the exchange and storing the user
+  token as given. Pass it only with a token that already is long-lived: Page
+  tokens minted from a short-lived user token die with it, within hours,
+  although they are stored as never expiring
+  ([UPGRADE](UPGRADE.md#store-connections-through-the-connector)).
+- **(breaking)** Boolean settings holding a string are read as booleans:
+  `'log_unknown_errors' => 'false'` in a published config, or
+  `SOCIAL_TOKENS_CHECK_RENEWABLE=off` (which `env()` returns as the string
+  `'off'`), used to count as true. `'false'`, `'no'`, `'off'` and `'0'` are now
+  false ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- **(breaking)** A connector `driver` naming a class that does not exist (a
+  renamed custom connector) or does not implement `ProviderConnector` passed
+  every "no connector" guard, which then threw `InvalidArgumentException`:
+  `disconnect()` / `revoke()` failed after revoking the account,
+  `validAccessTokenFor()` threw it instead of the documented transient
+  `NeedsReconnectException`, and the dispatcher kept queueing jobs that failed.
+  `ConnectorRegistry::has()` and `configured()` now mean "resolvable", so such
+  a provider is handled like `driver => null`, with one error log per process.
+  Connecting still throws
+  ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- **(breaking)** An invalid `dispatch_schedule` or `check_static_schedule` (a
+  cron expression, a misspelt method, a method that needs an argument such as
+  `dailyAt`) threw while the host resolved its Schedule. Apps whose
+  `routes/console.php` or `withSchedule()` schedule their own tasks resolve it
+  in every artisan process, so `queue:work`, `migrate` and the whole scheduler
+  died with it. Both settings now accept a cron expression as well as a
+  frequency method without arguments; anything else, a scheduler macro
+  included, logs an error and keeps the default schedule. A cron alias
+  (`'@hourly'`) is stored as its five fields, which `schedule:list` needs. A
+  method that is not a frequency, such as `runInBackground`, or that only
+  picks the days, such as `weekdays` or `mondays`, no longer schedules the
+  command every minute ([UPGRADE](UPGRADE.md#check-your-published-config)).
+- **(breaking)** `SocialAccount::with('connectedBy')` loaded the relation under
+  another name, `connected_by`, so reading `$account->connectedBy` queried
+  again for every row, the model `associate()` had just set was not reused
+  either, and a queued event's restore skipped it the same way. The relation
+  is now named `connectedBy`, after its method. Code reading the loaded
+  relation by its old name (`getRelation('connected_by')`,
+  `relationLoaded('connected_by')`, `setRelation('connected_by', ...)`) must
+  use `connectedBy`. So must code reading the snake-case property:
+  `$account->connected_by`, which returned the model after `associate()` or
+  `with('connectedBy')`, now returns null (or throws
+  `MissingAttributeException` under
+  `Model::preventAccessingMissingAttributes()`); read `$account->connectedBy`.
+  `toArray()` still shows it as `connected_by`
+  ([UPGRADE](UPGRADE.md#queued-listeners-re-read-the-models)).
 - Migration `2025_01_01_000007_scope_identity_to_owner` (the 1.x upgrade):
   - It can be run again after failing partway. On MySQL and SQLite a failure (a
     lost connection, a timeout, a rejected key) left the owner columns added and
     the old unique keys dropped, and every later `migrate` stopped on a
     duplicate `ownable_type` column. Every step is now guarded, and a
     credential is split in one transaction or not at all.
+  - **(breaking)** It no longer runs as a single transaction on PostgreSQL.
+    That held an ACCESS EXCLUSIVE lock on `social_tokens`, blocking every token
+    read of the running app, until the last credential was backfilled. Schema
+    steps now commit one by one, and the backfill commits every 100
+    credentials. A failure partway no longer rolls everything back: run
+    `php artisan migrate` again, and it resumes where it stopped.
   - It checks before changing anything, and refuses with instructions: on
     MySQL/MariaDB, that the new unique keys fit InnoDB's 3072-byte limit; and
     that the credentials' owner column can hold every owner id of the accounts,
@@ -386,22 +716,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     stays owner-less. It used to take the owner of every holder-less account of
     its provider, plus a copy per extra owner. The package always sets a
     holder: only rows an app wrote itself were affected.
-  - It no longer runs as a single transaction on PostgreSQL. That held an ACCESS
-    EXCLUSIVE lock on `social_tokens`, blocking every token read of the running
-    app, until the last credential was backfilled. Schema steps now commit one
-    by one, and the backfill commits every 100 credentials.
-  - Its unique keys are named the way Laravel names its own indexes: with the
-    table prefix (two prefixed installs sharing a PostgreSQL schema or an SQLite
-    file collided on the same name), and without the dot of a schema-qualified
-    table name (invalid SQL on PostgreSQL and MySQL). `down()` finds them by
-    their columns, so it also drops the names 2.0.0 created.
-- A fresh install on MySQL with uuid or ulid owner keys failed in migration
-  000007 with "Specified key was too long": three utf8mb4 `varchar(255)` columns
-  left no room for the owner id. `provider` is now `varchar(50)` (see Changed
-  (breaking)),
-  and the README Install section says to call `Schema::morphUsingUuids()` /
-  `morphUsingUlids()`, or to declare the accounts' owner columns as uuid or
-  ulid, before migrating.
+  - **(breaking)** Its unique keys are named the way Laravel names its own
+    indexes: with the table prefix when `prefix_indexes` is on
+    (`acme_social_accounts_owner_identity_unique`, not
+    `social_accounts_owner_identity_unique`; two prefixed installs sharing a
+    PostgreSQL schema or an SQLite file collided on the same name), and
+    without the dot of a schema-qualified table name (invalid SQL on
+    PostgreSQL and MySQL). Only 1.x installs migrating with 3.0 get the new
+    names; keys 2.0.0 created keep theirs, and `down()` finds either by its
+    columns.
 - A published config with a single `queue.backoff` value (`'backoff' => 60`,
   a form every Laravel job accepts) made each `social-tokens:dispatch-renewals`
   run throw a `TypeError` on the first due credential, so no renewal was ever
@@ -410,30 +733,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `social-tokens:check-static` crashed with `DivisionByZeroError` when
   `check_static_breaker.min_checked` was 0 (or negative) and the run checked
   no credential. A minimum below 1 now counts as 1.
-- Boolean settings holding a string are read as booleans:
-  `'log_unknown_errors' => 'false'` in a published config, or
-  `SOCIAL_TOKENS_CHECK_RENEWABLE=off` (which `env()` returns as the string
-  `'off'`), used to count as true.
-- A connector `driver` naming a class that does not exist (a renamed custom
-  connector) or does not implement `ProviderConnector` passed every "no
-  connector" guard, which then threw `InvalidArgumentException`:
-  `disconnect()` / `revoke()` failed after revoking the account,
-  `validAccessTokenFor()` threw it instead of the documented transient
-  `NeedsReconnectException`, and the dispatcher kept queueing jobs that failed.
-  `ConnectorRegistry::has()` and `configured()` now mean "resolvable", so such
-  a provider is handled like `driver => null`, with one error log per process.
-  Connecting still throws.
-- An invalid `dispatch_schedule` or `check_static_schedule` (a cron
-  expression, a misspelt method, a method that needs an argument such as
-  `dailyAt`) threw while the host resolved its Schedule. Apps whose
-  `routes/console.php` or `withSchedule()` schedule their own tasks resolve it
-  in every artisan process, so `queue:work`, `migrate` and the whole scheduler
-  died with it. Both settings now accept a cron expression as well as a
-  frequency method without arguments; anything else logs an error and keeps
-  the default schedule. A cron alias (`'@hourly'`) is stored as its five
-  fields, which `schedule:list` needs. A method that is not a frequency, such
-  as `runInBackground`, or that only picks the days, such as `weekdays` or
-  `mondays`, no longer schedules the command every minute.
 - On a `sync` queue connection, one failed renewal ended the dispatcher run:
   the job runs inline and its exception escaped `social-tokens:dispatch-renewals`,
   so no credential after it was renewed in that run, and a credential failing
@@ -443,27 +742,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   credentials were dispatched. On a real queue, a job the queue rejects (its
   backend or the cache lock store down) still ends the run, after a single
   report, since every credential would fail the same way.
-- The `log_unknown_errors` comment in the published config said uncatalogued
-  errors are logged with the "raw payload". Since 1.2 the logged context is
-  redacted (error codes, HTTP status, the response's keys) and never holds the
-  response body, which may carry tokens; the comment now says so.
-- `SocialAccount::with('connectedBy')` loaded the relation under another name,
-  so reading `$account->connectedBy` queried again for every row, and the
-  model `associate()` had just set was not reused either. A queued event's
-  restore skipped it the same way.
-- `revoke()` and `disconnect()` record the revocation even when the
-  provider-side call fails. They called the provider first, unguarded, and the
-  TikTok, Google and X connectors decrypted the token outside their `try`: a
-  credential that no longer decrypted (an `APP_KEY` change without
-  `APP_PREVIOUS_KEYS`), or a custom connector that threw, made `revoke()` throw
-  `DecryptException` with the credential and every account still active, and
-  `disconnect()` throw with the credential still active. The credential and its
-  accounts are now revoked first; the provider call follows, and whatever it
-  throws is logged as a warning, never rethrown. A `CredentialRevoked` or
-  `AccountRevoked` listener that throws (a mail server down, a queued
-  listener whose push fails) no longer skips the provider call: the row was
-  already revoked, so a retried `disconnect()` would never have made it, and
-  the grant stayed valid at the provider.
 - `social-tokens:check-static` applies its safety breaker to each provider as
   well as to the whole run. It divided one provider's rejections by every
   checked credential, so a provider-wide rejection on a smaller provider (every
@@ -512,43 +790,6 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `reportRejected(terminal: false)` alert instead of logging per credential.
   A plain code 1 ("An unknown error has occurred.") is still a transient
   error.
-- README and the `reportRejected()` docblock: `terminal: true` is for an error
-  that proves the credential dead (a Meta session subcode; LinkedIn
-  `REVOKED_ACCESS_TOKEN` / `EXPIRED_ACCESS_TOKEN` without refresh tokens). They
-  said any Meta 190/102 and any OAuth `invalid_grant`/`invalid_token`. On
-  Google, TikTok, X or LinkedIn with refresh tokens, a 401 `invalid_token`
-  usually means the access token expired while the refresh token still works,
-  so following the README flagged a healthy credential; apps should call
-  `validAccessTokenFor()` again instead. They also now say that
-  `terminal: false` does nothing for a connector that cannot check a token
-  (Google, TikTok, X), and that LinkedIn with refresh tokens should report a
-  `REVOKED_ACCESS_TOKEN` with `terminal: false`, which introspects the token.
-- **A reconnect during a renewal is no longer undone.** The renewal lock only
-  kept renewals apart: a reconnect (any `Store*` action) that wrote the
-  credential while its renewal waited on the provider was overwritten when the
-  renewal succeeded, bringing back the old grant's tokens under the new grant's
-  scopes (a TikTok reconnect that added `video.publish` was lost, and publishing
-  failed on a scope `hasScope()` reported as granted). When the provider
-  refused the old refresh token instead, the credential that had just been
-  reconnected was flagged `needs_reconnect` and `CredentialNeedsReconnect`
-  fired. A renewal is now stored only while the credential still holds the
-  tokens that were refreshed, and a terminal answer flags only that token:
-  the reconnect wins either way. `validAccessTokenFor()` hands out the
-  reconnected token, or throws a transient `NeedsReconnectException` (retry)
-  when the old refresh token was refused.
-- **A renewal requested inside a database transaction no longer spends a
-  rotated refresh token.** The re-read under the renewal lock was a plain read.
-  On MySQL (REPEATABLE READ), a caller inside a transaction read its snapshot,
-  which still held the TikTok or X refresh token another process had just
-  rotated; on any database, a renewal stored inside a transaction not yet
-  committed was missed. The caller refreshed with the spent token, got
-  `invalid_grant`, and flagged a working credential. The re-read is now a
-  locking read (see Changed (breaking)).
-- README: the renewal lock's cache store must be shared by every server that
-  serves web requests, runs queue workers or runs the scheduler. The README
-  listed `file` as suitable; a file lock only holds on one host, so a worker
-  server and a web server could both refresh the same TikTok or X token. The
-  `array` store only locks within one process: it is for tests.
 - LinkedIn scopes stored through `StoreConnection` or
   `StoreAccountFromSocialite` are one scope per element. LinkedIn lists them
   comma-separated and Socialite's LinkedIn drivers split on spaces, so the
@@ -565,32 +806,12 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   flagged five days before its token expires. The renewal job sent it to the
   refresh call, got "No refresh token" and flagged it at once, with no
   `CredentialExpiringSoon`: the early cut-off 1.1 removed for LinkedIn without
-  refresh tokens. The strategy is now decided per credential: such a
-  credential is warned when its window opens, keeps posting, and is flagged
-  once it has expired, by the job, `validAccessTokenFor()` and a renewal that
-  ran out of retries alike. Its unknown expiry no longer schedules a check
-  that would flag it, and LinkedIn introspection answering `expired` for it is
-  a definitive verdict.
-- The 1.2 entry saying `StoreAccountFromSocialite` reads LinkedIn's
-  `refresh_token_expires_in` holds only for a driver that exposes the token
-  response (`accessTokenResponseBody`, SocialiteProviders). Core Socialite's
-  `linkedin` and `linkedin-openid` drivers drop it, and so did the README's
-  `StoreLinkedInOrganizations` example, so the refresh token's expiry stayed
-  unknown until the first renewal. Both actions take it explicitly now
-  (`refreshExpiresAt:`, see Added), and the README example passes it.
-- **Connecting a LinkedIn profile no longer breaks posting as the member's
-  organizations, nor the reverse.** The profile (Socialite: OpenID scopes and
-  `w_member_social`) and the organizations (an app-side exchange with
-  `w_organization_social`) are two authorizations, stored on one shared
-  credential: whichever flow ran last replaced the other's access token,
-  refresh token, expiry and scopes. Posts as the organizations then failed
-  with a 403 while their rows still listed `w_organization_social` in
-  `hasScope()`, `usable()` still returned them, and LinkedIn introspection
-  answered `active`, so nothing was flagged. Each flow now has its own
-  credential (see Changed (breaking)), and the migration splits the shared
-  ones. A credential is kept alive by the accounts posting with it, no longer
-  by the member's accounts on the other one, so the organizations' token is
-  not renewed (nor warned about) for a member who only keeps the profile.
+  refresh tokens. The strategy is now decided per credential
+  (`renewalStrategyFor()`, see Added): such a credential is warned when its
+  window opens, keeps posting, and is flagged once it has expired, by the job,
+  `validAccessTokenFor()` and a renewal that ran out of retries alike. Its
+  unknown expiry no longer schedules a check that would flag it, and LinkedIn
+  introspection answering `expired` for it is a definitive verdict.
 - Re-syncing LinkedIn organizations with the member token already stored no
   longer erases or moves that token's expiry. `StoreLinkedInOrganizations`
   wrote `expires_at`, `renew_at` and `last_renewed_at` from the call: without
@@ -600,342 +821,80 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   token, the issue date is kept, and so are the expiry and the schedule when
   no `expiresAt` is given, or the stored one (a warning already sent is not
   sent again).
-- **A Meta user token that never expires is no longer extended every week.**
-  Some Facebook Login configurations issue user tokens that `debug_token`
-  reports with `expires_at: 0`. `fb_exchange_token` returns them without
-  `expires_in`, so the credential behind the user's Instagram accounts was
-  stored with an unknown expiry and checked back after one lead time, forever:
-  a pointless `fb_exchange_token` call and a "Renewal returned no expiry"
-  warning every seven days. The package already called `debug_token` at every
-  Facebook and Instagram connection, for the scopes, and threw its lifetime
-  away. It now reads it there and after each renewal: a token that never
-  expires is stored static (no `renew_at`; `check-static` asks Meta about it
-  daily), and an expiry the exchange left out is taken from `debug_token`.
-  When the exchange reports an expiry, that one wins. Credentials stored by
-  2.x become static at their next renewal, within a week of the upgrade.
-- **Meta's data access deadline is tracked and announced.** Meta stops sharing
-  a user's data with the app 90 days after the user was last active
-  (`data_access_expires_at`), although the token keeps working and renewing;
-  only a new login moves it. Nothing in the package read it, so a credential
-  could lose data access while it looked healthy, with no warning. It is now
-  stored on the credential (`social_tokens.data_access_expires_at`, migration
-  `2025_01_01_000009_add_data_access_expiry_to_social_tokens`) at connect and
-  after each renewal; a reconnect whose `debug_token` call fails clears the
-  old one (unknown) rather than keep a deadline the new login has moved.
-  `social-tokens:dispatch-renewals` fires `CredentialDataAccessExpiring`
-  once, seven days before it, for a credential an active account posts with
-  (the Instagram accounts), after dispatching the run's renewals: a failure
-  of that check never holds them back. It is a warning only: Meta does not
-  say which calls a lapse blocks for an app with business permissions, so
-  the credential is not flagged.
-- The `InstagramConnector` docblock said the Instagram API with Instagram
-  Login only needed its renewal request swapped. It did not work:
-  `StoreConnection` sends every `InstagramConnector` to the Facebook Page
-  fan-out, and its credentials are renewed under `facebook`, so an Instagram
-  Login token went to `graph.facebook.com` and was refused. That path is now
-  its own connector (see Added).
-- `StoreConnection::handle('facebook' | 'instagram', $user, longLived: false)`
-  still called `fb_exchange_token`, and threw "Could not extend the Facebook
-  user token" when Meta refused it (see Changed (breaking)).
-- `StoreAccountFromSocialite` accepted the `facebook` and `instagram`
-  providers and stored rows nothing could post with, which the next fan-out
-  connection flagged as no longer managed (see Changed (breaking)).
-- A reconnect undid `disconnect()`. The fan-out actions store every target the
-  provider lists and wrote `active` over each row and its credential, so the
-  Page, Instagram account or LinkedIn organization a user removed came back,
-  usable, returned and announced by `AccountConnected`, at the next reconnect
-  of the same login: to refresh the token, to add a Page, or the ones Meta's
-  90-day data access and LinkedIn's 60-day re-authorisation force (see
-  Changed (breaking)).
-- Nothing ever removed a credential: revoked and flagged ones, those a
-  reconnect left behind, and those whose accounts the app deleted stayed in
-  `social_tokens` for good, a renewable one among them with a past `renew_at`
-  that every dispatcher run read again (see Added and Changed (breaking)).
+- An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
+  the TikTok, Google and LinkedIn connectors with "Array to string conversion";
+  it is now an unknown, retried failure.
+- TikTok `unauthorized_client` is an app-client failure, as the 1.2 changelog
+  already stated (it was retried as an unknown error).
+- Google `admin_policy_enforced` (a Workspace admin blocked the app for the
+  user) is terminal instead of being retried forever.
+- The `log_unknown_errors` comment in the published config said uncatalogued
+  errors are logged with the "raw payload". Since 1.2 the logged context is
+  redacted (error codes, HTTP status, the response's keys) and never holds the
+  response body, which may carry tokens; the comment now says so.
+- UPGRADE.md's "From 1.x to 2.0", where the README sends every 1.x user,
+  skipped 1.2: its breaking changes (`StoreConnection` refusing a provider
+  without a connector, `markNeedsReconnect()` / `markRevoked()` no longer
+  saving, `toArray()` hiding the tokens, `renewCredential()` refusing an
+  unsaved token) and its one-off steps (rotating the Meta and Threads
+  secrets 1.1 leaked into logs, scheduling static Meta user credentials,
+  repairing flagged rows) were only in the changelog, which the package did
+  not ship. A 1.1 app following the guide kept static Meta credentials that
+  died about 60 days later. The guide now has a "Coming from 1.0 or 1.1"
+  section, with redaction and reactivation snippets of its own, run once 3.0
+  is deployed (1.1 has no `redactQueryStrings()`). Its snippets page with
+  `eachById()`, not `each()`, which pages by offset and, past the first
+  thousand rows, skips rows a page's own changes took out of the query. The
+  scopes clean-up in the 1.2 changelog turned Meta's known-empty `[]` into
+  `null` (unknown), against its own advice; the guide's leaves `[]` alone,
+  and a row the old one changed gets its list back at the next reconnect.
+- UPGRADE and README: attaching an owner-less row with
+  `$account->ownable()->associate($owner)`, as 2.0's notes advised, saved
+  nothing until `save()`, then moved the account without its credential: the
+  owner's next reconnect stored a second credential and left the first one
+  behind, a Facebook Page's Meta user token stopped being renewed, and an
+  account the owner had already reconnected hit the owner-scoped unique key.
+  The notes now point at `adopt()` (see Added).
+- README: the OAuth routes used the connector key from the URL as the
+  Socialite driver name, which broke two keys. `/oauth/instagram/redirect`
+  threw "Driver [instagram] not supported" (Instagram through a Page logs in
+  with the `facebook` driver), and `linkedin` resolved Socialite's legacy
+  driver, which always asks for `r_liteprofile` and `r_emailaddress`, refused
+  to LinkedIn apps created since 2023. The routes now map those keys to their
+  driver (`linkedin-openid` for the profile, reading
+  `services.linkedin-openid`), hand `StoreConnection` the connector key, and
+  send each key back to its own callback, so that a Facebook login for
+  Instagram is not stored as a Facebook one. The LinkedIn organizations
+  paragraph no longer contradicts the profile's flow.
+- README: the Google redirect now asks for offline access
+  (`access_type=offline`, `prompt=consent`); without it Google issues no refresh
+  token and every Google credential was flagged within the hour.
+- README and the `reportRejected()` docblock: `terminal: true` is for an error
+  that proves the credential dead (a Meta session subcode; LinkedIn
+  `REVOKED_ACCESS_TOKEN` / `EXPIRED_ACCESS_TOKEN` without refresh tokens). They
+  said any Meta 190/102 and any OAuth `invalid_grant`/`invalid_token`. On
+  Google, TikTok, X or LinkedIn with refresh tokens, a 401 `invalid_token`
+  usually means the access token expired while the refresh token still works,
+  so following the README flagged a healthy credential; apps should call
+  `validAccessTokenFor()` again instead. They also now say that
+  `terminal: false` does nothing for a connector that cannot check a token
+  (Google, TikTok, X), and that LinkedIn with refresh tokens should report a
+  `REVOKED_ACCESS_TOKEN` with `terminal: false`, which introspects the token
+  ([UPGRADE](UPGRADE.md#review-your-reportrejected-calls)).
+- README: the renewal lock's cache store must be shared by every server that
+  serves web requests, runs queue workers or runs the scheduler. The README
+  listed `file` as suitable; a file lock only holds on one host, so a worker
+  server and a web server could both refresh the same TikTok or X token. The
+  `array` store only locks within one process: it is for tests.
 
-### Added
-- **X (Twitter) support** through OAuth 2.0: `XConnector`, registered as `x`
-  (Socialite's `x` driver, `services.x`). 2-hour access tokens renewed 30
-  minutes ahead; single-use rotating refresh tokens (`offline.access` required);
-  HTTP Basic client authentication on `api.x.com`; X's dead-refresh-token answer
-  (`invalid_request` "Value passed for the token was invalid.") is terminal,
-  while a request built wrong, a missing Authorization header or a suspended app
-  is an app-client failure (retried, alerted, never flagged); best-effort revoke
-  that logs a failure. OAuth 1.0a is not supported.
-- `OAuth2Connector`, the base for OAuth 2.0 refresh-token providers. TikTok,
-  Google, LinkedIn and X now share one refresh request, response parsing and
-  error-classification flow; a provider declares its endpoint, parameters and
-  error codes (`classifyError()`).
-- Migration `2025_01_01_000006_index_social_token_id_on_social_accounts`: an
-  index on `social_accounts.social_token_id`. PostgreSQL and SQLite do not index
-  a foreign key column, so finding a credential's accounts (the renewal
-  dispatcher, `revoke()`, `disconnect()`, deleting a credential, the 000007
-  backfill) scanned the whole table. On MySQL the foreign key's own index is
-  kept and nothing is added.
-- **Meta "Require App Secret" support.** Graph calls made with a user or Page
-  token (`/me` at connect and in `check-static`, `/me/accounts` and its
-  `paging.next` pages) carry `appsecret_proof`, the HMAC-SHA256 of the token
-  keyed with the Meta app secret. Turning the setting on used to break every
-  Facebook and Instagram connection and leave every Page unchecked. The
-  `appsecret_proof` option of the `facebook` and `instagram` connectors
-  (`META_APPSECRET_PROOF`, default on) turns it off, and
-  `appSecretProof($token)` on both connectors signs your own Graph calls.
-- `Support\Settings::flag()`: reads a boolean config value the way the
-  package's own settings are read (`'false'`, `'off'`, `'no'`, `'0'` are false).
-- `SocialToken::persistCredential($keys, $values, $connector = null)`:
-  `updateOrCreate()` for a token the provider has just issued, which encrypts
-  it before the write so a failed write leaves no plaintext token in the
-  exception trace (see Security). Unless `$values` says otherwise, the
-  credential comes back active, with no `last_error`, no `check-static` strike
-  and `last_renewed_at` set to now; given the connector, `renew_at` is
-  scheduled for the credential as stored, with its own strategy. The `Store*`
-  actions use it; use it too if you store credentials yourself.
-- `SocialToken::tryApplyRenewal($result, $connector)`: `applyRenewal()` that
-  returns whether it stored the renewal (see Changed (breaking)).
-- `AbstractConnector::renewalStrategyFor(SocialToken $token)`: the strategy for
-  one credential, `renewalStrategy()` by default. `LinkedInConnector` returns
-  `ReauthOnly` for a credential without a refresh token (see Fixed).
-  `SocialToken::renewalStrategyWith($connector)` asks it of any connector, and
-  `SocialToken::renewAtFor()` takes the credential's strategy as a fourth
-  argument.
-- `refreshExpiresAt:` on `StoreConnection::handle()` and
-  `StoreAccountFromSocialite::handle()`: the refresh token's expiry, which
-  core Socialite's drivers do not expose (see Fixed).
-- `social_tokens.purpose`, `SocialToken::DEFAULT_PURPOSE` (`''`),
-  `StoreLinkedInOrganizations::PURPOSE` (`'organizations'`) and the
-  `SocialToken::forPurpose($purpose = '')` scope (see Changed (breaking)).
-  `persistCredential()` keys without a purpose name the default credential.
-- Migration `2025_01_01_000008_add_purpose_to_social_tokens`. On MySQL and
-  MariaDB it checks that the new unique key fits InnoDB's 3072-byte limit
-  before changing anything; it can be run again after a failure, splits in
-  chunks of 100 credentials, each in its own transaction, and its `down()`
-  refuses while a member has two credentials for one owner.
-- `Connectors\MetaGraphConnector`, the base of `FacebookConnector` and
-  `InstagramConnector` (the Facebook Login path). It holds the one
-  `fb_exchange_token` call, `exchangeUserToken($userToken)` (a
-  `RenewalResult`), the Graph version, `graphVersion()` with the
-  `MetaGraphConnector::DEFAULT_GRAPH_VERSION` default (`v23.0`), and the
-  `appsecret_proof` signing. The two connectors carried a copy each of the
-  call and of the version default, so a fix made to one missed the other.
-  `FacebookConnector::extendUserToken()` keeps its array shape, for your own
-  code: the package calls `exchangeUserToken()` (see Changed (breaking)).
-- `Events\CredentialDataAccessExpiring($token, $dataAccessExpiresAt)`, fired
-  once per deadline (see Fixed), and the `data_access_warning` config block
-  (`enabled`, `SOCIAL_TOKENS_DATA_ACCESS_WARNING`, default on; `lead_days`,
-  default 7).
-- `social_tokens.data_access_expires_at` and `data_access_warned_at`, with
-  `SocialToken::isDataAccessExpired()`, `SocialToken::warnDataAccessExpiring()`
-  and the `dataAccessExpiringBefore($date)` scope. Storing a new
-  `data_access_expires_at` re-arms the warning.
-- `RenewalResult::success()` takes `neverExpires:` (the provider says the token
-  does not expire: the credential is stored static) and `dataAccessExpiresAt:`;
-  both are readable on the result.
-- `MetaGraphConnector::debugToken($userToken)` (debug_token's `data`),
-  `MetaGraphConnector::tokenLifetime($data)` (`never_expires`, `expires_at`,
-  `data_access_expires_at`, in the app's timezone),
-  `withTokenLifetime($result)`, and
-  `FacebookConnector::grantedScopesFrom($data, $accountIds)`, which
-  `grantedScopesByAccount()` now uses. The connect-time actions call
-  `debugToken()` once and read the scopes and the lifetime from its reply.
-- **Instagram without a Facebook Page**, through the Instagram API with
-  Instagram Login: `InstagramLoginConnector`, registered as `instagram_login`
-  (its own credentials, `services.instagram_login`: the Instagram app id and
-  secret). `StoreConnection` stores one account per connection, never the
-  Facebook Page fan-out; the 1-hour token is exchanged at connect
-  (`ig_exchange_token`), and the 60-day token is extended a week ahead
-  (`ig_refresh_token`, once it is 24 hours old) and checked on
-  `graph.instagram.com/me`. A creator or business account not linked to a
-  Page could not be connected before.
-- `Connectors\LongLivedTokenConnector`, the base of `ThreadsConnector` and
-  `InstagramLoginConnector`: a Meta API whose long-lived token extends itself
-  with a `refresh_access_token` call, guarded by the 24-hour minimum age, with
-  a connect-time exchange and a `/me` check. A product declares its URLs,
-  grant names and label.
-- **Meta deauthorize and data deletion callbacks.** When a user removed the
-  app, or asked for their data to be deleted, the package could not act on
-  Meta's callback: it had no `signed_request` verifier, no handler, and no way
-  to reach every row of one external user across owners (a user's Page
-  credentials are keyed by the Page, and revoking the user credential did not
-  reach them). Until a post failed or a renewal ran, their accounts stayed
-  usable. Now:
-  - `SocialTokens::revokeExternalUser($provider, $externalId)` revokes,
-    locally and under every owner, the credentials the user holds, the
-    accounts recorded under them (`provider_holder_id`: Pages and Instagram
-    accounts), the credentials those accounts post with (the Pages' tokens)
-    and every account posting with one of those. `facebook` and `instagram`
-    reach the same rows. The provider is not called.
-  - `SocialTokens::purgeExternalUser($provider, $externalId, $deleted = null)`
-    deletes those credentials and revokes those accounts, which keep their
-    rows without a credential. The `$deleted` closure receives the accounts as
-    soon as the tokens are deleted, even when a listener throws.
-  - `Actions\HandleDeauthorizeCallback` (Deauthorize, Threads' Uninstall) and
-    `Actions\HandleDataDeletionCallback` (Data Deletion Request, Threads'
-    Delete), which verify the `signed_request` with the connector's app
-    secret; the second answers `{url, confirmation_code}` and fires
-    `Events\ExternalUserDataDeleted` for the app to delete the rest, even
-    when an `AccountRevoked` listener throws (its exception is reported).
-    `Actions\ShowDataDeletionStatus` serves the status page, recognising only
-    codes signed with the app key (`Support\DeletionConfirmation`).
-  - Their routes, `POST {prefix}/{provider}/deauthorize`,
-    `POST {prefix}/{provider}/delete` and
-    `GET {prefix}/{provider}/deletion/{code}`, registered only with
-    `callbacks.enabled` (`SOCIAL_TOKENS_CALLBACKS`, off by default), under
-    `callbacks.prefix` (`social-tokens/meta`) with `callbacks.middleware`
-    (none); `callbacks.deletion_status_url` points the answer at the app's
-    own page (`{provider}` and `{code}` in it are replaced; without `{code}`,
-    `?code=` is appended). `Support\CallbackRoutes::register()` registers them anywhere.
-  - `Support\MetaSignedRequest::parse($signedRequest, $secret)` (and
-    `make()`), `Exceptions\InvalidSignedRequestException`, and the
-    `Contracts\VerifiesSignedRequests` connector capability, implemented by
-    the Facebook, Instagram, Instagram Login and Threads connectors.
-- `GoogleConnector`, `TikTokConnector` and `XConnector` log a warning when the
-  provider answers a revocation without confirming it (an HTTP error, or an
-  `error` in the body, which TikTok may send with a 200):
-  `[social-tokens] {provider} did not confirm the token revocation`, with
-  `provider`, `token_id`, `status` and the `error` code, never the body.
-  2.x ignored Google's and TikTok's answer. `AbstractConnector::logUnconfirmedRevoke()`
-  does it for a connector of your own.
-- Migration `2025_01_01_000010_clear_tokens_of_revoked_credentials` (see
-  Security). It can be run again, and changes no `updated_at`.
-- `Contracts\FansOutConnections`, a connector capability: a connector whose
-  connections yield several accounts names the action that stores them
-  (`connectionAction()`). `FacebookConnector` names `StoreFacebookPages`,
-  `InstagramConnector` names `StoreInstagramAccounts`. `StoreConnection`
-  hands such a connection to that action; `StoreAccountFromSocialite`
-  refuses it.
-- `Contracts\StoresConnections`, the action `StoreConnection` calls:
-  `storeConnection($provider, $user, $owner, $connectedBy, $longLived,
-  $refreshExpiresAt, $restoreDisconnected)`, implemented by
-  `StoreAccountFromSocialite`, `StoreFacebookPages` and
-  `StoreInstagramAccounts`. Every option reaches the action.
-- `social_accounts.disconnected_at` (migration
-  `2025_01_01_000011_add_disconnected_at_to_social_accounts`, nullable, no
-  index), set by `disconnect()` through `SocialAccount::markDisconnected()`
-  (also on an account already revoked, without a second `AccountRevoked`).
-  `SocialAccount::wasDisconnected()` tells, and
-  `SocialAccount::clearDisconnected()` forgets it (unsaved), so that the next
-  reconnect restores that account.
-- A `restoreDisconnected` option on `StoreConnection::handle()`,
-  `StoreFacebookPages::handle()`, `StoreInstagramAccounts::handle()`,
-  `StoreLinkedInOrganizations::handle()` and
-  `StoresConnections::storeConnection()` (see Changed (breaking)).
-- `SocialTokens::forgetOwner(Model $owner)` tears down what an owner holds,
-  for when the owner itself is deleted: its credentials are revoked (tokens
-  erased, the provider called unless another owner still holds a grant for
-  the same external user), its accounts revoked, then both are deleted, and
-  the deleted accounts returned. The owner columns carry no foreign key, so
-  a deleted workspace used to leave its accounts active and its credentials
-  renewed for good, each counting as a grant that kept every other owner's
-  `revoke()` and `disconnect()` of the same TikTok or Google user from
-  reaching the provider. `CredentialRevoked` and `AccountRevoked` fire before
-  the rows are deleted, so a queued listener of either fails with
-  `ModelNotFoundException`
-  ([UPGRADE](UPGRADE.md#tear-down-the-owners-you-delete)).
-- `social-tokens:prune` deletes the credentials nothing will use again once
-  they have not changed for `prune_after_days` (30, at least 1; `--days`
-  overrides it): revoked ones, ones flagged `needs_reconnect`, and ones no
-  connected account depends on, by `social_token_id` or as the holder of its
-  accounts under the same owner (left behind by a reconnect, or by accounts
-  the app deleted). Scheduled daily by default (`prune_schedule`, any form
-  `dispatch_schedule` takes; `null` disables it), `withoutOverlapping()` and
-  `onOneServer()`. Accounts are never deleted. The query is
-  `SocialToken::prunable($before)`.
-- `social-tokens:reencrypt` re-encrypts every stored token with the current
-  `APP_KEY`, decrypting with `APP_PREVIOUS_KEYS`, so a previous key can be
-  retired. The `encrypted` cast only re-encrypts a value it writes, and a
-  Google refresh token or a Facebook Page token is never written again: once
-  the old key was dropped, those credentials no longer decrypted. Tokens
-  already under the current key are left as they are, and `updated_at` is
-  kept. It runs alongside renewals and reconnects: a row is written only while
-  it holds the ciphertext that was read, a row changed meanwhile is read again
-  and rewritten (a Google renewal leaves the refresh token under the old key),
-  and a renewal in flight still stores its result over the rewritten tokens
-  (for TikTok and X, the only copy of the rotated refresh token). It exits
-  with a failure code when a row kept changing (run it again), and when a
-  token decrypts with none of the keys, which it logs and leaves.
-- **Testing helpers for apps** (README, "Testing your app"):
-  - Model factories: `SocialAccount::factory()` makes an active account with
-    a credential that matches it as a connection stores them (provider,
-    holder, owner; a Facebook Page on a never-expiring Page token, an
-    Instagram account on the Meta user credential), shared by the accounts
-    of one holder as at a connection (the organizations of one LinkedIn
-    member, the Instagram accounts of one Facebook user), and
-    `SocialToken::factory()` a credential alone, scheduled with its
-    provider's lead time. States: `forProvider()`, `ownedBy()`,
-    `connectedBy()`, `heldBy()`, `linkedInOrganization()`, `credential()`,
-    `needsReconnect()`, `revoked()`, `disconnected()` on accounts;
-    `forProvider()`, `ownedBy()`, `forPurpose()`, `dueForRenewal()`,
-    `expired()`, `neverExpiring()`, `withoutRefreshToken()`,
-    `needsReconnect()`, `revoked()` on credentials. They live in
-    `Pr4w\SocialTokens\Database\Factories` and need no Faker.
-  - `Pr4w\SocialTokens\Facades\SocialTokens`, registered as the
-    `SocialTokens` alias. Its `fake()` swaps in `Testing\SocialTokensFake`:
-    the real service against the test database, with the real connectors,
-    whose renewals, provider-side revocations and `reportRejected()` checks
-    are answered without a request (`renewWith()`, `checkWith()`) and
-    recorded (`assertRenewed()`, `assertNotRenewed()`,
-    `assertRevokedAtProvider()`, `assertNotRevokedAtProvider()`,
-    `assertChecked()`, `assertNotChecked()`).
-  - `Testing\FakeConnector`, a connector that makes no request, for a
-    provider key of an app's tests: scripted renewals, connect-time
-    exchange and revocation, and the same assertions.
-- `SocialTokens::adopt(SocialAccount $account, Model $owner)` gives an
-  owner-less account an owner, with the credentials it depends on (the one
-  it posts with, and the Meta user token behind a Facebook Page) once no
-  other owner-less account uses them, in one transaction. A LinkedIn
-  member's profile and organizations post with separate credentials: each
-  moves with its own accounts, to whichever owner adopts them. It refuses an
-  account of another owner, and one the owner already has (a reconnect
-  stored a row of its own). Given an account the owner already has, it
-  moves its owner-less credentials, which finishes an adoption made with
-  `associate()` ([UPGRADE](UPGRADE.md#owner-less-rows-you-attached-by-hand)).
-- `SocialTokens` reaches the providers through two protected methods,
-  `refreshAtProvider()` (renewals) and `checkAtProvider()` (the check of
-  `reportRejected()`), next to `revokeAtProvider()`, so that a subclass can
-  answer in their place.
-
-### Changed
-- `CHANGELOG.md` ships in the package (it was export-ignored), next to
-  `README.md` and `UPGRADE.md`, which link to it.
-- The RFC 6749 `temporarily_unavailable` and `server_error` token-endpoint errors
-  are known transient failures: still retried, no longer logged as uncatalogued.
-- OAuth token-endpoint failures carry the HTTP `status` in their context, and
-  terminal ones carry `error` / `error_description` too.
-- Config values are read and normalised in one place, `Support\Settings`:
-  numeric strings work for `queue.tries`, the HTTP timeouts and the breaker,
-  and the HTTP timeouts keep fractional seconds (`'connect_timeout' => 2.5`
-  used to be cut to 2). A `queue.tries` that is not a number takes the default,
-  4 (see Changed (breaking)).
-- A transient renewal failure throws `Exceptions\TransientRenewalException`, a
-  `RuntimeException` with the same "Transient renewal failure: ..." message,
-  instead of a plain `RuntimeException`. It implements `ShouldntReport`, so a
-  provider outage no longer sends one error-tracker event per credential per
-  attempt and per cycle. Instead, `RenewCredential::failed()` logs one warning
-  ("Renewal failed after retries; retrying later") when it backs a credential
-  off. Uncatalogued errors are still logged as they occur
-  (`log_unknown_errors`).
-- `ProviderConnector::revoke()` is documented as best effort that must not
-  throw; `AbstractConnector::logRevokeFailure()` logs a failure for an
-  override.
-- `InstagramConnector` reads an `fb_exchange_token` reply exactly as
-  `FacebookConnector` does: a reply without a token is "Malformed token
-  extension response." (it was "Malformed response, no access_token."), and
-  an `expires_in` that is not a number means an unknown expiry. A
-  `graph_version` set to an empty string takes the default version instead of
-  building a URL without one.
-- A Meta user credential's renewal makes a second call, `debug_token` on the
-  new token, to read its lifetime (see Fixed). A failure of that call leaves
-  the renewal as it was, the stored data access deadline included.
-- `ThreadsConnector` extends `LongLivedTokenConnector`. Its requests and
-  failure reasons are unchanged; `refreshWithToken()` is protected instead of
-  private, and an `expires_in` that is not a number means an unknown expiry.
-- The models' `@property` blocks list every column (`id`, `created_at`,
-  `updated_at`, and `connected_by_type` / `connected_by_id` on
-  `SocialAccount`), and the package's own analysis checks every column name
-  it writes or filters on (Larastan's `checkModelProperties`).
-  `SocialToken::persistCredential()` declares `$keys` and `$values` as arrays
-  keyed by the model's columns: with `checkModelProperties` on in your own
-  PHPStan setup, pass it literal arrays or annotate yours accordingly. No
-  runtime change.
+### Removed
+- **(breaking)** The one-argument `mapError(array $body)` of `GoogleConnector`
+  and `TikTokConnector` (protected). The error mapping moved to
+  `OAuth2Connector::mapError(array $body, int $status)`, which asks the
+  provider's `classifyError($error, $description, $status)` what an error
+  code means. A subclass that overrides the old one-argument method no longer
+  loads (PHP refuses the incompatible signature): override `classifyError()`
+  instead ([UPGRADE](UPGRADE.md#if-you-wrote-a-connector)).
 
 ## [2.0.0]
 
