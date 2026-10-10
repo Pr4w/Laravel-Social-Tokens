@@ -133,6 +133,39 @@ it('finishes every account attached by hand with the UPGRADE fix-up', function (
         ->and($untouched->fresh()->credential->ownable_type)->toBeNull();
 });
 
+it('renews the Meta user token behind a Page attached by hand, which the first 3.0 dispatcher run unscheduled', function () {
+    // 2.x data: the Page attached to its owner by hand, the Meta user token
+    // behind it still owner-less, so no account of its owner keeps it in
+    // use. The dispatcher runs every 15 minutes from the deploy on, before
+    // anyone runs the fix-up, and unschedules it.
+    $page = SocialAccount::factory()->forProvider('facebook')->heldBy('fb-1')->create();
+    $user = SocialToken::factory()->forProvider('facebook', 'fb-1')->withoutRefreshToken()->create(['expires_at' => now()->addDays(5)]);
+    $page->ownable()->associate($this->owner)->save();
+
+    $this->artisan('social-tokens:dispatch-renewals')->expectsOutputToContain('Unscheduled 1 credential(s)')->assertSuccessful();
+
+    expect($user->fresh()->renew_at)->toBeNull();
+
+    UpgradeGuide::run(ATTACHED_BY_HAND, 'adopt(');
+
+    // Due again, as its expiry says: the next run renews it, or flags it.
+    expect($user->fresh()->ownable_id)->toBe($this->owner->getKey())
+        ->and(SocialToken::query()->dueForRenewal()->inUse()->whereKey($user->getKey())->exists())->toBeTrue()
+        ->and($user->fresh()->renew_at->equalTo($user->expires_at->copy()->subDays(7)))->toBeTrue();
+});
+
+it('leaves unscheduled a credential it adopts that has nothing to renew', function () {
+    // A Page token, and a Meta user token that never expires: static.
+    $page = SocialAccount::factory()->forProvider('facebook')->heldBy('fb-1')
+        ->credential(fn ($credential) => $credential->neverExpiring())->create();
+    $user = SocialToken::factory()->forProvider('facebook', 'fb-1')->neverExpiring()->create();
+
+    app(SocialTokens::class)->adopt($page, $this->owner);
+
+    expect(SocialToken::ownedBy($this->owner)->whereNotNull('renew_at')->count())->toBe(0)
+        ->and($user->fresh()->ownable_id)->toBe($this->owner->getKey());
+});
+
 it('finishes every account attached by hand, past the first thousand', function () {
     // each() pages by offset: an account adopted in one page leaves the
     // query, and the next offset skipped as many still half-adopted ones.

@@ -664,6 +664,12 @@ class SocialTokens
      * credentials moved the same way: that finishes an adoption made by
      * associating the account alone.
      *
+     * A credential that moves with an expiry but no renew_at (the dispatcher
+     * unscheduled it while no account of its owner depended on it, as the
+     * Meta user token behind a Page attached by hand) is scheduled again, as
+     * a connection would schedule it: the next dispatcher run renews it, or
+     * flags it when its token can no longer be renewed.
+     *
      * @throws InvalidArgumentException when the account belongs to another
      *                                  owner, or when the owner already has the
      *                                  same external account (a reconnect stored
@@ -698,12 +704,41 @@ class SocialTokens
 
             foreach ($credentials as $token) {
                 if (! $this->otherOwnerDependsOn($token, $owner) && ! $this->ownerHoldsLike($token, $owner)) {
+                    $this->scheduleIfUnscheduled($token);
                     $token->ownable()->associate($owner)->save();
                 }
             }
 
             return $account;
         });
+    }
+
+    /**
+     * Schedule again a credential with an expiry that nothing renews any
+     * more: the dispatcher unscheduled it while no account of its own owner
+     * depended on it (the Meta user token behind a Page attached to an owner
+     * by hand), and the adoption puts it back in use. Scheduled as a
+     * connection would (renewAtFor()), so the next dispatcher run renews it,
+     * or warns and flags it. A credential without an expiry (a Page token, a
+     * Meta user token that never expires) stays static.
+     */
+    protected function scheduleIfUnscheduled(SocialToken $token): void
+    {
+        if ($token->renew_at !== null
+            || $token->status !== AccountStatus::Active
+            || ($token->expires_at === null && $token->refresh_expires_at === null)
+            || ! $this->registry->has($token->provider)) {
+            return;
+        }
+
+        $connector = $this->registry->for($token->provider);
+
+        $token->renew_at = SocialToken::renewAtFor(
+            $token->expires_at,
+            $connector,
+            $token->refresh_expires_at,
+            $token->renewalStrategyWith($connector),
+        );
     }
 
     /**

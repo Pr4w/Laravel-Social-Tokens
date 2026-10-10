@@ -232,7 +232,10 @@ they add.
   account of another owner, and one the owner already has (a reconnect
   stored a row of its own). Given an account the owner already has, it
   moves its owner-less credentials, which finishes an adoption made with
-  `associate()` ([UPGRADE](UPGRADE.md#owner-less-rows-you-attached-by-hand)).
+  `associate()`. A credential it moves that has an expiry but no `renew_at`
+  (the dispatcher unscheduled the Meta user token behind a Page attached by
+  hand, which no account of its owner kept in use) is scheduled again
+  ([UPGRADE](UPGRADE.md#owner-less-rows-you-attached-by-hand)).
 - **Testing helpers for apps** (README, "Testing your app"):
   - Model factories: `SocialAccount::factory()` makes an active account with
     a credential that matches it as a connection stores them (provider,

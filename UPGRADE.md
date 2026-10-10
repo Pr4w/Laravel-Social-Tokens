@@ -966,9 +966,14 @@ SocialAccount::query()
     });
 ```
 
-A credential still used by an owner-less account, or one the owner already
-holds a copy of (a reconnect since), stays as it is; a credential nothing uses
-any more is pruned.
+The dispatcher has most likely unscheduled the Meta user token behind such a
+Page before you run this (no account of its owner kept it in use, see
+[Unused credentials are unscheduled, then pruned](#unused-credentials-are-unscheduled-then-pruned)):
+`adopt()` schedules a credential it moves again when it has an expiry and no
+`renew_at`, so the next dispatcher run renews it, or flags it if its token
+expired meanwhile. A credential still used by an owner-less account, or one
+the owner already holds a copy of (a reconnect since), stays as it is; a
+credential nothing uses any more is pruned.
 
 #### Owners you deleted before
 

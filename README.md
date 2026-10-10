@@ -136,10 +136,11 @@ token behind it. A credential another owner-less account still uses (the
 other Instagram accounts of the same Facebook user) moves with the last of
 them. A LinkedIn member's profile and organizations post with separate
 credentials, so each moves with its own accounts, to whichever owner adopts
-them. It refuses an account the owner already has (a reconnect stored a row of
-its own): disconnect the owner-less row instead. `associate()` alone would move
-the account but not its credential, and the owner's next reconnect would store
-a second one.
+them. A credential it moves that the dispatcher had unscheduled, while no
+account of its owner used it, is scheduled again. It refuses an account the
+owner already has (a reconnect stored a row of its own): disconnect the
+owner-less row instead. `associate()` alone would move the account but not its
+credential, and the owner's next reconnect would store a second one.
 
 **Deleting an owner.** The owner columns carry no foreign key, so a deleted
 workspace would leave its accounts active, its credentials renewed, and each
