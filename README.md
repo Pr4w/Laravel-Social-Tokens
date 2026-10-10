@@ -134,6 +134,8 @@ app(SocialTokens::class)->adopt($account, $workspace);
 transaction: the one it posts with and, for a Facebook Page, the Meta user
 token behind it. A credential another owner-less account still uses (the
 other Instagram accounts of the same Facebook user) moves with the last of
+them. A LinkedIn member's profile and organizations post with separate
+credentials, so each moves with its own accounts, to whichever owner adopts
 them. It refuses an account the owner already has (a reconnect stored a row of
 its own): disconnect the owner-less row instead. `associate()` alone would move
 the account but not its credential, and the owner's next reconnect would store

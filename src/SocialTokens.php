@@ -736,7 +736,13 @@ class SocialTokens
     /**
      * Whether an account that does not belong to $owner, and is not revoked,
      * still depends on the owner-less credential: posting with it, or,
-     * without an owner itself, as an account of its holder.
+     * without an owner itself, as an account of its holder that stillConnected()
+     * would count (a Facebook Page, on a Page token minted from the Meta user
+     * token). A LinkedIn organization does not keep the member's personal
+     * credential owner-less, nor the profile the organizations credential:
+     * each posts with its own, and holding one back left it owner-less for
+     * good once the other was adopted elsewhere, so that the owner's next
+     * reconnect stored a second one.
      */
     protected function otherOwnerDependsOn(SocialToken $token, Model $owner): bool
     {
@@ -750,10 +756,15 @@ class SocialTokens
         }
 
         return SocialAccount::query()->ownedBy(null)
+            ->with('credential')
             ->whereIn('provider', $this->accountProvidersOf($token->provider))
             ->where('provider_holder_id', $token->provider_holder_id)
             ->where('status', '!=', AccountStatus::Revoked->value)
-            ->exists();
+            ->whereNotNull('social_token_id')
+            ->get()
+            ->contains(fn (SocialAccount $account) => $account->credential !== null
+                && ($account->credential->provider !== $token->provider
+                    || $account->credential->provider_holder_id !== $token->provider_holder_id));
     }
 
     /** Whether $owner already holds a credential of the same provider, holder and purpose (the unique key). */

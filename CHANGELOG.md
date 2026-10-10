@@ -879,7 +879,9 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `SocialTokens::adopt(SocialAccount $account, Model $owner)` gives an
   owner-less account an owner, with the credentials it depends on (the one
   it posts with, and the Meta user token behind a Facebook Page) once no
-  other owner-less account uses them, in one transaction. It refuses an
+  other owner-less account uses them, in one transaction. A LinkedIn
+  member's profile and organizations post with separate credentials: each
+  moves with its own accounts, to whichever owner adopts them. It refuses an
   account of another owner, and one the owner already has (a reconnect
   stored a row of its own). Given an account the owner already has, it
   moves its owner-less credentials, which finishes an adoption made with

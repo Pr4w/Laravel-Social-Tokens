@@ -12,6 +12,7 @@
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Actions\StoreConnection;
+use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\SocialTokens;
@@ -158,4 +159,63 @@ it('finishes every account attached by hand, past the first thousand', function 
 
     expect(SocialToken::ownedBy(null)->count())->toBe(0)
         ->and(SocialToken::ownedBy($this->owner)->count())->toBe(1050);
+});
+
+/**
+ * A LinkedIn member's profile, on the personal credential, and one of the
+ * organizations they administer, on the organizations credential, both
+ * owner-less.
+ *
+ * @return array{SocialAccount, SocialAccount}
+ */
+function ownerlessLinkedInMember(): array
+{
+    return [
+        SocialAccount::factory()->forProvider('linkedin')->create(['provider_user_id' => 'm-1']),
+        SocialAccount::factory()->linkedInOrganization('m-1')->create(),
+    ];
+}
+
+it('moves a LinkedIn profile\'s credential although the member\'s organizations are still owner-less', function () {
+    // An organization posts with the organizations credential, not with the
+    // member's personal one: it does not keep that one owner-less.
+    [$profile, $organization] = ownerlessLinkedInMember();
+
+    app(SocialTokens::class)->adopt($profile, $this->owner);
+
+    expect($profile->credential->fresh()->ownable_id)->toBe($this->owner->getKey())
+        ->and($organization->credential->fresh()->ownable_type)->toBeNull();
+});
+
+it('gives a LinkedIn member\'s profile and organizations to the owners that adopt them', function () {
+    [$profile, $organization] = ownerlessLinkedInMember();
+    $other = Owner::create(['name' => 'other']);
+
+    app(SocialTokens::class)->adopt($organization, $this->owner);
+    app(SocialTokens::class)->adopt($profile, $other);
+
+    expect($organization->credential->fresh()->ownable_id)->toBe($this->owner->getKey())
+        ->and($profile->credential->fresh()->ownable_id)->toBe($other->getKey())
+        ->and(SocialToken::ownedBy(null)->count())->toBe(0);
+});
+
+it('gives a LinkedIn member\'s credentials to the owner that adopts their profile and organizations, in either order', function (bool $profileFirst) {
+    [$profile, $organization] = ownerlessLinkedInMember();
+
+    foreach ($profileFirst ? [$profile, $organization] : [$organization, $profile] as $account) {
+        app(SocialTokens::class)->adopt($account, $this->owner);
+    }
+
+    expect(SocialToken::ownedBy($this->owner)->pluck('purpose')->sort()->values()->all())
+        ->toBe([SocialToken::DEFAULT_PURPOSE, StoreLinkedInOrganizations::PURPOSE])
+        ->and(SocialToken::ownedBy(null)->count())->toBe(0);
+})->with(['profile first' => true, 'organizations first' => false]);
+
+it('keeps the organizations credential owner-less while another organization of the member is', function () {
+    [, $organization] = ownerlessLinkedInMember();
+    SocialAccount::factory()->linkedInOrganization('m-1')->for($organization->credential, 'credential')->create();
+
+    app(SocialTokens::class)->adopt($organization, $this->owner);
+
+    expect($organization->credential->fresh()->ownable_type)->toBeNull();
 });
