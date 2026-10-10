@@ -59,6 +59,11 @@ function signedFor(string $userId, string $secret = 'facebook-secret'): string
     return MetaSignedRequest::make(['user_id' => $userId, 'issued_at' => now()->getTimestamp()], $secret);
 }
 
+function base64url(string $value): string
+{
+    return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+}
+
 function enableCallbacks(array $config = []): void
 {
     config()->set('social-tokens.callbacks', $config + ['enabled' => true]);
@@ -85,7 +90,19 @@ it('refuses a signed_request that does not verify', function (Closure $signedReq
     'not base64url' => [fn () => 'a*b.c$d', 'facebook-secret'],
     'not JSON' => [fn () => 'YWJj.YWJj', 'facebook-secret'],
     'no secret to check it with' => [fn () => signedFor('user-1'), ''],
+    'an unsigned array algorithm' => [fn () => explode('.', signedFor('user-1', 'other-secret'))[0].'.'.base64url('{"algorithm":["x"],"user_id":"1"}'), 'facebook-secret'],
+    'a signed array algorithm' => [fn () => MetaSignedRequest::make(['user_id' => 'user-1', 'algorithm' => ['HMAC-SHA256']], 'facebook-secret'), 'facebook-secret'],
 ])->throws(InvalidSignedRequestException::class);
+
+it('reads nothing in a payload before its signature checks out', function () {
+    // An unsigned payload whose algorithm is an array: read before the HMAC
+    // check, it raised "Array to string conversion", a 500 and a reported
+    // exception for every anonymous request.
+    $forged = explode('.', signedFor('user-1', 'other-secret'))[0].'.'.base64url('{"algorithm":["x"],"user_id":"1"}');
+
+    expect(fn () => MetaSignedRequest::parse($forged, 'facebook-secret'))
+        ->toThrow(InvalidSignedRequestException::class, 'does not match the app secret');
+});
 
 // Revoking and purging an external user ----------------------------------------
 
@@ -234,6 +251,19 @@ it('refuses a callback that does not verify, and changes nothing', function () {
 
     Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context) => str_contains($message, 'does not verify')
         && $context['provider'] === 'facebook')->atLeast()->once();
+});
+
+it('answers 400, reporting nothing, to an unsigned payload whose fields are not strings', function () {
+    enableCallbacks();
+    Exceptions::fake();
+    $rows = metaConnection('user-1');
+    $forged = 'garbage.'.base64url('{"algorithm":["x"],"user_id":"1"}');
+
+    $this->post('/social-tokens/meta/facebook/deauthorize', ['signed_request' => $forged])->assertStatus(400);
+    $this->post('/social-tokens/meta/facebook/delete', ['signed_request' => $forged])->assertStatus(400);
+
+    Exceptions::assertNothingReported();
+    expect($rows['user']->fresh()->status)->toBe(AccountStatus::Active);
 });
 
 it('answers 404 for a provider that cannot verify a callback', function (string $provider) {

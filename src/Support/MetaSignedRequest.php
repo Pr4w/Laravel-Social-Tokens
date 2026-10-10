@@ -11,7 +11,7 @@ use Pr4w\SocialTokens\Exceptions\InvalidSignedRequestException;
  * HMAC-SHA256 signature of the second part keyed with the app secret, and a
  * JSON payload ({"algorithm": "HMAC-SHA256", "issued_at": ..., "user_id": ...}).
  *
- * Anyone can post to those URLs: nothing in the payload is trusted until the
+ * Anyone can post to those URLs: nothing in the payload is read until the
  * signature checks out, compared in constant time.
  */
 final class MetaSignedRequest
@@ -38,18 +38,29 @@ final class MetaSignedRequest
         [$encodedSignature, $encodedPayload] = $parts;
 
         $signature = self::decode($encodedSignature);
-        $payload = json_decode((string) self::decode($encodedPayload), true);
+        $json = self::decode($encodedPayload);
 
-        if ($signature === null || ! is_array($payload)) {
+        if ($signature === null || $json === null) {
             throw new InvalidSignedRequestException('Malformed signed_request.');
         }
 
-        if (strtoupper((string) ($payload['algorithm'] ?? '')) !== 'HMAC-SHA256') {
-            throw new InvalidSignedRequestException('Unexpected signed_request algorithm.');
-        }
-
+        // The signature covers the encoded payload: checked before anything
+        // in it is parsed or read, so that a forged payload (an array where
+        // a string belongs) is refused like any other, never a 500.
         if (! hash_equals(hash_hmac('sha256', $encodedPayload, $secret, true), $signature)) {
             throw new InvalidSignedRequestException('The signed_request signature does not match the app secret.');
+        }
+
+        $payload = json_decode($json, true);
+
+        if (! is_array($payload)) {
+            throw new InvalidSignedRequestException('Malformed signed_request.');
+        }
+
+        $algorithm = $payload['algorithm'] ?? null;
+
+        if (! is_string($algorithm) || strtoupper($algorithm) !== 'HMAC-SHA256') {
+            throw new InvalidSignedRequestException('Unexpected signed_request algorithm.');
         }
 
         return $payload;

@@ -139,7 +139,8 @@ they add.
     `?code=` is appended). `Support\CallbackRoutes::register()` registers
     them anywhere.
   - `Support\MetaSignedRequest::parse($signedRequest, $secret)` (and
-    `make()`), `Exceptions\InvalidSignedRequestException`, and the
+    `make()`), which reads nothing in the payload before its signature
+    checks out, `Exceptions\InvalidSignedRequestException`, and the
     `Contracts\VerifiesSignedRequests` connector capability, implemented by
     the Facebook, Instagram, Instagram Login and Threads connectors.
 - **(breaking)** **Meta "Require App Secret" support.** Graph calls made with
