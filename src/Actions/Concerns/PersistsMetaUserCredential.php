@@ -43,7 +43,16 @@ trait PersistsMetaUserCredential
      * lapsed until then. A re-sync of a token the app already held keeps
      * what is stored.
      *
-     * @param  array<string, mixed>  $keys
+     * A re-sync with the very token stored (to pick up a new Page) is not a
+     * new token either: its issue date stays, and so do its expiry and its
+     * schedule unless debug_token reports another expiry. A renewal Meta
+     * did not extend parked renew_at on the expiry and warned the user:
+     * moved back a lead time before it, the next dispatcher run renewed
+     * again for nothing and warned them a second time. Not a null renew_at:
+     * the dispatcher unscheduled the credential while nothing used it, and
+     * the accounts this re-sync stores need it renewed again.
+     *
+     * @param  array<model-property<SocialToken>, mixed>  $keys
      * @param  array<string, mixed>|null  $debug  debugUserToken()'s result.
      */
     protected function persistUserCredential(
@@ -58,12 +67,39 @@ trait PersistsMetaUserCredential
         $expiresAt ??= $lifetime['expires_at'] ?? null;
         $static = $expiresAt === null && ($lifetime['never_expires'] ?? false);
         $dataAccess = $lifetime['data_access_expires_at'] ?? null;
+        $kept = [];
 
-        return SocialToken::persistCredential($keys, [
+        $stored = $newLogin || $static ? null : SocialToken::query()
+            ->where($keys + ['purpose' => SocialToken::DEFAULT_PURPOSE])
+            ->first();
+
+        if ($stored !== null && $stored->holdsAccessToken($userToken)) {
+            $kept['last_renewed_at'] = $stored->last_renewed_at;
+
+            if ($expiresAt === null || self::sameExpiry($expiresAt, $stored->expires_at)) {
+                $expiresAt = $stored->expires_at;
+
+                if ($stored->renew_at !== null) {
+                    $kept['renew_at'] = $stored->renew_at;
+                }
+            }
+        }
+
+        return SocialToken::persistCredential($keys, $kept + [
             'access_token' => $userToken,
             'refresh_token' => null,
             'expires_at' => $expiresAt,
             'renew_at' => $static ? null : SocialToken::renewAtFor($expiresAt, $connector), // an unknown expiry is checked back
         ] + ($newLogin || $dataAccess !== null ? ['data_access_expires_at' => $dataAccess] : []));
+    }
+
+    /**
+     * One expiry read twice: the stored one counts from the exchange that
+     * returned it (now + expires_in), debug_token's is Meta's own timestamp.
+     * An extension moves a 60-day token's expiry by days, not minutes.
+     */
+    private static function sameExpiry(CarbonInterface $reported, ?CarbonInterface $stored): bool
+    {
+        return $stored !== null && abs($reported->getTimestamp() - $stored->getTimestamp()) <= 3600;
     }
 }

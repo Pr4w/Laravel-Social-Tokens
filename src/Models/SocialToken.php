@@ -451,6 +451,20 @@ class SocialToken extends Model
 
     // State -----------------------------------------------------------------
 
+    /**
+     * Whether the credential holds $accessToken, compared in constant time.
+     * False when its own token cannot be decrypted (written under an APP_KEY
+     * that is gone): it holds nothing anyone can use.
+     */
+    public function holdsAccessToken(#[\SensitiveParameter] string $accessToken): bool
+    {
+        try {
+            return hash_equals((string) $this->access_token, $accessToken);
+        } catch (DecryptException) {
+            return false;
+        }
+    }
+
     public function isAccessTokenExpired(int $bufferSeconds = 30): bool
     {
         return $this->expires_at !== null

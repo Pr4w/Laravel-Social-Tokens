@@ -830,6 +830,18 @@ they add.
   token, the issue date is kept, and so are the expiry and the schedule when
   no `expiresAt` is given, or the stored one (a warning already sent is not
   sent again).
+- Re-syncing Facebook Pages or Instagram accounts with the Meta user token
+  already stored (`StoreFacebookPages` / `StoreInstagramAccounts` with
+  `extend: false`) no longer moves that token's renewal back, nor erases its
+  expiry. The schedule was recomputed from the call: after a renewal Meta
+  did not extend, which parks `renew_at` on the expiry and fires
+  `CredentialExpiringSoon`, the re-sync put `renew_at` a week before the
+  expiry, in the past, so the next dispatcher run made another
+  `fb_exchange_token` call for nothing and warned the user again; when
+  `debug_token` did not answer, the expiry became unknown. With the stored
+  token, the issue date is kept, and so are the expiry and the schedule
+  unless `debug_token` reports another expiry (an unscheduled credential is
+  scheduled again).
 - An OAuth error sent as an object (`{"error": {"code", "message"}}`) crashed
   the TikTok, Google and LinkedIn connectors with "Array to string conversion";
   it is now an unknown, retried failure.

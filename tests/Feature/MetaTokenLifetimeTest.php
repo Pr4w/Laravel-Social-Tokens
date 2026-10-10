@@ -1,5 +1,6 @@
 <?php
 
+use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
@@ -10,6 +11,7 @@ use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\CredentialDataAccessExpiring;
+use Pr4w\SocialTokens\Events\CredentialExpiringSoon;
 use Pr4w\SocialTokens\Events\CredentialRenewed;
 use Pr4w\SocialTokens\Jobs\RenewCredential;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -370,4 +372,101 @@ it('lets check-static watch a never-expiring user token', function () {
 
     Http::assertSent(fn ($request) => str_contains($request->url(), '/me') && $request->hasHeader('Authorization', 'Bearer user-token'));
     expect($token->fresh()->status)->toBe(AccountStatus::Active);
+});
+
+// Re-syncing the token the app holds ---------------------------------------------
+
+/**
+ * A Meta user credential whose renewal Meta did not extend: the renewal
+ * parked renew_at on the expiry and warned the user once.
+ */
+function nonExtendedMetaCredential(CarbonInterface $expiresAt): SocialToken
+{
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'expires_at' => $expiresAt,
+        'renew_at' => $expiresAt->copy()->subDays(7),
+    ]);
+
+    // Meta answers with the lifetime the token has left: not extended.
+    fakeMetaLifetime(
+        exchange: ['access_token' => 'user-token', 'expires_in' => (int) now()->diffInSeconds($expiresAt, true)],
+        debug: ['expires_at' => $expiresAt->getTimestamp()],
+    );
+
+    expect(app(SocialTokens::class)->renewCredential($token)->succeeded())->toBeTrue()
+        ->and($token->fresh()->renew_at->equalTo($expiresAt))->toBeTrue();
+
+    return $token->fresh();
+}
+
+it('keeps a renewal parked on the expiry when a re-sync stores the same token, so the user is not warned again', function (string $action) {
+    $this->freezeSecond();
+    Event::fake([CredentialExpiringSoon::class]);
+    $expiresAt = now()->addDays(3);
+    $token = nonExtendedMetaCredential($expiresAt);
+    $renewedAt = $token->last_renewed_at;
+
+    Event::assertDispatchedTimes(CredentialExpiringSoon::class, 1);
+
+    $this->travel(1)->hours();
+
+    // A re-sync with the stored token, to pick up a new Page: debug_token
+    // reports the same expiry, give or take the second the exchange took.
+    fakeMetaLifetime(debug: ['expires_at' => $expiresAt->getTimestamp() + 1]);
+    app($action)->handle(userToken: 'user-token', userId: 'user-1', extend: false);
+
+    expect($token->fresh()->renew_at->equalTo($expiresAt))->toBeTrue()
+        ->and($token->fresh()->expires_at->equalTo($expiresAt))->toBeTrue()
+        ->and($token->fresh()->last_renewed_at->equalTo($renewedAt))->toBeTrue();
+
+    Queue::fake();
+    $this->artisan('social-tokens:dispatch-renewals')->expectsOutputToContain('Dispatched 0 renewal job(s).');
+
+    Queue::assertNothingPushed();
+    Event::assertDispatchedTimes(CredentialExpiringSoon::class, 1);
+})->with([StoreInstagramAccounts::class, StoreFacebookPages::class]);
+
+it('keeps the stored expiry and schedule when a re-sync of the same token cannot read debug_token', function () {
+    $this->freezeSecond();
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'expires_at' => now()->addDays(40),
+        'renew_at' => now()->addDays(33),
+    ]);
+    fakeMetaLifetime(debug: null);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'user-1', extend: false);
+
+    expect($token->fresh()->expires_at->equalTo(now()->addDays(40)))->toBeTrue()
+        ->and($token->fresh()->renew_at->equalTo(now()->addDays(33)))->toBeTrue();
+});
+
+it('reschedules a re-synced token whose expiry debug_token reports moved, or that the dispatcher unscheduled', function (?string $renewAt, int $debugExpiryDays) {
+    $this->freezeSecond();
+    $token = instagramBackedCredential([
+        'provider_holder_id' => 'user-1',
+        'expires_at' => now()->addDays(3),
+        'renew_at' => $renewAt === null ? null : now()->addDays(3),
+    ]);
+    fakeMetaLifetime(debug: ['expires_at' => now()->addDays($debugExpiryDays)->getTimestamp()]);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'user-1', extend: false);
+
+    expect($token->fresh()->expires_at->equalTo(now()->addDays($debugExpiryDays)))->toBeTrue()
+        ->and($token->fresh()->renew_at->equalTo(now()->addDays($debugExpiryDays - 7)))->toBeTrue();
+})->with([
+    'extended' => ['parked', 60],
+    'unscheduled' => [null, 3],
+]);
+
+it('schedules a re-sync with another token than the stored one as a new token', function () {
+    $this->freezeSecond();
+    $token = nonExtendedMetaCredential(now()->addDays(3));
+    fakeMetaLifetime(debug: ['expires_at' => now()->addDays(3)->getTimestamp()]);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'another-user-token', userId: 'user-1', extend: false);
+
+    expect($token->fresh()->renew_at->equalTo(now()->addDays(3)->subDays(7)))->toBeTrue()
+        ->and($token->fresh()->last_renewed_at->equalTo(now()))->toBeTrue();
 });
