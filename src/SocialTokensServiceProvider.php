@@ -78,7 +78,8 @@ class SocialTokensServiceProvider extends ServiceProvider
                     ->runInBackground(); // N sequential provider calls must not delay the app's own tasks
             }
 
-            if ($pruneFrequency = $this->frequency('prune_schedule', 'daily')) {
+            // Off unless the app chooses a schedule: pruning deletes rows.
+            if ($pruneFrequency = $this->frequency('prune_schedule', null)) {
                 $pruneFrequency($schedule->command('social-tokens:prune'))
                     ->withoutOverlapping(60)
                     ->onOneServer();
@@ -107,11 +108,12 @@ class SocialTokensServiceProvider extends ServiceProvider
      * bootstrap as soon as routes/console.php or withSchedule() uses it, so an
      * exception here would stop queue:work and migrate too. A value that cannot
      * be applied logs an error and keeps the default rather than dropping the
-     * entry: a missing dispatcher lets every renewable token expire.
+     * entry: a missing dispatcher lets every renewable token expire. An entry
+     * off by default ($default null) stays off.
      *
      * @return (Closure(Event): Event)|null
      */
-    protected function frequency(string $key, string $default): ?Closure
+    protected function frequency(string $key, ?string $default): ?Closure
     {
         $value = config("social-tokens.{$key}", $default);
 
@@ -127,11 +129,12 @@ class SocialTokensServiceProvider extends ServiceProvider
             return fn (Event $event) => $event->cron($cron);
         }
 
-        Log::error("[social-tokens] social-tokens.{$key} must be a cron expression or a scheduler frequency method that takes no argument; using the default, {$default}.", [
-            'value' => is_scalar($value) ? $value : get_debug_type($value),
-        ]);
+        Log::error('[social-tokens] social-tokens.'.$key.' must be a cron expression or a scheduler frequency method that takes no argument; '
+            .($default === null ? 'not scheduling it.' : "using the default, {$default}."), [
+                'value' => is_scalar($value) ? $value : get_debug_type($value),
+            ]);
 
-        return fn (Event $event) => $event->{$default}();
+        return $default === null ? null : fn (Event $event) => $event->{$default}();
     }
 
     /**

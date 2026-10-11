@@ -387,12 +387,14 @@ manages, so it cannot reach these.
 
 ### Meta: Require App Secret
 
-Every Graph call the package makes with a user or Page token (`/me`,
-`/me/accounts`) carries `appsecret_proof`, the HMAC-SHA256 of that token keyed
-with `services.facebook.client_secret`, as Socialite's Facebook driver already
-does. You can therefore turn on **Require App Secret** in the Meta app's
-advanced settings: a Page or user token that leaks is then useless without the
-app secret. Sign your own publishing calls the same way:
+Off by default. Set `META_APPSECRET_PROOF=true` (the `appsecret_proof` option
+of the `facebook` and `instagram` connectors) and every Graph call the package
+makes with a user or Page token (`/me`, `/me/accounts`) carries
+`appsecret_proof`, the HMAC-SHA256 of that token keyed with
+`services.facebook.client_secret`, as Socialite's Facebook driver already
+does. You can then turn on **Require App Secret** in the Meta app's advanced
+settings: a Page or user token that leaks is useless without the app secret.
+Sign your own publishing calls the same way:
 
 ```php
 $proof = app(SocialTokens::class)->connector('instagram')->appSecretProof($token); // or 'facebook'
@@ -403,11 +405,13 @@ Http::withToken($token)->post("https://graph.facebook.com/v23.0/{$igUserId}/medi
 ]));
 ```
 
-A proof only matches tokens issued to the configured Meta app. Set
-`META_APPSECRET_PROOF=false` (the `appsecret_proof` option of the `facebook` and
-`instagram` connectors) to stop sending it, for example while tokens issued by
-a former Meta app are still stored. Threads calls (`graph.threads.net`) and
-Instagram Login calls (`graph.instagram.com`) are not signed.
+A proof only matches tokens issued to the configured Meta app: Meta refuses
+calls made with a token from another Meta app (a former app whose tokens are
+still stored) once it is on. The package treats that refusal as a problem with
+the app's client, never the user's: it alerts and flags no one. Turn it on
+before Require App Secret, once every stored Meta token comes from the
+configured app. Threads calls (`graph.threads.net`) and Instagram Login calls
+(`graph.instagram.com`) are not signed.
 
 ### What `StoreConnection` handles for you
 
@@ -532,11 +536,11 @@ passed and dispatches one `RenewCredential` job per credential — so one renewa
 keeps every account sharing that credential alive. Each provider declares its own
 lead time, so a single command handles token lifetimes from one hour to sixty
 days. The schedule is registered automatically; just run the Laravel scheduler.
-`dispatch_schedule` (every 15 minutes), `check_static_schedule` and
-`prune_schedule` (daily, see [Pruning](#pruning)) take
+`dispatch_schedule` (every 15 minutes), `check_static_schedule` (daily) and
+`prune_schedule` (off by default, see [Pruning](#pruning)) take
 a scheduler frequency method with no argument (`'everyTenMinutes'`) or a cron
 expression (`'*/10 * * * *'`, `'@hourly'`); a value that is neither logs an
-error and keeps the default. A method that only picks the days (`'weekdays'`,
+error and keeps the default (pruning stays off). A method that only picks the days (`'weekdays'`,
 `'mondays'`) is not a frequency: write a cron expression (`'*/15 * * * 1-5'`).
 Set `dispatch_schedule` to `null` to schedule the command yourself. The scheduled
 commands run `withoutOverlapping()->onOneServer()` (`check-static` also in the
@@ -922,18 +926,25 @@ and no active account depends on it, the dispatcher unschedules it
 stored token (LinkedIn organizations, or Facebook Pages and Instagram accounts
 with `extend: false`), or an `adopt()` that moves it, schedules it again. Nothing else does:
 an account you make active again by hand needs its credential's `renew_at`
-set too (see the UPGRADE guide). A daily
-`social-tokens:prune` then deletes the credentials that are revoked, flagged
-`needs_reconnect`, or used by no connected account (left behind by a
-reconnect, or by accounts you deleted), once they have not changed for
-`prune_after_days` (30). Accounts are never deleted: one whose credential is
+set too (see the UPGRADE guide). `social-tokens:prune` then deletes the
+credentials that are revoked, flagged `needs_reconnect`, or used by no
+connected account (left behind by a reconnect, or by accounts you deleted),
+once they have not changed for `prune_after_days` (30). Accounts are never deleted: one whose credential is
 pruned keeps its row, without a credential (it reads as `needs_reconnect`
 unless it is revoked itself), so read `$account->credential` null-safely. It
 keeps no other credential in use either: a Page whose Page token was pruned
 no longer keeps the Meta user token renewed, nor do LinkedIn organizations
-the member's personal credential, until a reconnect stores new ones. Set
-`prune_schedule` to `null` to keep everything, or run
-`php artisan social-tokens:prune --days=7` yourself.
+the member's personal credential, until a reconnect stores new ones.
+
+Pruning is off by default: nothing is deleted until you choose a schedule.
+Set `SOCIAL_TOKENS_PRUNE_SCHEDULE=daily` (`prune_schedule`, any form
+`dispatch_schedule` takes) to run it on the scheduler, or run
+`php artisan social-tokens:prune` (`--days=7` to change the retention) yourself.
+To see what it would delete first:
+
+```php
+SocialToken::query()->prunable(now()->subDays(30))->get(['id', 'provider', 'status', 'updated_at']);
+```
 
 ### When a user removes your app (Meta, Threads)
 

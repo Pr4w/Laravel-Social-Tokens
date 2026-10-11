@@ -3,6 +3,33 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+Two defaults of 3.0.0 could change a working app without anyone asking for
+it. Both are now off until the app turns them on.
+
+### Changed
+- **Pruning is off by default.** 3.0.0 scheduled `social-tokens:prune` daily,
+  so the first midnight after an upgrade deleted every credential revoked or
+  flagged `needs_reconnect` for 30 days, whether or not the app had decided
+  it wanted that. `prune_schedule` now defaults to
+  `env('SOCIAL_TOKENS_PRUNE_SCHEDULE')`, unset: nothing is scheduled until
+  the app sets it (`SOCIAL_TOKENS_PRUNE_SCHEDULE=daily`, or any form
+  `dispatch_schedule` takes). A value that cannot be read logs an error and
+  leaves pruning off. The command can still be run by hand.
+- **`appsecret_proof` is off by default.** 3.0.0 signed Meta Graph calls by
+  default, and Meta refuses a proof made for a token another Meta app
+  issued: an app that had switched Meta apps saw `check-static` stop checking
+  its Pages. `META_APPSECRET_PROOF` now defaults to false, in the config and
+  in a published config without the option; set it to true before turning on
+  "Require App Secret" in the Meta app
+  ([UPGRADE](UPGRADE.md#meta-calls-can-carry-appsecret_proof)).
+
+**From 3.0.0.** A config published with 3.0.0 keeps the old values: set
+`'prune_schedule' => env('SOCIAL_TOKENS_PRUNE_SCHEDULE')` and
+`'appsecret_proof' => env('META_APPSECRET_PROOF', false)` (in the `facebook`
+and `instagram` connectors) to take the new defaults.
+
 ## [3.0.0]
 
 3.0.0 adds X (Twitter), Instagram accounts without a Facebook Page, and
@@ -159,7 +186,7 @@ they add.
   on, but it only matches tokens issued to the configured app: tokens issued
   by another Meta app fail `social-tokens:check-static` with "Invalid
   appsecret_proof" until you set `META_APPSECRET_PROOF=false`
-  ([UPGRADE](UPGRADE.md#meta-calls-carry-appsecret_proof)).
+  ([UPGRADE](UPGRADE.md#meta-calls-can-carry-appsecret_proof)).
 - **Meta's data access deadline is tracked and announced.** Meta stops
   sharing a user's data with the app 90 days after the user was last active
   (`data_access_expires_at`), although the token keeps working and renewing;

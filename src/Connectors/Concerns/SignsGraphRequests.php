@@ -9,7 +9,8 @@ use Pr4w\SocialTokens\Support\Settings;
  * app secret. With "Require App Secret" on in the Meta app, every Graph call
  * made with a user or Page token must carry it, so a token that leaks is
  * useless without the secret. Meta accepts a valid proof whether or not the
- * setting is on, so it is sent by default (connector option `appsecret_proof`).
+ * setting is on. Off by default (connector option `appsecret_proof`): an app
+ * turns it on once it knows every stored token was issued by its Meta app.
  *
  * The proof only matches tokens issued to the configured app: a token minted
  * by another Meta app is rejected with it.
@@ -25,7 +26,7 @@ trait SignsGraphRequests
     {
         $secret = $this->clientSecret();
 
-        if (! Settings::flag($this->config['appsecret_proof'] ?? true, true) || $secret === null || $secret === '') {
+        if (! Settings::flag($this->config['appsecret_proof'] ?? false, false) || $secret === null || $secret === '') {
             return null;
         }
 

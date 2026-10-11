@@ -141,7 +141,7 @@ it('leaves an expired LinkedIn access token to the renewal when refresh tokens a
 it('says only check-static confirms a reported strike, so an app without its schedule must run it', function () {
     $readme = reportGuidanceBullet(reportGuidanceSection('README.md', '## Posting'), '`terminal: false`');
     $upgrade = reportGuidanceSection('UPGRADE.md', '#### Review your `reportRejected()` calls');
-    $changelog = reportGuidanceBullet(reportGuidanceSection('CHANGELOG.md', '## [Unreleased]'), '**(breaking)** `reportRejected(terminal: false)` flags only');
+    $changelog = reportGuidanceBullet(reportGuidanceSection('CHANGELOG.md', '## [3.0.0]'), '**(breaking)** `reportRejected(terminal: false)` flags only');
     $docblock = (string) (new ReflectionMethod(SocialTokens::class, 'reportRejected'))->getDocComment();
 
     foreach ([$readme, $upgrade, $changelog, $docblock] as $guidance) {

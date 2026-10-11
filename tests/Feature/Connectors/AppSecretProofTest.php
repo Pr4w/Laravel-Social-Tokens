@@ -16,8 +16,16 @@ use Pr4w\SocialTokens\Support\ConnectorRegistry;
  * with the app secret: a stolen token is then useless without the secret.
  * The package's own calls (/me at connect and in check-static, /me/accounts)
  * sent none, so turning the setting on broke every Facebook and Instagram
- * connection and the static check.
+ * connection and the static check. Signing is off by default (a token issued
+ * by another Meta app is refused with a proof): these tests turn it on.
  */
+
+beforeEach(function () {
+    config([
+        'social-tokens.connectors.facebook.appsecret_proof' => true,
+        'social-tokens.connectors.instagram.appsecret_proof' => true,
+    ]);
+});
 
 function appSecretProofFacebook(): FacebookConnector
 {
@@ -100,12 +108,34 @@ it('sends no proof when it is turned off', function (mixed $setting) {
     expect(appSecretProofFacebook()->appSecretProof('user-token'))->toBeNull();
 })->with([false, 'false', 'off', '0']);
 
-it('signs by default when a published config has no such key', function () {
+it('does not sign unless the app turns it on', function () {
     $facebook = config('social-tokens.connectors.facebook');
     unset($facebook['appsecret_proof']);
     config(['social-tokens.connectors.facebook' => $facebook]);
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'user-1'])]);
 
-    expect(appSecretProofFacebook()->appSecretProof('user-token'))->toBe(appSecretProofFor('user-token'));
+    appSecretProofFacebook()->fetchUserId('user-token');
+
+    Http::assertSent(fn (Request $request) => ! isset($request['appsecret_proof']));
+    expect(appSecretProofFacebook()->appSecretProof('user-token'))->toBeNull()
+        ->and(require __DIR__.'/../../../config/social-tokens.php')
+        ->connectors->facebook->appsecret_proof->toBeFalse()
+        ->connectors->instagram->appsecret_proof->toBeFalse();
+});
+
+it('signs when META_APPSECRET_PROOF turns it on', function () {
+    putenv('META_APPSECRET_PROOF=true');
+
+    try {
+        $config = require __DIR__.'/../../../config/social-tokens.php';
+    } finally {
+        putenv('META_APPSECRET_PROOF');
+    }
+
+    config(['social-tokens.connectors.facebook' => $config['connectors']['facebook']]);
+
+    expect($config['connectors']['instagram']['appsecret_proof'])->toBeTrue()
+        ->and(appSecretProofFacebook()->appSecretProof('user-token'))->toBe(appSecretProofFor('user-token'));
 });
 
 it('sends no proof without an app secret', function () {

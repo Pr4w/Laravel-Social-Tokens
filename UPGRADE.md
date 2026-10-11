@@ -15,7 +15,7 @@ what to do about it, in this order:
    the code deploy.
 3. [Check your published config](#check-your-published-config).
 4. [Change your code](#change-your-code) where it uses what changed.
-5. [Fix up your data](#fix-up-your-data), before the first
+5. [Fix up your data](#fix-up-your-data), before you turn on
    `social-tokens:prune`.
 6. Read [what behaves differently](#what-behaves-differently): nothing to
    change, but your logs, events and rows will show it.
@@ -167,13 +167,14 @@ so add the new connectors you want yourself.
     ],
 ],
 
-// In the existing facebook and instagram entries (on when missing), to be able
-// to turn appsecret_proof off (see "Meta calls carry appsecret_proof"):
-'appsecret_proof' => env('META_APPSECRET_PROOF', true),
+// In the existing facebook and instagram entries (off when missing), to be
+// able to turn appsecret_proof on (see "Meta calls can carry appsecret_proof"):
+'appsecret_proof' => env('META_APPSECRET_PROOF', false),
 
-// Pruning (see "Unused credentials are unscheduled, then pruned"):
-'prune_schedule' => 'daily',   // null: never prune
-'prune_after_days' => 30,      // at least 1
+// Pruning, off unless you choose a schedule (see "Unused credentials are
+// unscheduled, and can be pruned"):
+'prune_schedule' => env('SOCIAL_TOKENS_PRUNE_SCHEDULE'),   // 'daily' to prune
+'prune_after_days' => 30,                                   // at least 1
 
 // The Meta data access warning (see "Meta data access and tokens that never expire"):
 'data_access_warning' => [
@@ -223,7 +224,7 @@ being misread:
   accept a cron expression (`'*/10 * * * *'`, `'@hourly'`) besides a frequency
   method without arguments. Any other value, including a scheduler macro, no
   longer throws: it logs an error naming the setting and keeps the default
-  (every 15 minutes, daily, daily). If you used a macro, set the key to `null`
+  (every 15 minutes, daily, and off for pruning). If you used a macro, set the key to `null`
   and schedule the command yourself.
 - A method that only picks the days (`weekdays`, `weekends`, `mondays` to
   `sundays`) is no longer accepted either: 2.x ran the command every minute of
@@ -695,7 +696,7 @@ three things:
      not, the instance holds the stored row. A credential deleted meanwhile
      throws `ModelNotFoundException`.
 
-#### Unused credentials are unscheduled, then pruned
+#### Unused credentials are unscheduled, and can be pruned
 
 For every app: the pruning is on by default. Two changes keep `social_tokens`
 to the credentials something uses.
@@ -705,20 +706,22 @@ to the credentials something uses.
   reading it again on every run. A reconnect schedules it again, and so does
   a re-sync with the stored token (LinkedIn organizations, or Facebook Pages
   and Instagram accounts with `extend: false`), or `adopt()`.
-- The new `social-tokens:prune` command, scheduled daily, deletes the
-  credentials that are revoked, flagged `needs_reconnect`, or used by no
-  connected account, once they have not changed for `prune_after_days` (30).
-  Accounts are never deleted: one whose credential goes keeps its row, with
-  `social_token_id` null.
+- The new `social-tokens:prune` command deletes the credentials that are
+  revoked, flagged `needs_reconnect`, or used by no connected account, once
+  they have not changed for `prune_after_days` (30). It is **not scheduled
+  unless you choose a schedule** (`SOCIAL_TOKENS_PRUNE_SCHEDULE=daily`):
+  without one, nothing is deleted. Accounts are never deleted: one whose
+  credential goes keeps its row, with `social_token_id` null.
 
-1. **Choose a retention, or turn it off** (`prune_schedule`, `prune_after_days`,
-   see [Check your published config](#check-your-published-config)). The
-   first run, at midnight after the deploy by default, deletes every
-   credential that already qualifies, for instance all those revoked or
-   flagged more than 30 days ago. Keep `prune_schedule` at `null` if you
-   report on revoked credentials or point at their ids from your own tables;
-   otherwise copy what you need first, and run the
-   [data fix-ups](#fix-up-your-data) before it.
+1. **Decide whether to prune** (`prune_schedule`, `prune_after_days`, see
+   [Check your published config](#check-your-published-config)). Nothing
+   happens until you set a schedule. Its first run deletes every credential
+   that already qualifies, for instance all those revoked or flagged more
+   than 30 days ago. See what that is first with
+   `SocialToken::query()->prunable(now()->subDays(30))->get()`. Leave it off
+   if you report on revoked credentials or point at their ids from your own
+   tables; otherwise copy what you need first, and run the
+   [data fix-ups](#fix-up-your-data) before turning it on.
 2. **Read the credential null-safely.** `$account->credential` is null once
    the credential is pruned (as after a data deletion request): use
    `$account->credential?->last_error`, or `effectiveStatus()`, which already
@@ -809,30 +812,31 @@ Event::listen(JobFailed::class, function (JobFailed $event) {
 });
 ```
 
-#### Meta calls carry `appsecret_proof`
+#### Meta calls can carry `appsecret_proof`
 
-For apps on Facebook or Instagram. The `facebook` connector now signs the Graph
-calls it makes with a user or Page token (`/me`, `/me/accounts`) with
-`appsecret_proof`, so you can turn on **Require App Secret** in your Meta app.
-Nothing to do for the package to keep working: the option defaults to on,
-even in a published config that does not have it, and Meta accepts a valid
-proof whether or not the setting is on.
+For apps on Facebook or Instagram that want **Require App Secret** in their
+Meta app. Nothing to do otherwise: signing is off by default, even in a
+published config that does not have the option.
 
-1. If your database still holds Facebook Page or user tokens issued by
-   **another** Meta app than the one in `services.facebook` (you switched
-   apps), their proof cannot match: `social-tokens:check-static` then logs
-   one critical "facebook rejected the app's OAuth client during
+With `META_APPSECRET_PROOF=true` (the `appsecret_proof` option of the
+`facebook` and `instagram` connectors; in a published config, add it first,
+see [Check your published config](#check-your-published-config)), the Graph
+calls the package makes with a user or Page token (`/me`, `/me/accounts`)
+carry `appsecret_proof`. To turn it on:
+
+1. Make sure every stored Facebook Page or user token was issued by the Meta
+   app in `services.facebook`. A token from **another** Meta app (you
+   switched apps) cannot match its proof: `social-tokens:check-static` then
+   logs one critical "facebook rejected the app's OAuth client during
    check-static" per run ("Invalid appsecret_proof", with the number of
-   credentials) instead of checking them. Set `META_APPSECRET_PROOF=false`
-   until those users have reconnected (in a published config, add the
-   `appsecret_proof` option first, see
-   [Check your published config](#check-your-published-config)).
-2. To turn on Require App Secret, first sign your own Graph calls made with
-   these tokens (publishing, insights):
+   credentials) instead of checking them, and flags no one. Have those users
+   reconnect first.
+2. Sign your own Graph calls made with these tokens (publishing, insights):
    `app(SocialTokens::class)->connector('facebook')->appSecretProof($token)`
    (or `connector('instagram')`) gives the value to send as
-   `appsecret_proof`. Then deploy, and turn the setting on in the Meta app's
-   advanced settings.
+   `appsecret_proof`, null while signing is off.
+3. Deploy with `META_APPSECRET_PROOF=true`, then turn Require App Secret on
+   in the Meta app's advanced settings.
 
 #### If you wrote a connector
 
@@ -907,11 +911,10 @@ For apps with a connector of their own, or a subclass of a built-in one.
 ### Fix up your data
 
 One-off fixes, each for the apps it names. Run them in `php artisan tinker`
-once 3.0 is deployed and migrated, and **before the first
-`social-tokens:prune`**: it runs daily (at midnight by default) and deletes
-the credentials revoked or flagged `needs_reconnect` that have not changed for
-30 days, among them the ones the first fixes reactivate. To take your time,
-set `prune_schedule` to `null` until you are done. The snippets page with
+once 3.0 is deployed and migrated, and **before you turn on
+`social-tokens:prune`** (off by default): it deletes the credentials revoked
+or flagged `needs_reconnect` that have not changed for 30 days, among them the
+ones the first fixes reactivate. The snippets page with
 `eachById()`, not `each()`: `each()` pages by offset, and skips rows once a
 page's changes take rows out of the query.
 
@@ -1071,7 +1074,7 @@ SocialAccount::query()
 
 The dispatcher has most likely unscheduled the Meta user token behind such a
 Page before you run this (no account of its owner kept it in use, see
-[Unused credentials are unscheduled, then pruned](#unused-credentials-are-unscheduled-then-pruned)):
+[Unused credentials are unscheduled, and can be pruned](#unused-credentials-are-unscheduled-and-can-be-pruned)):
 `adopt()` schedules a credential it moves again when it has an expiry and no
 `renew_at`, so the next dispatcher run renews it, or flags it if its token
 expired meanwhile. A credential still used by an owner-less account, or one
@@ -1399,7 +1402,7 @@ reasons are in [CHANGELOG.md](CHANGELOG.md), under 1.2.0.
   is flagged at the member's next connect (`connectors.linkedin.posting_roles`).
 
 **One-off data fixes, where they apply** (in `php artisan tinker`, once 3.0
-is deployed and before its first `social-tokens:prune`, which deletes
+is deployed and before you turn on `social-tokens:prune`, which deletes
 credentials flagged `needs_reconnect` for 30 days). They page with
 `eachById()`, not `each()`: `each()` pages by offset, and skips rows once a
 page's changes take rows out of the query.

@@ -87,11 +87,14 @@ return [
     | they have not changed for `prune_after_days` (at least 1): revoked ones,
     | ones flagged needs_reconnect, and ones no connected account depends on
     | (left behind by a reconnect, or by accounts you deleted). A reconnect
-    | stores a new credential. Accounts are never deleted. Same forms as
-    | dispatch_schedule; set prune_schedule to null to disable.
+    | stores a new credential. Accounts are never deleted.
+    |
+    | Off by default: nothing is deleted until you choose a schedule, in the
+    | same forms as dispatch_schedule ('daily', '0 3 * * *'). The command can
+    | always be run by hand.
     |
     */
-    'prune_schedule' => 'daily',
+    'prune_schedule' => env('SOCIAL_TOKENS_PRUNE_SCHEDULE'),
     'prune_after_days' => 30,
 
     /*
@@ -233,17 +236,18 @@ return [
             'credentials' => 'facebook',   // shares the Meta app with Facebook
             'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
             // See facebook below: appSecretProof() for your own Instagram calls.
-            'appsecret_proof' => env('META_APPSECRET_PROOF', true),
+            'appsecret_proof' => env('META_APPSECRET_PROOF', false),
         ],
 
         'facebook' => [
             'driver' => FacebookConnector::class,
             'credentials' => 'facebook',
             'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
-            // Sign Graph calls made with a user or Page token with
-            // appsecret_proof, so the Meta app can turn on "Require App
-            // Secret". Needs the secret of the app that issued the tokens.
-            'appsecret_proof' => env('META_APPSECRET_PROOF', true),
+            // Off by default. When on, Graph calls made with a user or Page
+            // token carry appsecret_proof, so the Meta app can turn on
+            // "Require App Secret". Only turn it on when every stored token
+            // was issued by this app: Meta refuses the others.
+            'appsecret_proof' => env('META_APPSECRET_PROOF', false),
         ],
 
         // Instagram with no Facebook Page: the "Instagram API with Instagram

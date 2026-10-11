@@ -4,6 +4,7 @@ use Illuminate\Console\Scheduling\Event as ScheduledEvent;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Facade;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Pr4w\SocialTokens\Actions\StoreConnection;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -125,7 +126,7 @@ it('leaves a credential reconnected since it was read', function () {
     expect($token->fresh()?->access_token)->toBe('reconnected');
 });
 
-it('is scheduled daily, and can be turned off', function () {
+it('is not scheduled until the app chooses a schedule', function () {
     $expressions = function () {
         app()->forgetInstance(Schedule::class);
         Facade::clearResolvedInstance(Schedule::class);
@@ -136,6 +137,10 @@ it('is scheduled daily, and can be turned off', function () {
             ->values()->all();
     };
 
+    expect($expressions())->toBe([])
+        ->and((require __DIR__.'/../../../config/social-tokens.php')['prune_schedule'])->toBeNull();
+
+    config(['social-tokens.prune_schedule' => 'daily']);
     expect($expressions())->toBe([['0 0 * * *', true, true]]);
 
     config(['social-tokens.prune_schedule' => '15 3 * * *']);
@@ -143,6 +148,20 @@ it('is scheduled daily, and can be turned off', function () {
 
     config(['social-tokens.prune_schedule' => null]);
     expect($expressions())->toBe([]);
+});
+
+it('stays off when its schedule cannot be read', function () {
+    Log::spy();
+    config(['social-tokens.prune_schedule' => 'every now and then']);
+    app()->forgetInstance(Schedule::class);
+    Facade::clearResolvedInstance(Schedule::class);
+
+    $pruning = collect(app(Schedule::class)->events())
+        ->filter(fn (ScheduledEvent $event) => str_contains($event->command ?? '', 'social-tokens:prune'));
+
+    expect($pruning)->toBeEmpty();
+    Log::shouldHaveReceived('error')->withArgs(fn (string $message) => str_contains($message, 'social-tokens.prune_schedule')
+        && str_contains($message, 'not scheduling it'))->once();
 });
 
 // The dispatcher -------------------------------------------------------------
