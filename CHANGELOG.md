@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.0.1]
 
 Two defaults of 3.0.0 could change a working app without anyone asking for
 it. Both are now off until the app turns them on.
