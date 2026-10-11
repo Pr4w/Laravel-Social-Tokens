@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.1.0]
 
 ### Changed
 - **LinkedIn refresh tokens are used by default.**
