@@ -43,6 +43,9 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 
     protected const ORGANIZATION_PAGE_SIZE = 100;
 
+    /** LinkedIn's documented organizationAcls projection, with the organization decorated. */
+    public const ORGANIZATION_PROJECTION = '(paging,elements*(*,organization~(id,localizedName,logoV2(original~:playableStreams))))';
+
     /** Safety cap on organizationAcls result pages. */
     protected const MAX_RESULT_PAGES = 20;
 
@@ -221,7 +224,12 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
                 ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
                 ->get(self::ORGANIZATION_ACLS_URL, [
                     'q' => 'roleAssignee',
-                    'projection' => '(paging,elements*(role,state,organization,organization~(id,localizedName,logoV2(original~:playableStreams))))',
+                    // `*` brings every field of the element, the organization
+                    // URN included (read when the decoration is throttled), and
+                    // `organization~` decorates it. Naming `organization` beside
+                    // `organization~` is refused (400 ILLEGAL_ARGUMENT, "Can't
+                    // merge incompatible specs 'organization'").
+                    'projection' => self::ORGANIZATION_PROJECTION,
                     'start' => $start,
                     'count' => self::ORGANIZATION_PAGE_SIZE,
                 ]));

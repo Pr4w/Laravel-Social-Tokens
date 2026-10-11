@@ -96,7 +96,8 @@ function incompleteListsGraph(array $pageIds = ['p1', 'p2', 'p3', 'p4'], ?int $b
 
 /**
  * One organizationAcls element as LinkedIn returns it with the roleAssignee
- * projection: the `organization` URN plus its `organization~` decoration.
+ * projection: the `organization` URN (through `*`) plus its `organization~`
+ * decoration.
  */
 function incompleteListsAcl(string $id, string $state = 'APPROVED'): array
 {

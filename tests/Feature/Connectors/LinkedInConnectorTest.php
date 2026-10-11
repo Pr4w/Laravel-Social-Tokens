@@ -146,6 +146,46 @@ it('lists approved organizations the member administers', function () {
         && str_contains($request->url(), 'q=roleAssignee'));
 });
 
+/*
+ * LinkedIn refuses a projection naming `organization` beside its
+ * `organization~` decoration: 400 ILLEGAL_ARGUMENT "Can't merge incompatible
+ * specs 'organization'". 3.0 to 3.2 sent both, so no organization could be
+ * listed, and the tests, which faked the response without reading the
+ * request, passed anyway.
+ */
+it('asks for the organizations with a projection LinkedIn accepts', function () {
+    Http::fake(function ($request) {
+        $projection = (string) ($request['projection'] ?? '');
+
+        if (str_contains($projection, 'organization~') && preg_match('/[(,]organization[,)]/', $projection) === 1) {
+            return Http::response([
+                'status' => 400,
+                'code' => 'ILLEGAL_ARGUMENT',
+                'message' => "Can't merge incompatible specs 'organization' (com.linkedin.deco.urn.projections.SpecBuilders\$LocalSpecBuilder) and 'organization' (com.linkedin.deco.urn.projections.SpecBuilders\$UrnSpecBuilder)",
+            ], 400);
+        }
+
+        return Http::response(['elements' => [[
+            'role' => 'ADMINISTRATOR',
+            'state' => 'APPROVED',
+            'organization' => 'urn:li:organization:123',
+            'organization~' => ['id' => 123, 'localizedName' => 'Acme'],
+        ]]]);
+    });
+
+    expect(linkedin()->fetchOrganizations('member-token'))->toBe([[
+        'id' => '123',
+        'urn' => 'urn:li:organization:123',
+        'name' => 'Acme',
+        'logo' => null,
+        'role' => 'ADMINISTRATOR',
+    ]]);
+
+    // Every field of the element (the URN the throttled fallback reads), and
+    // the organization decorated: LinkedIn's documented form.
+    Http::assertSent(fn ($request) => $request['projection'] === '(paging,elements*(*,organization~(id,localizedName,logoV2(original~:playableStreams))))');
+});
+
 it('returns a failure result when the org listing errors', function () {
     Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['message' => 'forbidden'], 403)]);
 

@@ -3,6 +3,19 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **LinkedIn organizations could not be listed.** `fetchOrganizations()` asked
+  organizationAcls for `organization` beside its `organization~` decoration,
+  and LinkedIn refuses that projection (400 `ILLEGAL_ARGUMENT`, "Can't merge
+  incompatible specs 'organization'"), so `StoreLinkedInOrganizations` threw
+  "Could not list LinkedIn organizations (HTTP 400)" and stored nothing. It
+  now sends LinkedIn's documented form, `elements*(*,organization~(...))`:
+  `*` still brings the organization URN, read when LinkedIn throttles the
+  decoration. `LinkedInConnector::ORGANIZATION_PROJECTION` holds it, and a
+  test now checks the request sent, not only the response handled.
+
 ## [3.2.0]
 
 ### Added
