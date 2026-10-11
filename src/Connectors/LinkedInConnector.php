@@ -27,11 +27,11 @@ use Pr4w\SocialTokens\Support\Settings;
  *  - scopes are chosen by the app at redirect (see README "Connecting an account")
  *
  * Strategy is config driven:
- *  - default: ReauthOnly, CredentialExpiringSoon fires ahead of the 60 day
- *    expiry; the credential keeps posting until then, and is flagged
- *    needs_reconnect only once it has actually expired
- *  - with 'refresh_enabled' => true (you have refresh tokens): StableRefreshToken
- *    for every credential that holds a refresh token, ReauthOnly for the others
+ *  - default ('refresh_enabled' => true): StableRefreshToken for every
+ *    credential that holds a refresh token, ReauthOnly for the others
+ *  - with 'refresh_enabled' => false: ReauthOnly, CredentialExpiringSoon fires
+ *    ahead of the 60 day expiry; the credential keeps posting until then, and
+ *    is flagged needs_reconnect only once it has actually expired
  */
 class LinkedInConnector extends OAuth2Connector implements ChecksCredential
 {
@@ -60,7 +60,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
      */
     public function renewalStrategy(): RenewalStrategy
     {
-        return Settings::flag($this->config['refresh_enabled'] ?? false, false)
+        return Settings::flag($this->config['refresh_enabled'] ?? true, true)
             ? RenewalStrategy::StableRefreshToken
             : RenewalStrategy::ReauthOnly;
     }

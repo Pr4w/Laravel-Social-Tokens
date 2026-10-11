@@ -57,7 +57,7 @@ it('decides the LinkedIn strategy per credential', function () {
 
     expect($connector->renewalStrategyFor(new SocialToken(['refresh_token' => 'r'])))->toBe(RenewalStrategy::StableRefreshToken)
         ->and($connector->renewalStrategyFor(new SocialToken))->toBe(RenewalStrategy::ReauthOnly)
-        ->and((new LinkedInConnector)->renewalStrategyFor(new SocialToken(['refresh_token' => 'r'])))->toBe(RenewalStrategy::ReauthOnly);
+        ->and((new LinkedInConnector(['refresh_enabled' => false]))->renewalStrategyFor(new SocialToken(['refresh_token' => 'r'])))->toBe(RenewalStrategy::ReauthOnly);
 });
 
 it('warns ahead of the expiry instead of flagging a credential without a refresh token', function () {

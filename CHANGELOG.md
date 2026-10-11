@@ -3,6 +3,23 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+- **LinkedIn refresh tokens are used by default.**
+  `refresh_enabled` (`LINKEDIN_REFRESH_ENABLED`) now defaults to true, in the
+  config and in a published config without the option: a LinkedIn credential
+  that holds a refresh token is renewed with it, 5 days before its access
+  token expires, instead of waiting for the member to reconnect. A credential
+  without a refresh token is renewed as before: `CredentialExpiringSoon`
+  ahead of its expiry, flagged once expired. Set
+  `LINKEDIN_REFRESH_ENABLED=false` to keep the 3.0 behaviour; a config
+  published with 3.0 keeps `false` until you change it.
+
+### Documentation
+- Connecting X with Socialite's `twitter-oauth-2` driver: the connector key,
+  the credentials entry and the scopes it needs.
+
 ## [3.0.1]
 
 Two defaults of 3.0.0 could change a working app without anyone asking for

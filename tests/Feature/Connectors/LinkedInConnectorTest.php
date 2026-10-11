@@ -30,7 +30,9 @@ it('derives its strategy from config', function () {
         ->and((new LinkedInConnector(['refresh_enabled' => false]))->renewalStrategy())
         ->toBe(RenewalStrategy::ReauthOnly)
         ->and((new LinkedInConnector)->renewalStrategy())
-        ->toBe(RenewalStrategy::ReauthOnly);
+        ->toBe(RenewalStrategy::StableRefreshToken)
+        ->and((require __DIR__.'/../../../config/social-tokens.php')['connectors']['linkedin']['refresh_enabled'])
+        ->toBeTrue();
 });
 
 it('reads refresh_enabled as every other boolean setting, so a string that says no turns refresh off', function (mixed $value, RenewalStrategy $strategy) {
@@ -42,7 +44,7 @@ it('reads refresh_enabled as every other boolean setting, so a string that says 
     'no' => ['no', RenewalStrategy::ReauthOnly],
     'false' => ['false', RenewalStrategy::ReauthOnly],
     '0' => ['0', RenewalStrategy::ReauthOnly],
-    'null' => [null, RenewalStrategy::ReauthOnly],
+    'null, the default' => [null, RenewalStrategy::StableRefreshToken],
     'on' => ['on', RenewalStrategy::StableRefreshToken],
     'true' => ['true', RenewalStrategy::StableRefreshToken],
     '1' => ['1', RenewalStrategy::StableRefreshToken],

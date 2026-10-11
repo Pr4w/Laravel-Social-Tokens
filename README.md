@@ -34,7 +34,7 @@ refresh token + cron" design breaks on at least one of them:
 | Instagram (through a Facebook Page) | 60 days, or no expiry | extend the long lived user token, no refresh token | `ExtendLongLived` |
 | Instagram (Instagram Login, no Page) | 60 days | extend the long lived token (`ig_refresh_token`), no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
-| LinkedIn | 60 days | refresh token gated behind MDP, else re-auth | `ReauthOnly` (`StableRefreshToken` with refresh tokens) |
+| LinkedIn | 60 days | refresh_token grant when the app receives refresh tokens, else re-auth | `StableRefreshToken` (`ReauthOnly` without a refresh token) |
 
 The package models "how do I keep this token alive" as a per-provider strategy,
 where one valid answer is "I cannot, the user must reconnect." That last case is
@@ -271,6 +271,26 @@ LinkedIn no longer grants to new apps.
 X uses Socialite's own `x` driver (laravel/socialite 5.16+), with the **OAuth 2.0**
 Client ID and Secret of a "Web App" (confidential client) whose User
 authentication settings allow Read and write. OAuth 1.0a is not supported.
+
+Socialite's older `twitter-oauth-2` driver works too: `x` extends it and only
+moves its URLs from twitter.com to x.com, so both issue the same tokens for the
+same X app. If your app already logs in with it:
+
+- **Pass `'x'` to the package**, never the driver's name: `x` is the connector
+  key, and `twitter-oauth-2` names no connector (`InvalidArgumentException`).
+  In the routes below, add `'x' => 'twitter-oauth-2'` to `$drivers`.
+- **Point the connector at the same credentials.** `twitter-oauth-2` reads
+  `services.twitter`, or `services.twitter-oauth-2` when there is no
+  `services.twitter`; the connector reads `services.x`. Declare `services.x`
+  with that same client id and secret, or set `'credentials' =>
+  'twitter-oauth-2'` (or `'twitter'`) on the `x` connector.
+- **Request the publishing scopes yourself.** The driver asks only for
+  `users.read`, `users.email` and `tweet.read`. Without `offline.access` X
+  issues no refresh token and the credential dies after two hours; without
+  `tweet.write` it cannot post. Accounts connected without them must
+  reconnect.
+- **Stop refreshing X tokens in your own code.** X refresh tokens are
+  single-use: the package and your code would each invalidate the other's.
 
 ## Connecting an account
 
@@ -586,11 +606,15 @@ date the credential really stops working, so the member can re-authorise in
 time. A reconnect that brings a new refresh token re-arms it; storing a profile
 without a refresh token never erases a known one.
 
-LinkedIn issues refresh tokens per app, so `refresh_enabled` cannot vouch for
-every credential: one stored without a refresh token (from an app without
-programmatic refresh tokens, or a row from before you turned the option on) is
-renewed as if refresh were off, warned ahead of its expiry and flagged once it
-has expired. A custom connector makes the same per-credential call by
+`refresh_enabled` (`LINKEDIN_REFRESH_ENABLED`) is on by default: a LinkedIn
+credential that holds a refresh token is renewed with it, 5 days before its
+access token expires, for as long as the refresh token lives. LinkedIn issues
+refresh tokens per app, so the setting cannot vouch for every credential: one
+stored without a refresh token (from an app without programmatic refresh
+tokens, or a manual exchange that left it out) is renewed as if refresh were
+off, warned ahead of its expiry and flagged once it has expired. Set
+`LINKEDIN_REFRESH_ENABLED=false` to renew every LinkedIn credential that way,
+even one that holds a refresh token. A custom connector makes the same per-credential call by
 overriding `renewalStrategyFor(SocialToken $token)`; ask
 `$token->renewalStrategyWith($connector)` rather than
 `$connector->renewalStrategy()` when you decide about a stored credential.

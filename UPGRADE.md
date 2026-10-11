@@ -1210,8 +1210,8 @@ renewal:
 
 #### LinkedIn credentials without a refresh token
 
-Only with `LINKEDIN_REFRESH_ENABLED=true`. A LinkedIn credential that holds no
-refresh token is now renewed as if refresh were off: when its window opens (5
+With `LINKEDIN_REFRESH_ENABLED` on (the default since 3.1). A LinkedIn
+credential that holds no refresh token is now renewed as if refresh were off: when its window opens (5
 days before expiry) `CredentialExpiringSoon` fires, it keeps posting, and it
 is flagged `needs_reconnect` (reason `No refresh token (re-authorisation
 required).`) only once its token has expired. 2.x flagged it at once, five

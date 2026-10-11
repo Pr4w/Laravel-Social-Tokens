@@ -268,13 +268,12 @@ return [
 
         'linkedin' => [
             'driver' => LinkedInConnector::class,
-            // Set true only if your app has Marketing Developer Platform access
-            // and therefore receives refresh tokens. Otherwise the credential
-            // fires CredentialExpiringSoon ahead of the 60 day expiry and is
-            // flagged for re-authorisation once it actually expires. A
-            // credential stored without a refresh token is renewed that way
-            // even when this is true.
-            'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', false),
+            // On by default: a credential that holds a refresh token is
+            // renewed with it. One stored without a refresh token (an app
+            // LinkedIn issues none to) fires CredentialExpiringSoon ahead of
+            // the 60 day expiry instead, and is flagged for re-authorisation
+            // once it actually expires. False renews every credential that way.
+            'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', true),
             // organizationAcls roles that can publish as the Page. Organizations
             // the member holds only through other roles (ANALYST, CURATOR,
             // LEAD_GEN_FORMS_MANAGER...) are not stored, and are reconciled away.
