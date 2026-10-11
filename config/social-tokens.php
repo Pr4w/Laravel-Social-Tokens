@@ -274,6 +274,14 @@ return [
             // the 60 day expiry instead, and is flagged for re-authorisation
             // once it actually expires. False renews every credential that way.
             'refresh_enabled' => env('LINKEDIN_REFRESH_ENABLED', true),
+            // On by default: the member's personal profile and their
+            // organizations come from ONE authorization (one LinkedIn app,
+            // usually the Community Management one, asked for the scopes of
+            // both), and share one credential, renewed once. Set false when
+            // they come from two authorizations, often two LinkedIn apps, each
+            // with its own token: on one credential, each would replace the
+            // other's.
+            'single_authorization' => env('LINKEDIN_SINGLE_AUTHORIZATION', true),
             // organizationAcls roles that can publish as the Page. Organizations
             // the member holds only through other roles (ANALYST, CURATOR,
             // LEAD_GEN_FORMS_MANAGER...) are not stored, and are reconciled away.

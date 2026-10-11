@@ -25,6 +25,10 @@ use Pr4w\SocialTokens\Tests\Fixtures\Owner;
  */
 
 beforeEach(function () {
+    // Two authorizations: the mode for apps whose profile and organizations
+    // come from two LinkedIn apps (single authorization mode is the default).
+    config(['social-tokens.connectors.linkedin.single_authorization' => false]);
+
     Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [[
         'role' => 'ADMINISTRATOR',
         'state' => 'APPROVED',

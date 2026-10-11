@@ -225,7 +225,7 @@ it('stores no LinkedIn organizations credential when every organization listed w
 
     $accounts = $sync();
 
-    $credential = SocialToken::query()->ownedBy($this->owner)->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
+    $credential = SocialToken::query()->ownedBy($this->owner)->where('provider', 'linkedin')->sole();
 
     expect($accounts)->toBeEmpty()
         ->and($credential->status)->toBe(AccountStatus::Revoked)

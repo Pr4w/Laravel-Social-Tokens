@@ -55,6 +55,20 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
     ];
 
     /**
+     * Whether the member's personal profile and their organizations come from
+     * one authorization (`single_authorization`): one LinkedIn app, usually
+     * the Community Management one, asked for the scopes of both at once. They
+     * then post with one token, stored on the member's default credential,
+     * instead of a separate organizations credential (purpose 'organizations')
+     * renewed on its own with the same refresh token. On by default, in a
+     * published config without the option too.
+     */
+    public function singleAuthorization(): bool
+    {
+        return Settings::flag($this->config['single_authorization'] ?? true, true);
+    }
+
+    /**
      * `refresh_enabled` is read as every boolean setting (Settings::flag()):
      * LINKEDIN_REFRESH_ENABLED=off reaches the config as the string 'off'.
      */

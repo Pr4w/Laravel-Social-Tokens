@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -120,9 +121,26 @@ class StoreAccountFromSocialite implements StoresConnections
             }
         }
 
+        // LinkedIn in single authorization mode: the organizations post with
+        // this same default credential. A separate one of theirs is folded
+        // into it first, so its refresh token is known below.
+        if ($connector instanceof LinkedInConnector && $connector->singleAuthorization()) {
+            $separate = SocialToken::query()
+                ->where('provider', $connector->credentialProvider())
+                ->where('provider_holder_id', $user->getId())
+                ->forPurpose(StoreLinkedInOrganizations::PURPOSE)
+                ->ownedBy($owner)
+                ->first();
+
+            if ($separate !== null) {
+                app(MergeLinkedInCredentials::class)->handle($separate);
+            }
+        }
+
         // Never forget a known refresh token: a reconnect without one must not
         // wipe it or its expiry. The default credential: the LinkedIn
-        // organizations have their own (StoreLinkedInOrganizations::PURPOSE).
+        // organizations have their own (StoreLinkedInOrganizations::PURPOSE),
+        // unless in single authorization mode.
         // One that no longer decrypts (written under an APP_KEY that is gone)
         // is known to nobody: forgotten, with its expiry.
         $existing = SocialToken::query()

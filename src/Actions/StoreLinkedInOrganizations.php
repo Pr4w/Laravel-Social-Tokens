@@ -5,6 +5,7 @@ namespace Pr4w\SocialTokens\Actions;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
+use InvalidArgumentException;
 use Pr4w\SocialTokens\Actions\Concerns\KeepsDisconnectedAccountsOut;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
@@ -30,6 +31,13 @@ use RuntimeException;
  * on one shared credential, each flow replaced the other's token. The personal
  * row still carries provider_holder_id = member id, so reconciliation excludes
  * it explicitly by its provider_user_id (the member id).
+ *
+ * In single authorization mode (connectors.linkedin.single_authorization),
+ * the profile and the organizations come from one authorization and one
+ * token: it is stored on the member's default credential, shared with the
+ * personal profile, and a separate organizations credential is folded into
+ * it (MergeLinkedInCredentials). $member then stores the personal profile
+ * too, from the same call.
  */
 class StoreLinkedInOrganizations
 {
@@ -51,11 +59,16 @@ class StoreLinkedInOrganizations
      * @param  CarbonInterface|null  $refreshExpiresAt  Refresh token expiry.
      * @param  array<int, string>|null  $scopes  Granted scopes (LinkedIn's comma-separated `scope`, split
      *                                           or as one element); null means unknown and keeps the stored ones.
-     * @param  bool  $restoreDisconnected  Bring back the organizations the user disconnected
-     *                                     (SocialTokens::disconnect()); left out, revoked, otherwise.
-     * @return Collection<int, SocialAccount> One row per administered organization.
+     * @param  bool  $restoreDisconnected  Bring back the organizations (and the member's own profile) the user
+     *                                     disconnected (SocialTokens::disconnect()); left out, revoked, otherwise.
+     * @param  array<string, string|null>|null  $member  Single authorization mode only: also store the member's
+     *                                                   personal profile on the same credential, with these details
+     *                                                   (name, nickname, email, avatar).
+     * @return Collection<int, SocialAccount> The member's own account first when $member is given, then one row
+     *                                        per administered organization.
      *
      * @throws RuntimeException when the organizations cannot be listed.
+     * @throws InvalidArgumentException when $member is given outside single authorization mode.
      */
     public function handle(
         #[\SensitiveParameter] string $accessToken,
@@ -67,11 +80,22 @@ class StoreLinkedInOrganizations
         ?CarbonInterface $refreshExpiresAt = null,
         ?array $scopes = null,
         bool $restoreDisconnected = false,
+        ?array $member = null,
     ): Collection {
         $connector = $this->registry->for('linkedin');
 
         if (! $connector instanceof LinkedInConnector) {
             throw new RuntimeException('The "linkedin" connector must be a LinkedInConnector to seed organizations.');
+        }
+
+        $single = $connector->singleAuthorization();
+
+        if ($member !== null && ! $single) {
+            throw new InvalidArgumentException(
+                'StoreLinkedInOrganizations stores the member\'s profile ($member) only in single authorization mode '
+                .'(connectors.linkedin.single_authorization): otherwise the profile has its own authorization, stored '
+                .'with StoreConnection.'
+            );
         }
 
         $refreshToken = $refreshToken ?: null;
@@ -81,6 +105,16 @@ class StoreLinkedInOrganizations
             throw new RuntimeException('Could not list LinkedIn organizations: '.$organizations->reason);
         }
 
+        // One token for the profile and the organizations: the member's
+        // default credential. A separate organizations credential (stored
+        // before the mode was on) is folded into it first, so that what it
+        // knows (a refresh token, an expiry) is kept below.
+        $purpose = $single ? SocialToken::DEFAULT_PURPOSE : self::PURPOSE;
+
+        if ($single) {
+            $this->mergeSeparateCredential($memberId, $owner);
+        }
+
         // Never forget a known refresh token: a re-sync without one must not
         // wipe it or its expiry. One that no longer decrypts (written under
         // an APP_KEY that is gone) is known to nobody: forgotten, with its
@@ -88,7 +122,7 @@ class StoreLinkedInOrganizations
         $existing = SocialToken::query()
             ->where('provider', 'linkedin')
             ->where('provider_holder_id', $memberId)
-            ->forPurpose(self::PURPOSE)
+            ->forPurpose($purpose)
             ->ownedBy($owner)
             ->first();
 
@@ -131,19 +165,22 @@ class StoreLinkedInOrganizations
         $scopes = SocialToken::normaliseScopes($scopes);
         $withScopes = $scopes === null ? [] : ['scopes' => $scopes];
 
-        // Organizations the user disconnected stay out of this re-sync.
+        // Organizations the user disconnected stay out of this re-sync, and so
+        // does the member's own profile.
+        $ids = array_map(fn (array $org) => (string) $org['id'], $organizations);
         $skipped = $restoreDisconnected
             ? []
-            : $this->disconnectedAmong('linkedin', array_map(fn (array $org) => (string) $org['id'], $organizations), $owner);
+            : $this->disconnectedAmong('linkedin', $member === null ? $ids : [...$ids, $memberId], $owner);
         $listed = array_values(array_filter($organizations, fn (array $org) => ! in_array((string) $org['id'], $skipped, true)));
+        $storesMember = $member !== null && ! in_array($memberId, $skipped, true);
 
         // The renewable member credential every organization posts with: not
-        // stored again when every organization listed was disconnected and
-        // the stored one is revoked, so no credential is left orphaned.
-        $credential = $skipped !== [] && $listed === [] && ($existing === null || $existing->status === AccountStatus::Revoked)
+        // stored again when every account listed was disconnected and the
+        // stored one is revoked, so no credential is left orphaned.
+        $credential = $skipped !== [] && $listed === [] && ! $storesMember && ($existing === null || $existing->status === AccountStatus::Revoked)
             ? null
             : SocialToken::persistCredential(
-                ['provider' => 'linkedin', 'provider_holder_id' => $memberId, 'purpose' => self::PURPOSE] + SocialAccount::ownerKey($owner),
+                ['provider' => 'linkedin', 'provider_holder_id' => $memberId, 'purpose' => $purpose] + SocialAccount::ownerKey($owner),
                 $kept + [
                     'access_token' => $accessToken,
                     'refresh_token' => $refreshToken,
@@ -196,6 +233,10 @@ class StoreLinkedInOrganizations
             return $account;
         });
 
+        if ($credential !== null && $storesMember) {
+            $accounts->prepend($this->storeMember($memberId, $member, $credential, $owner, $connectedBy, $withScopes));
+        }
+
         // Reconcile: organizations this member no longer administers (absent from
         // the response) are flagged, under every owner: LinkedIn grants access
         // per member. Scoped to provider_holder_id, so other members' orgs are
@@ -215,6 +256,61 @@ class StoreLinkedInOrganizations
             ));
 
         return $accounts;
+    }
+
+    /**
+     * Fold the member's separate organizations credential, if any, into their
+     * default credential (single authorization mode).
+     */
+    protected function mergeSeparateCredential(string $memberId, ?Model $owner): void
+    {
+        $separate = SocialToken::query()
+            ->where('provider', 'linkedin')
+            ->where('provider_holder_id', $memberId)
+            ->forPurpose(self::PURPOSE)
+            ->ownedBy($owner)
+            ->first();
+
+        if ($separate !== null) {
+            app(MergeLinkedInCredentials::class)->handle($separate);
+        }
+    }
+
+    /**
+     * The member's personal profile, on the credential the organizations post
+     * with (single authorization mode), as StoreAccountFromSocialite stores
+     * it: details left out of $member keep their stored value.
+     *
+     * @param  array<string, string|null>  $member
+     * @param  array<string, mixed>  $withScopes
+     */
+    protected function storeMember(string $memberId, array $member, SocialToken $credential, ?Model $owner, ?Model $connectedBy, array $withScopes): SocialAccount
+    {
+        $account = SocialAccount::query()
+            ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $memberId] + SocialAccount::ownerKey($owner))
+            ->fill(array_intersect_key($member, array_flip(['name', 'nickname', 'email', 'avatar'])) + [
+                'social_token_id' => $credential->getKey(),
+                'provider_holder_id' => $memberId,
+                'status' => AccountStatus::Active,
+                'last_error' => null,
+            ] + $withScopes)
+            ->clearDisconnected();
+
+        if ($owner) {
+            $account->ownable()->associate($owner);
+        }
+
+        if ($connectedBy) {
+            $account->connectedBy()->associate($connectedBy);
+        }
+
+        if ($account->isDirty()) {
+            $account->save();
+        }
+
+        event(new AccountConnected($account));
+
+        return $account;
     }
 
     private static function sameMoment(?CarbonInterface $a, ?CarbonInterface $b): bool

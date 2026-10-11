@@ -49,8 +49,9 @@ accounts:
 
 - a Meta user token backs every Instagram account for that user (and is kept,
   renewable, for a Facebook-only connection too: the Pages are minted from it)
-- a LinkedIn member token backs every organization they administer (the
-  member's personal profile has its own credential, from its own authorization)
+- a LinkedIn member token backs every organization they administer, and the
+  member's personal profile too when both come from one authorization (the
+  default; with two authorizations the profile has its own credential)
 - a TikTok / Google account is 1:1 with its own credential
 
 Renewal happens on the credential, **once** — every account sharing it sees the
@@ -108,12 +109,15 @@ The **purpose** keeps apart the credentials one external holder grants the same
 owner through different flows, so that one flow never replaces another's token:
 `''` (`SocialToken::DEFAULT_PURPOSE`) for the default credential, and
 `StoreLinkedInOrganizations::PURPOSE` (`'organizations'`) for the LinkedIn member
-token behind the organizations, next to the member's personal profile. Name it
-when you look a credential up by its holder (`forPurpose()` is the default one):
+token behind the organizations when they come from an authorization of their
+own (`LINKEDIN_SINGLE_AUTHORIZATION=false`, see
+[LinkedIn: company pages](#linkedin-company-pages)); by default they share the
+member's default credential. Name it when you look a credential up by its
+holder (`forPurpose()` is the default one):
 
 ```php
 SocialToken::ownedBy($workspace)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
-    ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first(); // the organizations' credential
+    ->forPurpose()->first(); // the member's credential (with two authorizations: the profile's)
 ```
 
 What stays per **external user**, across owners, because that is how the
@@ -476,18 +480,25 @@ that is `StoreAccountFromSocialite` itself.
 ### LinkedIn: company pages
 
 `StoreConnection` stores only the member's personal profile (one row, through
-`StoreAccountFromSocialite`, from the `linkedin-openid` driver as above); it
-does not fan out to organizations. Their scopes (`w_organization_social`,
-`r_organization_admin`) come with the Community Management API, often on a
-LinkedIn app of its own, and Socialite's LinkedIn drivers fetch the member
+`StoreAccountFromSocialite`); it does not fan out to organizations. Their
+scopes (`w_organization_social`, `r_organization_admin`) come with the
+Community Management API, and Socialite's LinkedIn drivers fetch the member
 through sign-in scopes that authorization may not carry. So the token exchange
 for the organizations is yours: obtain the member token and id, then fan out to
-the organizations they administer with `StoreLinkedInOrganizations`:
+the organizations they administer with `StoreLinkedInOrganizations`.
+
+**One authorization (the default).** Most apps ask one LinkedIn app, the
+Community Management one, for the scopes of the profile and of the
+organizations at once (`w_member_social`, `w_organization_social`,
+`r_organization_admin`), and get one token for both. The profile and every
+organization then post with that one token, on the member's default
+credential: it is renewed once, and one reconnect brings them all back. Pass
+`member:` to store the personal profile from the same call:
 
 ```php
 use Pr4w\SocialTokens\Actions\StoreLinkedInOrganizations;
 
-// after your manual code -> token exchange and /me profile fetch:
+// after your manual code -> token exchange and /me (or /userinfo) profile fetch:
 $accounts = app(StoreLinkedInOrganizations::class)->handle(
     accessToken: $token['access_token'],
     memberId: $profile['id'],
@@ -496,8 +507,44 @@ $accounts = app(StoreLinkedInOrganizations::class)->handle(
     expiresAt: isset($token['expires_in']) ? now()->addSeconds($token['expires_in']) : null,
     refreshExpiresAt: isset($token['refresh_token_expires_in']) ? now()->addSeconds($token['refresh_token_expires_in']) : null,
     scopes: explode(',', $token['scope'] ?? ''), // an empty string is stored as "unknown"
+    member: ['name' => $profile['name'], 'avatar' => $profile['picture'] ?? null], // leave out to store the organizations only
 );
+// $accounts: the member's own account first (with member:), then one row per organization
 ```
+
+The personal profile can also come through `StoreConnection` (a Socialite
+login with the same app and the same scopes): it lands on the same credential.
+Request the same scopes in every LinkedIn flow of the app. LinkedIn documents
+that authorising the same app again with a different set of scopes
+invalidates the member's earlier tokens, and here the newest token replaces
+the one every account posts with: one missing `w_organization_social` stops
+the organizations from posting.
+
+**Two authorizations.** If the profile and the organizations come from two
+LinkedIn apps (a Sign In with LinkedIn app for the profile, a Community
+Management app for the organizations), they hold two tokens and must not share
+a credential, or each flow would replace the other's token. Set
+`LINKEDIN_SINGLE_AUTHORIZATION=false` (`connectors.linkedin.single_authorization`):
+the organizations' token is then stored on its own credential (purpose
+`StoreLinkedInOrganizations::PURPOSE`), next to the profile's default one, and
+neither flow ever replaces the other's token, refresh token or scopes. They
+renew, warn (`CredentialExpiringSoon`) and get flagged separately, and each is
+reconnected through its own flow: read `$event->token->purpose` to send the
+member to the right one. `member:` is refused in that mode.
+
+**Switching to one authorization.** A member's separate organizations
+credential (stored with the setting off, or split by the 3.0 migration) is
+folded into their default one the next time they connect, through either flow:
+the fresher token is kept, the organizations move to the default credential,
+and the separate one is deleted. To do it for every member at once:
+
+```bash
+php artisan social-tokens:merge-linkedin-credentials
+```
+
+It refuses to run while the setting is off. Run it once after turning the
+setting on, so that no member keeps two copies of one token, each renewed
+with the same refresh token.
 
 To re-sync the list later (to pick up new Pages), call `handle()` again with the
 member token stored on the organizations' credential and no `expiresAt`: the
@@ -505,9 +552,7 @@ token's expiry, its renewal schedule and its issue date are kept. Pass
 `expiresAt` whenever the token is new.
 
 ```php
-$credential = $organizationAccount->credential; // any of the member's organization rows, or:
-$credential = SocialToken::ownedBy($owner)->where('provider', 'linkedin')->where('provider_holder_id', $memberId)
-    ->forPurpose(StoreLinkedInOrganizations::PURPOSE)->first();
+$credential = $organizationAccount->credential; // the credential any of the member's organization rows posts with
 
 app(StoreLinkedInOrganizations::class)->handle(
     accessToken: $credential->access_token,
@@ -516,11 +561,12 @@ app(StoreLinkedInOrganizations::class)->handle(
 );
 ```
 
-Take it from that credential, not from a lookup by member id alone: a member
-who also connected their profile has a second credential (see below), whose
-token cannot post as the organizations. Passed here, it would be taken for a
-new token and replace theirs, with no expiry: without a refresh token, that
-credential would then never be warned about before it dies.
+Take it from an organization row's credential, not from a lookup by member id
+alone: with two authorizations, a member who also connected their profile has
+a second credential, whose token cannot post as the organizations. Passed
+here, it would be taken for a new token and replace theirs, with no expiry:
+without a refresh token, that credential would then never be warned about
+before it dies.
 
 Every organization posts with the same member token, so each row mirrors it (the
 organization URN is stored in `profile` for posting). Only organizations where
@@ -528,26 +574,15 @@ the member holds a posting role are stored — by default `ADMINISTRATOR`,
 `CONTENT_ADMINISTRATOR`, `DIRECT_SPONSORED_CONTENT_POSTER` and
 `RECRUITING_POSTER`, configurable with `connectors.linkedin.posting_roles`; an
 organization the member now holds only as `ANALYST`, `CURATOR`, etc. is flagged
-at the next connect.
+at the next connect. The personal row carries the member id as
+`provider_holder_id`, like the organizations, and reconciliation excludes it by
+its `provider_user_id` (the member id), so it only ever touches the
+organization rows.
 
-The member token is stored on the member's **organizations credential**
-(purpose `StoreLinkedInOrganizations::PURPOSE`). If you also post as the
-member, store the personal profile with `StoreConnection` (or
-`StoreAccountFromSocialite`): it gets its own credential, the default one, from
-its own authorization. Neither flow ever replaces the other's token, refresh
-token or scopes, so connecting the profile after the Pages (or the other way
-round) leaves both posting. They also renew, warn (`CredentialExpiringSoon`) and
-get flagged separately, and each is reconnected through its own flow: read
-`$event->token->purpose` to send the member to the right one. The personal row
-still carries the member id as `provider_holder_id`, and reconciliation
-excludes it by its `provider_user_id` (the member id), so it only ever touches
-the organization rows.
-
-LinkedIn documents that authorising the same LinkedIn app again with a
-different set of scopes invalidates the member's earlier access tokens. If both
-flows go through one LinkedIn app, request the same scopes in both (the union),
-or use a separate app for each; otherwise the first flow's token stops working
-when the member goes through the second one.
+Disconnecting one account (`disconnect()`) keeps a shared credential while
+another account still posts with it: with one authorization, disconnecting
+the personal profile leaves the organizations posting, and the credential is
+revoked with the last account.
 
 ## Renewing
 

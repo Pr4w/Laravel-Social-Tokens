@@ -1,6 +1,46 @@
 # Upgrading
 
+## From 3.0 or 3.1 to 3.2
+
+For apps posting as LinkedIn organizations; nothing to do otherwise.
+
+3.2 adds **single authorization mode**, on by default
+(`connectors.linkedin.single_authorization`, `LINKEDIN_SINGLE_AUTHORIZATION`,
+on as well in a published config without the option). The member's personal
+profile and their organizations are taken to come from one authorization (one
+LinkedIn app, usually the Community Management one, asked for the scopes of
+both) and share the member's default credential, renewed once. With 3.0 and
+3.1, they had two credentials, so the same token was renewed twice with the
+same refresh token.
+
+**Decide which mode you are in before you deploy 3.2:**
+
+- **One LinkedIn app for both** (the profile and the organizations come from
+  the same consent screen): keep the default. Then, once 3.2 is deployed, run
+  `php artisan social-tokens:merge-linkedin-credentials` once: it folds each
+  member's organizations credential into their default one, keeping the
+  fresher token, and deletes the separate one. Members who connect before
+  you run it are folded as they connect. Request the same scopes in every
+  LinkedIn flow of the app: the newest token is the one every account posts
+  with.
+- **Two LinkedIn apps** (a Sign In with LinkedIn app for the profile, a
+  Community Management app for the organizations): set
+  `LINKEDIN_SINGLE_AUTHORIZATION=false` **before** deploying 3.2. Otherwise
+  each member's next connection folds their two credentials into one, and the
+  profile's token, which cannot post as the organizations, can end up the
+  one their organizations post with.
+
+`StoreLinkedInOrganizations::handle()` takes a new `member:` argument in
+single authorization mode, to store the personal profile from the same call
+(see the README, "LinkedIn: company pages"); it returns the member's own
+account first then. Subclasses overriding `handle()` need the new parameter.
+
 ## From 2.x to 3.0
+
+From 2.x, go straight to 3.2: read
+[From 3.0 or 3.1 to 3.2](#from-30-or-31-to-32) too, before migrating. By
+default, 3.2's migration no longer splits the LinkedIn credentials described
+below.
 
 Coming from 1.x? Follow [From 1.x to 2.0](#from-1x-to-20) as well: one
 `php artisan migrate` runs both versions' migrations, in the right order. From
@@ -117,7 +157,8 @@ their own. Each can be run again after a failure: fix the cause and run
    on `(provider, provider_holder_id, ownable_type, ownable_id)`
    (`social_tokens_owner_identity_unique`), and moves the LinkedIn
    organizations to credentials of their own (see
-   [LinkedIn profiles and organizations](#linkedin-profiles-and-organizations-have-separate-credentials)).
+   [LinkedIn profiles and organizations](#linkedin-profiles-and-organizations-have-separate-credentials)),
+   only with `LINKEDIN_SINGLE_AUTHORIZATION=false` since 3.2.
    It is not one transaction: each schema step commits on its own, and the
    split commits per 100 credentials, a credential whole or not at all.
    - MySQL / MariaDB: checks first that the new key fits InnoDB's 3072-byte
@@ -537,6 +578,12 @@ while the organization rows still listed `w_organization_social`. The
 organizations now post with a credential of their own, with
 `purpose = 'organizations'` (`StoreLinkedInOrganizations::PURPOSE`); the
 profile keeps the default one (`purpose = ''`).
+
+**Since 3.2, only with two LinkedIn apps.** Single authorization mode, the
+default since 3.2, keeps the profile and the organizations on one credential,
+and the migration then splits nothing: this section applies with
+`LINKEDIN_SINGLE_AUTHORIZATION=false` (see
+[From 3.0 or 3.1 to 3.2](#from-30-or-31-to-32)).
 
 **What the migration does.** `2025_01_01_000008` splits every LinkedIn
 credential that backs both the member's personal row and organization rows:

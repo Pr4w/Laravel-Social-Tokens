@@ -38,8 +38,9 @@ use Pr4w\SocialTokens\Support\Settings;
  * keeps apart the grants one holder gives the same owner through different
  * flows, so that one flow never replaces the other's token: '' for the
  * default credential, StoreLinkedInOrganizations::PURPOSE for the LinkedIn
- * member token behind the organizations (the member's personal profile has
- * the default one).
+ * member token behind the organizations when they come from an authorization
+ * of their own (the member's personal profile has the default one). In single
+ * authorization mode, the default, they share the default one.
  *
  * @property int $id
  * @property string $provider

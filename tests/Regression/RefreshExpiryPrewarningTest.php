@@ -24,9 +24,11 @@
  *    StoreAccountFromSocialite reads only TikTok's refresh_expires_in, not
  *    LinkedIn's refresh_token_expires_in.
  *
- * Since 3.0 the personal profile has its own credential, apart from the
+ * Since 3.0 the personal profile can have its own credential, apart from the
  * organizations' (purpose 'organizations'): storing it cannot touch the
- * organizations' refresh token at all, which the tests below now check.
+ * organizations' refresh token at all. In single authorization mode (the
+ * default since 3.2) they share one again, and storing the profile must keep
+ * what the credential knows. The tests below check both.
  *
  * Desired: one CredentialExpiringSoon as soon as refresh_expires_at - lead <= now
  * (deduplicated over the credential's whole end of life, re-armed by a
@@ -95,6 +97,20 @@ function refreshPrewarnFakeLinkedIn(array $refreshTokens, bool $capped = false):
 }
 
 /** Connect (or reconnect) member-1's organizations and return the shared credential. */
+/** Single authorization mode on or off (connectors read their config once). */
+function refreshPrewarnMode(bool $single): void
+{
+    config(['social-tokens.connectors.linkedin.single_authorization' => $single]);
+    app()->forgetInstance(ConnectorRegistry::class);
+}
+
+/** The credential the organizations post with. */
+function refreshPrewarnOrganizationsCredential(): SocialToken
+{
+    return SocialAccount::query()->where('provider_user_id', '!=', 'member-1')->firstOrFail()->credential
+        ?? throw new RuntimeException('The organizations have no credential.');
+}
+
 function refreshPrewarnConnect(string $refreshToken, CarbonInterface $expiresAt, CarbonInterface $refreshExpiresAt): SocialToken
 {
     app(StoreLinkedInOrganizations::class)->handle(
@@ -290,7 +306,8 @@ it('warns again about the new refresh token after the member reconnects', functi
 
 // Never forget a known refresh token or its expiry ---------------------------
 
-it('keeps the known refresh token expiry when the personal LinkedIn profile is stored after the organizations', function () {
+it('keeps the known refresh token expiry when the personal LinkedIn profile is stored after the organizations', function (bool $single) {
+    refreshPrewarnMode($single);
     $refreshExpiresAt = now()->addDays(365)->toImmutable();
     refreshPrewarnFakeLinkedIn([]);
 
@@ -305,15 +322,16 @@ it('keeps the known refresh token expiry when the personal LinkedIn profile is s
         'expiresIn' => 60 * 86400,
     ]));
 
-    $credential = SocialToken::query()->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
+    $credential = refreshPrewarnOrganizationsCredential();
 
     expect($credential->refresh_expires_at)->not->toBeNull('a known refresh_expires_at must never be replaced by null')
         ->and($credential->refresh_expires_at->equalTo($refreshExpiresAt))->toBeTrue()
         ->and($credential->refresh_token)->toBe('member-refresh')
-        ->and($personal->social_token_id)->not->toBe($credential->getKey());
-});
+        ->and($personal->social_token_id === $credential->getKey())->toBe($single);
+})->with(['separate credentials' => false, 'single authorization' => true]);
 
-it('keeps the shared LinkedIn refresh token when the personal profile is stored without one', function () {
+it('keeps the shared LinkedIn refresh token when the personal profile is stored without one', function (bool $single) {
+    refreshPrewarnMode($single);
     $refreshExpiresAt = now()->addDays(365)->toImmutable();
     refreshPrewarnFakeLinkedIn([]);
 
@@ -325,11 +343,11 @@ it('keeps the shared LinkedIn refresh token when the personal profile is stored 
         'expiresIn' => 60 * 86400,
     ]));
 
-    $credential = SocialToken::query()->forPurpose(StoreLinkedInOrganizations::PURPOSE)->sole();
+    $credential = refreshPrewarnOrganizationsCredential();
 
     expect($credential->refresh_token)->toBe('member-refresh', 'a known refresh_token must never be replaced by null')
         ->and($credential->refresh_expires_at?->equalTo($refreshExpiresAt))->toBeTrue();
-});
+})->with(['separate credentials' => false, 'single authorization' => true]);
 
 it('keeps the refresh token and its expiry when the organizations are re-synced without them', function () {
     $refreshExpiresAt = now()->addDays(365)->toImmutable();

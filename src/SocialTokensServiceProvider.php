@@ -13,6 +13,7 @@ use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
+use Pr4w\SocialTokens\Console\MergeLinkedInCredentialsCommand;
 use Pr4w\SocialTokens\Console\PruneCredentials;
 use Pr4w\SocialTokens\Console\ReencryptTokens;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
@@ -54,6 +55,7 @@ class SocialTokensServiceProvider extends ServiceProvider
                 CheckStaticCredentials::class,
                 PruneCredentials::class,
                 ReencryptTokens::class,
+                MergeLinkedInCredentialsCommand::class,
             ]);
         }
 

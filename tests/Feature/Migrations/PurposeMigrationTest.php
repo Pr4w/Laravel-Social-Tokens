@@ -68,6 +68,10 @@ beforeEach(function () {
     // Back to the 2.x schema (the TestCase ran every migration), to seed 2.x data.
     purposeMigration()->down();
 
+    // The split is for apps whose profile and organizations come from two
+    // authorizations (single authorization mode, the default, keeps them).
+    config(['social-tokens.connectors.linkedin.single_authorization' => false]);
+
     $this->owner = Owner::create(['name' => 'alice']);
 });
 
@@ -117,6 +121,20 @@ it('gives a credential backing organizations only the purpose in place', functio
         ->and(SocialToken::find($token)->purpose)->toBe(StoreLinkedInOrganizations::PURPOSE)
         ->and(SocialAccount::find($org)->social_token_id)->toBe($token);
 });
+
+it('keeps the credential the profile and the organizations share in single authorization mode', function (mixed $setting) {
+    config(['social-tokens.connectors.linkedin.single_authorization' => $setting]);
+    $shared = purposeV2Credential('linkedin', 'member-1', 'member-token', $this->owner);
+    $personal = purposeV2Account('linkedin', 'member-1', 'member-1', $shared, $this->owner);
+    $acme = purposeV2Account('linkedin', '111', 'member-1', $shared, $this->owner);
+
+    purposeMigration()->up();
+
+    expect(SocialToken::count())->toBe(1)
+        ->and(SocialToken::find($shared)->purpose)->toBe('')
+        ->and(SocialAccount::find($personal)->social_token_id)->toBe($shared)
+        ->and(SocialAccount::find($acme)->social_token_id)->toBe($shared);
+})->with(['on' => true, 'the string "true"' => 'true', 'missing from a published config' => null]);
 
 it('leaves every other credential the default one', function () {
     $personal = purposeV2Credential('linkedin', 'member-1', 'member-token');

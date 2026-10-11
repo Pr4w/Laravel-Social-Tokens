@@ -455,9 +455,11 @@ class SocialTokens
      * a LinkedIn member) keep posting; the credential itself is revoked (see
      * revoke()) only when its last connected account goes. "Connected" means
      * not revoked: a sibling flagged needs_reconnect keeps the credential alive.
-     * A LinkedIn member's personal profile has its own credential, apart from
-     * the organizations' (purpose 'organizations'), so disconnecting it revokes
-     * that one at once, and the organizations keep theirs.
+     * With two LinkedIn authorizations, a member's personal profile has its
+     * own credential, apart from the organizations' (purpose 'organizations'),
+     * so disconnecting it revokes that one at once, and the organizations keep
+     * theirs. In single authorization mode they share one, kept while any of
+     * them is connected.
      *
      * The same goes for the credential the account's holder keeps under the
      * same owner: the Meta user token behind a user's Facebook Pages, which

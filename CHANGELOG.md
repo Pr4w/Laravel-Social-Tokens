@@ -3,6 +3,41 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **LinkedIn single authorization mode, on by default**
+  (`connectors.linkedin.single_authorization`, `LINKEDIN_SINGLE_AUTHORIZATION`,
+  on in a published config without the option too). An app whose one
+  LinkedIn app (usually the Community Management one) asks for the scopes of
+  the personal profile and of the organizations at once gets one token for
+  both; 3.0 stored it on two credentials, the profile's and the
+  organizations' (purpose `organizations`), each renewed on its own with the
+  same refresh token. In this mode `StoreLinkedInOrganizations` stores the
+  member token on the member's default credential, shared with the profile,
+  so it is renewed once and one reconnect brings every account back.
+  - `StoreLinkedInOrganizations::handle(member: [...])` also stores the
+    member's personal profile (name, nickname, email, avatar) on that
+    credential, from the same call, and returns it first. Refused
+    (`InvalidArgumentException`) outside the mode.
+  - A member's separate organizations credential is folded into their default
+    one the next time they connect, through either flow
+    (`Actions\MergeLinkedInCredentials`): the fresher token is kept (active
+    first, then the later expiry), the organizations move over, and the
+    separate credential is deleted. `php artisan
+    social-tokens:merge-linkedin-credentials` does it for every member, and
+    refuses while the mode is off.
+  - The `2025_01_01_000008` migration no longer splits the credential a
+    member's profile and organizations share while the mode is on.
+- `LinkedInConnector::singleAuthorization()`.
+
+**(breaking for apps with two LinkedIn apps)** If your profile and your
+organizations come from two LinkedIn apps, set
+`LINKEDIN_SINGLE_AUTHORIZATION=false` before deploying: otherwise each
+member's next connection folds their two credentials into one, and the
+organizations can end up posting with the profile's token
+([UPGRADE](UPGRADE.md#from-30-or-31-to-32)).
+
 ## [3.1.0]
 
 ### Changed

@@ -21,6 +21,13 @@ use Illuminate\Support\Facades\Schema;
  * organization rows only takes that purpose in place. A copy holds the tokens
  * the two flows shared, as stored (encrypted columns are never decrypted).
  *
+ * Only with single authorization mode off (connectors.linkedin.
+ * single_authorization, LINKEDIN_SINGLE_AUTHORIZATION=false when this runs).
+ * In that mode, the default since 3.2, the profile and the organizations come
+ * from one authorization and keep the credential they share. Turned on
+ * later, social-tokens:merge-linkedin-credentials folds the split
+ * credentials back.
+ *
  * Safe to run again after a failure, like 2025_01_01_000007: every step is
  * guarded, the key length is checked before anything changes, the new unique
  * key is built before the old one is dropped (the rows satisfy it: every
@@ -76,8 +83,9 @@ return new class extends Migration
         }
 
         // Nothing to split in no rows (and logging the lookup's bindings would
-        // need a real connection).
-        if ($pretending) {
+        // need a real connection), nor when the profile and the organizations
+        // come from one authorization.
+        if ($pretending || $this->singleAuthorization()) {
             return;
         }
 
@@ -134,6 +142,14 @@ return new class extends Migration
         if ($pretending || Schema::hasColumn($tokens, 'purpose')) {
             Schema::table($tokens, fn (Blueprint $table) => $table->dropColumn('purpose'));
         }
+    }
+
+    /** Read like every boolean setting: LINKEDIN_SINGLE_AUTHORIZATION=off is the string 'off'. */
+    private function singleAuthorization(): bool
+    {
+        $value = config('social-tokens.connectors.linkedin.single_authorization') ?? true;
+
+        return is_array($value) || is_object($value) || (filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true);
     }
 
     /**
