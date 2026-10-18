@@ -218,6 +218,11 @@ class BlueskyConnector extends OAuth2Connector
             throw new RuntimeException('Bluesky issued a token that is not DPoP-bound.');
         }
 
+        // AT Protocol requires the atproto scope in every grant
+        if (! in_array('atproto', explode(' ', (string) ($body['scope'] ?? '')), true)) {
+            throw new RuntimeException('Bluesky granted no atproto scope.');
+        }
+
         return $body;
     }
 
@@ -274,6 +279,19 @@ class BlueskyConnector extends OAuth2Connector
     protected function missingRefreshTokenReason(): string
     {
         return 'No refresh token: reconnect Bluesky.';
+    }
+
+    /**
+     * A renewal names the account it is for (sub): one for another account
+     * than the credential's is not stored.
+     */
+    protected function refusesTokenResponse(array $body): ?RenewalResult
+    {
+        $sub = $body['sub'] ?? null;
+
+        return is_string($sub) && $this->renewing !== null && $sub !== $this->renewing->provider_holder_id
+            ? RenewalResult::terminalFailure('Bluesky renewed the token of another account: reconnect Bluesky.')
+            : null;
     }
 
     /**

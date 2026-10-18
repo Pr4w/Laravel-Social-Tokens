@@ -95,11 +95,6 @@ class SocialTokensServiceProvider extends ServiceProvider
     }
 
     /**
-     * The Meta deauthorize and data deletion callbacks, only when
-     * `callbacks.enabled` is on (off by default): a package should not answer
-     * on an app's URLs unasked. Cached routes already hold them.
-     */
-    /**
      * The `bluesky` Socialite driver (AT Protocol OAuth), unless the app
      * registered one of its own. Configured in services.bluesky.
      */
@@ -118,6 +113,11 @@ class SocialTokensServiceProvider extends ServiceProvider
         });
     }
 
+    /**
+     * The Meta deauthorize and data deletion callbacks, only when
+     * `callbacks.enabled` is on (off by default): a package should not answer
+     * on an app's URLs unasked. Cached routes already hold them.
+     */
     protected function registerCallbackRoutes(): void
     {
         if (Settings::callbacks()['enabled'] && ! $this->app->routesAreCached()) {

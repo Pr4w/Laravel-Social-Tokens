@@ -72,6 +72,17 @@ abstract class OAuth2Connector extends AbstractConnector
     }
 
     /**
+     * A failure for a successful token response the credential must not
+     * store (Bluesky: one for another account), or null to store it.
+     *
+     * @param  array<string, mixed>  $body
+     */
+    protected function refusesTokenResponse(array $body): ?RenewalResult
+    {
+        return null;
+    }
+
+    /**
      * Classify a token-endpoint error: ERROR_TERMINAL, ERROR_CLIENT,
      * ERROR_TRANSIENT, or null when unrecognised (retried, and logged so it can
      * be catalogued). The default follows RFC 6749: invalid_grant (and an
@@ -117,6 +128,10 @@ abstract class OAuth2Connector extends AbstractConnector
                 'status' => $response->status(),
                 'keys' => array_keys($body), // never the body: it may carry tokens
             ]);
+        }
+
+        if (($refused = $this->refusesTokenResponse($body)) !== null) {
+            return $refused;
         }
 
         $newRefreshToken = $body['refresh_token'] ?? null;

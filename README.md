@@ -425,7 +425,17 @@ $account = app(StoreConnection::class)->handle('bluesky', $user, owner: auth()->
 
 The callback checks that the account's PDS trusts the server that signed it
 in. What it needs (the PKCE verifier, the DPoP key) waits in the cache under
-the state for 10 minutes, so the callback works stateless and on another host.
+the state for 10 minutes: use a cache store every server shares. Keep the
+callback route in the `web` middleware group: the state is also checked
+against the session, which ties the callback to the browser that started it.
+`stateless()` is refused for a confidential client; it is for the loopback
+client of local development, whose callback comes back on `127.0.0.1`.
+
+A handle decides which servers the app then calls (its DID document, its PDS,
+the authorization server that PDS names, and that server's endpoints). The
+package only follows `https` URLs whose host is a public address, so a handle
+cannot point your server at its own network (`localhost`, `10.0.0.0/8`,
+`169.254.169.254`…).
 
 - **DPoP.** Each connection gets its own key pair, stored encrypted on the
   credential (`dpop_key`): its tokens are useless without it. Make every API

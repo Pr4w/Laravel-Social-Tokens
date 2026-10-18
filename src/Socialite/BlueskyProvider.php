@@ -24,9 +24,12 @@ use RuntimeException;
  *   $user = Socialite::driver('bluesky')->user();                       // a BlueskyUser
  *
  * What the callback needs (code verifier, DPoP key, authorization server) is
- * kept in the cache under the state, encrypted, for 10 minutes: the callback
- * can then come back stateless, on another host (the loopback client of local
- * development returns to 127.0.0.1).
+ * kept in the cache under the state, encrypted, for 10 minutes. The state is
+ * also checked against the session, which ties the callback to the browser
+ * that started it: without that, a callback URL someone else started would
+ * connect their account to whoever opens it. stateless() is for the loopback
+ * client of local development only, whose callback comes back on another host
+ * (127.0.0.1); a confidential client refuses it.
  */
 class BlueskyProvider extends AbstractProvider
 {
@@ -78,6 +81,13 @@ class BlueskyProvider extends AbstractProvider
     {
         if ($this->user) {
             return $this->user;
+        }
+
+        if ($this->isStateless() && $this->connector()->isConfidential()) {
+            throw new LogicException(
+                'Bluesky callbacks must keep the session: stateless() is for the loopback client of local development. '
+                .'Without the session, the callback is not tied to the browser that started it.'
+            );
         }
 
         $state = (string) $this->request->input('state');
@@ -173,9 +183,10 @@ class BlueskyProvider extends AbstractProvider
         throw new LogicException('Bluesky token requests go through the BlueskyConnector.');
     }
 
+    /** Never with a token: AT Protocol tokens are DPoP-bound, and the profile is public (Atproto::profile($did)). */
     protected function getUserByToken($token)
     {
-        return Atproto::profile((string) $token);
+        throw new LogicException('Bluesky users come from user(); read a profile with Atproto::profile($did).');
     }
 
     /** @param  array<string, mixed>  $user */

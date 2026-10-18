@@ -20,6 +20,15 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
     token, DPoP-signed for a DPoP-bound credential, a Bearer one otherwise.
   - `Support\DPoP`: proofs, server nonces (cached per origin, one retry on
     `use_dpop_nonce`) and a Guzzle middleware.
+  - A handle decides which servers the app calls (its DID document, its
+    PDS, that PDS's authorization server and its endpoints): only `https`
+    URLs to public hosts are followed (`Support\Atproto::publicUrl()`), so
+    a handle cannot point the app's server at its own network.
+  - The callback keeps the session check, which ties it to the browser that
+    started the connection; `stateless()` is refused for a confidential
+    client (it is for the loopback client of local development). A grant
+    without the `atproto` scope, and a renewal for another account than the
+    credential's, are refused.
   - Connector hooks, both optional: `keepAlive()`, how often the dispatcher
     renews an idle credential whose access tokens are renewed on demand
     (Bluesky's live minutes), and `credentialAttributesFrom()`, what a

@@ -37,7 +37,13 @@ beforeEach(function () {
         'services.bluesky.private_key' => $this->clientKey = DPoP::generateKey(),
         'services.bluesky.client_name' => 'NotionScheduler',
     ]);
+
+    // Host names resolve to a public address unless a test says otherwise:
+    // no DNS from the tests.
+    Atproto::resolveHostsUsing(fn (string $host) => ['93.184.216.34']);
 });
+
+afterEach(fn () => Atproto::resolveHostsUsing(null));
 
 function bluesky(): BlueskyConnector
 {
@@ -235,6 +241,25 @@ it('refreshes at the stored token endpoint, DPoP-signed with the credential key'
     });
 });
 
+it('refuses a renewal for another account than the credential\'s', function () {
+    Http::fake([BSKY_ISSUER.'/oauth/token' => Http::response([
+        'access_token' => 'someone-else', 'refresh_token' => 'r2', 'token_type' => 'DPoP', 'expires_in' => 900,
+        'scope' => 'atproto', 'sub' => 'did:plc:someoneelse',
+    ])]);
+
+    $result = bluesky()->refreshCredential(blueskyCredential());
+
+    expect($result->outcome)->toBe(RenewalOutcome::Terminal)
+        ->and($result->reason)->toContain('another account');
+});
+
+it('does not hand out a credential whose DPoP key no longer decrypts', function () {
+    $token = blueskyCredential();
+    SocialToken::query()->whereKey($token->id)->update(['dpop_key' => 'not-a-ciphertext']);
+
+    expect($token->fresh()->tokensDecrypt())->toBeFalse();
+});
+
 it('flags a dead refresh token, and a credential without its DPoP key, for reconnection', function () {
     Http::fake([BSKY_ISSUER.'/oauth/token' => Http::response(['error' => 'invalid_grant', 'error_description' => 'refresh token replayed'], 400)]);
 
@@ -318,7 +343,98 @@ it('refuses a callback for an unknown state or from another server', function ()
     $request->setLaravelSession($this->app['session']->driver('array'));
     $this->app->instance('request', $request);
 
+    expect(fn () => Socialite::driver('bluesky')->user())->toThrow(InvalidStateException::class);
+
+    // The loopback client of local development may come back stateless
+    config(['services.bluesky.client_id' => null, 'services.bluesky.private_key' => null]);
+    app()->forgetInstance(ConnectorRegistry::class);
+    Socialite::forgetDrivers();
+
     expect(fn () => Socialite::driver('bluesky')->stateless()->user())->toThrow(InvalidStateException::class);
+});
+
+it('keeps the session for a confidential client, so a callback is tied to the browser that started it', function () {
+    $request = HttpRequest::create('/callback', 'GET', ['code' => 'c', 'state' => 'nope', 'iss' => BSKY_ISSUER]);
+    $this->app->instance('request', $request);
+
+    expect(fn () => Socialite::driver('bluesky')->stateless()->user())->toThrow(LogicException::class, 'must keep the session');
+});
+
+it('refuses a grant without the atproto scope', function () {
+    Http::fake([BSKY_ISSUER.'/oauth/token' => Http::response([
+        'access_token' => 'at-1', 'refresh_token' => 'rt-1', 'token_type' => 'DPoP', 'expires_in' => 900,
+        'scope' => 'transition:generic', 'sub' => BSKY_DID,
+    ])]);
+
+    $server = ['issuer' => BSKY_ISSUER, 'token_endpoint' => BSKY_ISSUER.'/oauth/token'];
+
+    expect(fn () => bluesky()->exchangeCode($server, DPoP::generateKey(), 'code', 'verifier'))
+        ->toThrow(RuntimeException::class, 'no atproto scope');
+});
+
+it('never sends a token to read a profile', function () {
+    Http::fake();
+
+    expect(fn () => Socialite::driver('bluesky')->userFromToken('bsky-access-1'))->toThrow(LogicException::class);
+
+    Http::assertNothingSent();
+});
+
+// What a handle leads the server to -----------------------------------------
+
+it('only follows https URLs to public hosts', function (string $url, ?array $addresses, bool $allowed) {
+    if ($addresses !== null) {
+        Atproto::resolveHostsUsing(fn () => $addresses);
+    }
+
+    $check = fn () => Atproto::publicUrl($url);
+
+    $allowed ? expect($check())->toBe($url) : expect($check)->toThrow(RuntimeException::class);
+})->with([
+    'a public host' => ['https://pds.example.com', null, true],
+    'a public address' => ['https://93.184.216.34', null, true],
+    'http' => ['http://pds.example.com', null, false],
+    'credentials in the URL' => ['https://user:pass@pds.example.com', null, false],
+    'loopback' => ['https://127.0.0.1:2583', null, false],
+    'the cloud metadata address' => ['https://169.254.169.254/latest', null, false],
+    'a private address' => ['https://10.0.0.5', null, false],
+    'IPv6 loopback' => ['https://[::1]', null, false],
+    'localhost' => ['https://localhost', null, false],
+    'a bare host name' => ['https://intranet', null, false],
+    'an internal domain' => ['https://pds.corp.internal', null, false],
+    'a name for a private address' => ['https://evil.example.com', ['10.1.2.3'], false],
+    'a name with one private address among public ones' => ['https://evil.example.com', ['93.184.216.34', '192.168.1.1'], false],
+]);
+
+it('refuses a handle whose DID document points the server at its own network', function () {
+    Http::fake([
+        BSKY_ISSUER.'/xrpc/com.atproto.identity.resolveHandle*' => Http::response(['did' => BSKY_DID]),
+        'plc.directory/'.BSKY_DID => Http::response([
+            'id' => BSKY_DID,
+            'service' => [['id' => '#atproto_pds', 'type' => 'AtprotoPersonalDataServer', 'serviceEndpoint' => 'http://169.254.169.254']],
+        ]),
+        '*' => Http::response(),
+    ]);
+    $this->app->instance('request', $request = HttpRequest::create('/'));
+    $request->setLaravelSession($this->app['session']->driver('array'));
+
+    expect(fn () => Socialite::driver('bluesky')->hint('evil.example.com')->redirect())->toThrow(RuntimeException::class, 'https');
+
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), '169.254.169.254'));
+});
+
+it('refuses an authorization server whose endpoints point at a private host', function () {
+    Atproto::resolveHostsUsing(fn (string $host) => $host === 'internal.example.com' ? ['10.0.0.8'] : ['93.184.216.34']);
+    Http::fake([
+        BSKY_ISSUER.'/.well-known/oauth-authorization-server' => Http::response([
+            'issuer' => BSKY_ISSUER,
+            'authorization_endpoint' => BSKY_ISSUER.'/oauth/authorize',
+            'token_endpoint' => 'https://internal.example.com/token',
+            'pushed_authorization_request_endpoint' => BSKY_ISSUER.'/oauth/par',
+        ]),
+    ]);
+
+    expect(fn () => Atproto::serverMetadata(BSKY_ISSUER))->toThrow(RuntimeException::class, 'token_endpoint');
 });
 
 // Posting -----------------------------------------------------------------

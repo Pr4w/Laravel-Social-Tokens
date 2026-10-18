@@ -502,7 +502,7 @@ class SocialToken extends Model
      * nothing can renew it nor post with it, and only a reconnect, which
      * writes a new one, brings the credential back.
      *
-     * @param  'access_token'|'refresh_token'  $column
+     * @param  'access_token'|'refresh_token'|'dpop_key'  $column
      */
     public function canDecrypt(string $column): bool
     {
@@ -515,10 +515,10 @@ class SocialToken extends Model
         }
     }
 
-    /** Whether both its tokens decrypt (see canDecrypt()). */
+    /** Whether its tokens, and the DPoP key they are bound to (Bluesky), decrypt (see canDecrypt()). */
     public function tokensDecrypt(): bool
     {
-        return $this->canDecrypt('access_token') && $this->canDecrypt('refresh_token');
+        return $this->canDecrypt('access_token') && $this->canDecrypt('refresh_token') && $this->canDecrypt('dpop_key');
     }
 
     public function isAccessTokenExpired(int $bufferSeconds = 30): bool
