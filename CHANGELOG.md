@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.3.0]
 
 ### Added
 - **Bluesky** (AT Protocol OAuth), connector key `bluesky`. The package ships
