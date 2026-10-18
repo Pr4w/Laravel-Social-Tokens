@@ -8,6 +8,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -81,6 +82,29 @@ abstract class AbstractConnector implements ProviderConnector
     {
         // Sensible default. Override per provider.
         return CarbonInterval::minutes(15);
+    }
+
+    /**
+     * How often the dispatcher renews an idle credential, whatever its access
+     * token's expiry: for providers whose access tokens live minutes (Bluesky),
+     * renewed on demand by validAccessTokenFor() when one is needed, so the
+     * dispatcher only keeps the refresh token alive. Null (the default)
+     * renews a lead time before each access token expires.
+     */
+    public function keepAlive(): ?CarbonInterval
+    {
+        return null;
+    }
+
+    /**
+     * Provider-specific attributes a connection stores on its credential,
+     * besides the tokens (Bluesky: the DPoP key and the server endpoints).
+     *
+     * @return array<model-property<SocialToken>, mixed>
+     */
+    public function credentialAttributesFrom(#[\SensitiveParameter] SocialiteUser $user): array
+    {
+        return [];
     }
 
     public function revoke(SocialToken $token): void

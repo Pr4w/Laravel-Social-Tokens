@@ -22,7 +22,7 @@ accounts. Each works on its own; together they cover connect → publish → mea
 
 ## Why
 
-Eight providers across four renewal strategies, and any naive "access token +
+Nine providers across four renewal strategies, and any naive "access token +
 refresh token + cron" design breaks on at least one of them:
 
 | Provider | Access token | Renewal model | Strategy |
@@ -35,6 +35,7 @@ refresh token + cron" design breaks on at least one of them:
 | Instagram (Instagram Login, no Page) | 60 days | extend the long lived token (`ig_refresh_token`), no refresh token | `ExtendLongLived` |
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh_token grant when the app receives refresh tokens, else re-auth | `StableRefreshToken` (`ReauthOnly` without a refresh token) |
+| Bluesky | minutes (DPoP-bound) | refresh_token grant, single-use refresh token rotates; renewed on demand, kept alive daily | `RotatingRefreshToken` |
 
 The package models "how do I keep this token alive" as a per-provider strategy,
 where one valid answer is "I cannot, the user must reconnect." That last case is
@@ -382,6 +383,67 @@ environment sharing the same X app), the previous tokens die, and that credentia
 is flagged `needs_reconnect` at its next renewal. The package renews each X
 credential about every 90 minutes, which also keeps its ~6-month refresh token
 alive; with many X accounts, keep X's token-endpoint rate limits in mind.
+
+### Bluesky
+
+Bluesky uses AT Protocol OAuth, which no Socialite provider covers (pushed
+authorization requests, DPoP-bound tokens, one authorization server per
+account), so the package ships the `bluesky` driver. Nothing is registered
+with Bluesky: the client is identified by the URL of a metadata document you
+serve, and authenticates with a key pair of yours.
+
+```php
+// config/services.php
+'bluesky' => [
+    'client_id' => env('BLUESKY_CLIENT_ID'),     // https://your-app.test/oauth/bluesky/client-metadata.json
+    'redirect' => env('BLUESKY_REDIRECT'),       // https://your-app.test/oauth/bluesky/callback
+    'private_key' => env('BLUESKY_PRIVATE_KEY'), // openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt
+    'key_id' => 'k1',                            // change it when you rotate the key
+    'client_name' => 'Your app',                 // optional: client_uri, logo_uri, tos_uri, policy_uri, scopes
+],
+```
+
+Serve the metadata document at the `client_id` URL (its JWKS is inline):
+
+```php
+use Pr4w\SocialTokens\SocialTokens;
+
+Route::get('/oauth/bluesky/client-metadata.json', fn (SocialTokens $tokens) => $tokens->connector('bluesky')->clientMetadata());
+```
+
+Then connect as with any provider. Without a hint the user picks their
+account at bsky.social; with one (a handle or a DID), the account's own
+server is used, for accounts on another PDS:
+
+```php
+Socialite::driver('bluesky')->redirect();
+Socialite::driver('bluesky')->hint($request->input('handle'))->redirect();
+
+$user = Socialite::driver('bluesky')->user(); // a Socialite\BlueskyUser: getId() is the DID, getNickname() the handle, pds() its PDS
+$account = app(StoreConnection::class)->handle('bluesky', $user, owner: auth()->user())->sole();
+```
+
+The callback checks that the account's PDS trusts the server that signed it
+in. What it needs (the PKCE verifier, the DPoP key) waits in the cache under
+the state for 10 minutes, so the callback works stateless and on another host.
+
+- **DPoP.** Each connection gets its own key pair, stored encrypted on the
+  credential (`dpop_key`): its tokens are useless without it. Make every API
+  call through `authorizedRequestFor()`, which signs it and handles the
+  server nonce:
+
+  ```php
+  app(SocialTokens::class)->authorizedRequestFor($account)
+      ->post($account->credential->metadata['pds'].'/xrpc/com.atproto.repo.createRecord', [...]);
+  ```
+
+- **Renewal.** Access tokens live minutes and are renewed when one is asked
+  for; the dispatcher renews each credential daily to keep its single-use,
+  rotating refresh token alive. A confidential client keeps the session for
+  months, a public one for two weeks.
+- **Local development.** Leave `client_id` empty: the package uses the
+  loopback client (`http://localhost`), a public client with no key, whose
+  redirect must be on `http://127.0.0.1:{port}`.
 
 ### Instagram without a Facebook Page
 

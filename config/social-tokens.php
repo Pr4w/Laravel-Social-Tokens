@@ -1,5 +1,6 @@
 <?php
 
+use Pr4w\SocialTokens\Connectors\BlueskyConnector;
 use Pr4w\SocialTokens\Connectors\FacebookConnector;
 use Pr4w\SocialTokens\Connectors\GoogleConnector;
 use Pr4w\SocialTokens\Connectors\InstagramConnector;
@@ -292,6 +293,15 @@ return [
         // request offline.access (plus tweet.write, users.read, media.write).
         'x' => [
             'driver' => XConnector::class,
+        ],
+
+        // Bluesky via AT Protocol OAuth: connect with the package's `bluesky`
+        // Socialite driver. Client in services.bluesky: client_id (the https URL
+        // where you serve BlueskyConnector::clientMetadata(); leave it empty for
+        // the loopback client of local development), redirect, private_key (an
+        // ES256 PEM: openssl ecparam -name prime256v1 -genkey -noout), key_id.
+        'bluesky' => [
+            'driver' => BlueskyConnector::class,
         ],
 
         // YouTube Shorts via Google OAuth2 (StableRefreshToken strategy).

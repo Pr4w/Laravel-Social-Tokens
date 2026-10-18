@@ -3,6 +3,28 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Bluesky** (AT Protocol OAuth), connector key `bluesky`. The package ships
+  the `bluesky` Socialite driver (`Socialite\BlueskyProvider`): no Socialite
+  provider handles AT Protocol's pushed authorization requests, DPoP and
+  per-account authorization servers. `StoreConnection` stores the account
+  like any other; see [Bluesky](README.md#bluesky).
+  - Tokens are DPoP-bound: each connection's key pair is stored encrypted on
+    its credential (new column `dpop_key`, hidden, re-encrypted by
+    `social-tokens:reencrypt`, erased on revocation), with the account's
+    authorization server endpoints and PDS (new column `metadata`). Run
+    `php artisan migrate`.
+  - `SocialTokens::authorizedRequestFor($account)`: a request with a valid
+    token, DPoP-signed for a DPoP-bound credential, a Bearer one otherwise.
+  - `Support\DPoP`: proofs, server nonces (cached per origin, one retry on
+    `use_dpop_nonce`) and a Guzzle middleware.
+  - Connector hooks, both optional: `keepAlive()`, how often the dispatcher
+    renews an idle credential whose access tokens are renewed on demand
+    (Bluesky's live minutes), and `credentialAttributesFrom()`, what a
+    connection stores on its credential besides the tokens.
+
 ## [3.2.1]
 
 ### Fixed

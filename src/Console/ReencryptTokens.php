@@ -30,7 +30,7 @@ use Pr4w\SocialTokens\Models\SocialToken;
  */
 class ReencryptTokens extends Command
 {
-    private const COLUMNS = ['access_token', 'refresh_token'];
+    private const COLUMNS = ['access_token', 'refresh_token', 'dpop_key'];
 
     /** Writes tried on a row before it counts as changing under the command. */
     private const ATTEMPTS = 3;

@@ -48,6 +48,8 @@ use Pr4w\SocialTokens\Support\Settings;
  * @property string $purpose
  * @property ?string $access_token
  * @property ?string $refresh_token
+ * @property ?string $dpop_key the private key DPoP-bound tokens are bound to (Bluesky)
+ * @property array<string, mixed>|null $metadata provider-specific details (Bluesky: issuer, endpoints, PDS)
  * @property ?CarbonInterface $expires_at
  * @property ?CarbonInterface $refresh_expires_at
  * @property ?CarbonInterface $renew_at
@@ -85,7 +87,7 @@ class SocialToken extends Model
      *
      * @var list<string>
      */
-    protected $hidden = ['access_token', 'refresh_token'];
+    protected $hidden = ['access_token', 'refresh_token', 'dpop_key'];
 
     /**
      * @return array<string, string>
@@ -95,6 +97,8 @@ class SocialToken extends Model
         return [
             'access_token' => 'encrypted',
             'refresh_token' => 'encrypted',
+            'dpop_key' => 'encrypted',
+            'metadata' => 'array',
             'expires_at' => 'datetime',
             'refresh_expires_at' => 'datetime',
             'renew_at' => 'datetime',
@@ -355,7 +359,7 @@ class SocialToken extends Model
      */
     protected function forgetUndecryptableTokens(): static
     {
-        foreach (['access_token', 'refresh_token'] as $column) {
+        foreach (['access_token', 'refresh_token', 'dpop_key'] as $column) {
             try {
                 $this->getOriginal($column);
             } catch (DecryptException) {
@@ -444,8 +448,12 @@ class SocialToken extends Model
         }
 
         $lead = $connector->leadTime();
+        $keepAlive = $connector instanceof AbstractConnector ? $connector->keepAlive() : null;
 
-        if ($expiresAt !== null) {
+        if ($keepAlive !== null && ($strategy ?? $connector->renewalStrategy())->canRenewUnattended()) {
+            // Access tokens are renewed on demand: only keep the refresh token alive
+            $renewAt = now()->add($keepAlive);
+        } elseif ($expiresAt !== null) {
             $renewAt = $expiresAt->copy()->sub($lead);
         } elseif (($strategy ?? $connector->renewalStrategy())->canRenewUnattended()) {
             $renewAt = now()->add($lead);
@@ -940,6 +948,7 @@ class SocialToken extends Model
         return [
             'access_token' => null,
             'refresh_token' => null,
+            'dpop_key' => null,
             'expires_at' => null,
             'refresh_expires_at' => null,
             'renew_at' => null,

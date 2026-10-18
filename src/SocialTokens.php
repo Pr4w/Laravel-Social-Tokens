@@ -11,7 +11,9 @@ use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use Pr4w\SocialTokens\Connectors\AbstractConnector;
@@ -24,6 +26,7 @@ use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\DPoP;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
@@ -360,6 +363,35 @@ class SocialTokens
         // Transient: leave the credential usable so background retries continue,
         // and tell the caller to retry rather than ask the user to reconnect.
         throw NeedsReconnectException::transient($account, $result->reason);
+    }
+
+    /**
+     * A request authorized as $account, with a valid token (renewed first if
+     * needed, as validAccessTokenFor()). A DPoP-bound credential (Bluesky)
+     * signs every request with its key, which the token is useless without;
+     * any other sends the token as a Bearer.
+     *
+     *   app(SocialTokens::class)->authorizedRequestFor($account)
+     *       ->post($pds.'/xrpc/com.atproto.repo.createRecord', [...]);
+     *
+     * @throws NeedsReconnectException as validAccessTokenFor()
+     */
+    public function authorizedRequestFor(SocialAccount $account, int $minValiditySeconds = 30): PendingRequest
+    {
+        $token = $this->validAccessTokenFor($account, $minValiditySeconds);
+        $request = Http::timeout(Settings::httpTimeout())->connectTimeout(Settings::connectTimeout())->acceptJson();
+
+        try {
+            $dpopKey = $account->credential?->getAttribute('dpop_key');
+        } catch (DecryptException) {
+            $this->alertUndecryptable($account->credential);
+
+            throw NeedsReconnectException::transient($account, SocialToken::UNDECRYPTABLE);
+        }
+
+        return filled($dpopKey)
+            ? $request->withMiddleware(DPoP::middleware($dpopKey, $token))
+            : $request->withToken($token);
     }
 
     /**

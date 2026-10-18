@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Connectors\AbstractConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\StoresConnections;
@@ -173,7 +174,7 @@ class StoreAccountFromSocialite implements StoresConnections
                 'refresh_token' => $refreshToken,
                 'expires_at' => $expiresAt,
                 'refresh_expires_at' => $refreshExpiresAt,
-            ] + $withScopes,
+            ] + $withScopes + ($connector instanceof AbstractConnector ? $connector->credentialAttributesFrom($user) : []),
             $connector, // schedules renew_at
         );
 

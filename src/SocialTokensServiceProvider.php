@@ -11,11 +11,14 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 use InvalidArgumentException;
+use Laravel\Socialite\Contracts\Factory as SocialiteFactory;
+use Laravel\Socialite\SocialiteManager;
 use Pr4w\SocialTokens\Console\CheckStaticCredentials;
 use Pr4w\SocialTokens\Console\DispatchDueRenewals;
 use Pr4w\SocialTokens\Console\MergeLinkedInCredentialsCommand;
 use Pr4w\SocialTokens\Console\PruneCredentials;
 use Pr4w\SocialTokens\Console\ReencryptTokens;
+use Pr4w\SocialTokens\Socialite\BlueskyProvider;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\Settings;
@@ -63,6 +66,8 @@ class SocialTokensServiceProvider extends ServiceProvider
 
         $this->registerCallbackRoutes();
 
+        $this->registerSocialiteDrivers();
+
         $this->app->afterResolving(Schedule::class, function (Schedule $schedule) {
             // Read here, not in boot(): each schedule:run resolves a fresh
             // Schedule. A falsy frequency disables that entry (the command stays
@@ -94,6 +99,25 @@ class SocialTokensServiceProvider extends ServiceProvider
      * `callbacks.enabled` is on (off by default): a package should not answer
      * on an app's URLs unasked. Cached routes already hold them.
      */
+    /**
+     * The `bluesky` Socialite driver (AT Protocol OAuth), unless the app
+     * registered one of its own. Configured in services.bluesky.
+     */
+    protected function registerSocialiteDrivers(): void
+    {
+        $this->callAfterResolving(SocialiteFactory::class, function (SocialiteFactory $socialite, $app) {
+            if (! $socialite instanceof SocialiteManager) {
+                return;
+            }
+
+            $socialite->extend('bluesky', function () use ($app) {
+                $config = (array) $app['config']->get('services.bluesky', []);
+
+                return new BlueskyProvider($app['request'], $config['client_id'] ?? null, '', $config['redirect'] ?? null, $config['guzzle'] ?? []);
+            });
+        });
+    }
+
     protected function registerCallbackRoutes(): void
     {
         if (Settings::callbacks()['enabled'] && ! $this->app->routesAreCached()) {

@@ -3,6 +3,7 @@
 namespace Pr4w\SocialTokens\Tests;
 
 use Illuminate\Support\Facades\Http;
+use Laravel\Socialite\SocialiteServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Pr4w\SocialTokens\SocialTokensServiceProvider;
 use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
@@ -28,7 +29,8 @@ abstract class TestCase extends Orchestra
 
     protected function getPackageProviders($app): array
     {
-        return [SocialTokensServiceProvider::class];
+        // Socialite for the package's own driver (bluesky); an app gets it by discovery
+        return [SocialiteServiceProvider::class, SocialTokensServiceProvider::class];
     }
 
     protected function getEnvironmentSetUp($app): void
