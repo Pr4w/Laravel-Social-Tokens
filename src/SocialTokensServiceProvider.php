@@ -107,17 +107,25 @@ class SocialTokensServiceProvider extends ServiceProvider
                 return;
             }
 
-            $socialite->extend('bluesky', function () use ($app) {
-                $config = (array) $app['config']->get('services.bluesky', []);
+            // A driver the app (or SocialiteProviders) registered before this
+            // runs stays: which one wins must not depend on the boot order.
+            $registered = fn (string $driver): bool => (fn () => isset($this->customCreators[$driver]))->call($socialite);
 
-                return new BlueskyProvider($app['request'], $config['client_id'] ?? null, '', $config['redirect'] ?? null, $config['guzzle'] ?? []);
-            });
+            if (! $registered('bluesky')) {
+                $socialite->extend('bluesky', function () use ($app) {
+                    $config = (array) $app['config']->get('services.bluesky', []);
 
-            $socialite->extend('pinterest', function () use ($app) {
-                $config = (array) $app['config']->get('services.pinterest', []);
+                    return new BlueskyProvider($app['request'], $config['client_id'] ?? null, '', $config['redirect'] ?? null, $config['guzzle'] ?? []);
+                });
+            }
 
-                return new PinterestProvider($app['request'], $config['client_id'] ?? null, $config['client_secret'] ?? null, $config['redirect'] ?? null, $config['guzzle'] ?? []);
-            });
+            if (! $registered('pinterest')) {
+                $socialite->extend('pinterest', function () use ($app) {
+                    $config = (array) $app['config']->get('services.pinterest', []);
+
+                    return new PinterestProvider($app['request'], $config['client_id'] ?? null, $config['client_secret'] ?? null, $config['redirect'] ?? null, $config['guzzle'] ?? []);
+                });
+            }
         });
     }
 

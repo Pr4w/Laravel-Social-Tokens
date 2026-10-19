@@ -3,6 +3,7 @@
 use Illuminate\Http\Client\Request;
 use Illuminate\Http\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
+use Laravel\Socialite\Contracts\Factory;
 use Laravel\Socialite\Facades\Socialite;
 use Pr4w\SocialTokens\Actions\StoreConnection;
 use Pr4w\SocialTokens\Connectors\PinterestConnector;
@@ -10,9 +11,11 @@ use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Socialite\BlueskyProvider;
 use Pr4w\SocialTokens\Socialite\PinterestProvider;
 use Pr4w\SocialTokens\Socialite\PinterestUser;
 use Pr4w\SocialTokens\SocialTokens;
+use Pr4w\SocialTokens\SocialTokensServiceProvider;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 
 /*
@@ -118,6 +121,38 @@ it('renews at the Sandbox when the app works there', function (array $config) {
     'from services.pinterest' => [['services.pinterest.sandbox' => true]],
     'from the connector' => [['social-tokens.connectors.pinterest.sandbox' => true]],
 ]);
+
+it('reads the sandbox option as every boolean setting', function (mixed $value, bool $sandbox) {
+    config()->set('services.pinterest.sandbox', $value);
+    app()->forgetInstance(ConnectorRegistry::class);
+
+    expect(pinterest()->sandbox())->toBe($sandbox)
+        ->and(pinterest()->apiUrl())->toBe($sandbox ? 'https://api-sandbox.pinterest.com/v5/' : 'https://api.pinterest.com/v5/');
+})->with([
+    // env() returns PINTEREST_SANDBOX=off as the string 'off', which a cast took for true
+    'off' => ['off', false],
+    'no' => ['no', false],
+    'the string false' => ['false', false],
+    '0' => ['0', false],
+    'empty' => ['', false],
+    'unset' => [null, false],
+    'on' => ['on', true],
+    'true' => [true, true],
+    '1' => ['1', true],
+]);
+
+it('keeps a pinterest driver the app registered before the package', function () {
+    $socialite = app(Factory::class);
+    $socialite->extend('pinterest', fn () => 'the app\'s own driver');
+    Socialite::forgetDrivers();
+
+    // The package's registration runs again, as when it boots after the app's
+    $provider = app()->getProvider(SocialTokensServiceProvider::class);
+    (fn () => $this->registerSocialiteDrivers())->call($provider);
+
+    expect(Socialite::driver('pinterest'))->toBe('the app\'s own driver')
+        ->and(Socialite::driver('bluesky'))->toBeInstanceOf(BlueskyProvider::class);
+});
 
 it('treats an answer about the refresh token as a dead grant', function () {
     pinterestTokenAnswers(400, ['code' => 1, 'message' => 'Invalid refresh token.']);

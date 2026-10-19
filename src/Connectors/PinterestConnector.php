@@ -8,6 +8,7 @@ use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
+use Pr4w\SocialTokens\Support\Settings;
 
 /**
  * Pinterest publishing through the Pinterest API v5 (OAuth 2.0). Connect with
@@ -52,10 +53,15 @@ class PinterestConnector extends OAuth2Connector implements ChecksCredential
         return CarbonInterval::days(3);
     }
 
-    /** Whether this app works in the Sandbox (Trial access). */
+    /**
+     * Whether this app works in the Sandbox (Trial access). Read as every
+     * boolean setting (Settings::flag()): PINTEREST_SANDBOX=off reaches the
+     * config as the string 'off', which a cast took for true, sending a
+     * production app's renewals to the Sandbox.
+     */
     public function sandbox(): bool
     {
-        return (bool) ($this->config['sandbox'] ?? config("services.{$this->credentialsKey()}.sandbox", false));
+        return Settings::flag($this->config['sandbox'] ?? config("services.{$this->credentialsKey()}.sandbox", false), false);
     }
 
     /** The Pinterest API the app's calls go to, ending with a slash: the Sandbox's when sandbox() is on. */

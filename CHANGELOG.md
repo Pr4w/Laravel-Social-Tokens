@@ -27,6 +27,11 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 - `OAuth2Connector::tokenError()`: where a provider answers token-endpoint
   errors in another shape than RFC 6749's (Pinterest's `{code, message}`).
 
+### Fixed
+- The package's `bluesky` and `pinterest` Socialite drivers no longer replace
+  a driver of the same name that the app (or SocialiteProviders) registered
+  first: which one won depended on the order the service providers booted.
+
 ## [3.3.0]
 
 ### Added
