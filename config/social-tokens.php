@@ -7,6 +7,7 @@ use Pr4w\SocialTokens\Connectors\InstagramConnector;
 use Pr4w\SocialTokens\Connectors\InstagramLoginConnector;
 use Pr4w\SocialTokens\Connectors\LinkedInConnector;
 use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
+use Pr4w\SocialTokens\Connectors\PinterestConnector;
 use Pr4w\SocialTokens\Connectors\ThreadsConnector;
 use Pr4w\SocialTokens\Connectors\TikTokConnector;
 use Pr4w\SocialTokens\Connectors\XConnector;
@@ -221,6 +222,7 @@ return [
     |   'google'   => ['client_id' => env('GOOGLE_CLIENT_ID'), 'client_secret' => env('GOOGLE_CLIENT_SECRET')],
     |   'linkedin' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET')],
     |   'x'        => ['client_id' => env('X_CLIENT_ID'), 'client_secret' => env('X_CLIENT_SECRET')],
+    |   'pinterest' => ['client_id' => env('PINTEREST_APP_ID'), 'client_secret' => env('PINTEREST_APP_SECRET'), 'sandbox' => env('PINTEREST_SANDBOX', false)],
     |
     */
     'connectors' => [
@@ -302,6 +304,15 @@ return [
         // ES256 PEM: openssl ecparam -name prime256v1 -genkey -noout), key_id.
         'bluesky' => [
             'driver' => BlueskyConnector::class,
+        ],
+
+        // Pinterest via OAuth 2.0: connect with the package's `pinterest`
+        // Socialite driver. 30-day access tokens, a 60-day refresh token that
+        // every renewal replaces. While the Pinterest app only has Trial access
+        // it publishes in the Sandbox: set services.pinterest.sandbox (or
+        // "sandbox" here), and reconnect the accounts once it is off.
+        'pinterest' => [
+            'driver' => PinterestConnector::class,
         ],
 
         // YouTube Shorts via Google OAuth2 (StableRefreshToken strategy).

@@ -3,6 +3,30 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Pinterest** (API v5, OAuth 2.0), connector key `pinterest`
+  (`PinterestConnector`). The package ships the `pinterest` Socialite driver
+  (`Socialite\PinterestProvider`): SocialiteProviders' one identifies the
+  account by its username, which the member can change, while this one uses
+  the account's id. `StoreConnection` stores the account like any other; see
+  [Pinterest](README.md#pinterest).
+  - 30-day access tokens renewed three days ahead (`RotatingRefreshToken`):
+    each renewal stores the new 60-day continuous refresh token. The client
+    authenticates with HTTP Basic.
+  - `sandbox` (`services.pinterest.sandbox`): an app with Trial access
+    publishes in the Sandbox, whose tokens only work there; the driver and the
+    renewals then use `api-sandbox.pinterest.com`. `apiUrl()` gives the host
+    for the app's own calls.
+  - `ChecksCredential`: `reportRejected()` and `check_renewable` ask
+    `GET /user_account`, since a 401 within the 30 days means the member
+    changed their username or password. An expired access token is left to
+    the renewal.
+  - No revocation: Pinterest only revokes system users' tokens.
+- `OAuth2Connector::tokenError()`: where a provider answers token-endpoint
+  errors in another shape than RFC 6749's (Pinterest's `{code, message}`).
+
 ## [3.3.0]
 
 ### Added

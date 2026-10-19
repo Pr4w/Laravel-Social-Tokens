@@ -8,7 +8,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
  * Base for providers that renew through an OAuth 2.0 refresh_token grant
- * (TikTok, Google, LinkedIn, X). It owns the request, the response parsing and
+ * (TikTok, Google, LinkedIn, X, Pinterest). It owns the request, the response parsing and
  * the single error-classification flow; a provider declares its token endpoint,
  * its request parameters and how its error codes read (classifyError()).
  *
@@ -83,6 +83,20 @@ abstract class OAuth2Connector extends AbstractConnector
     }
 
     /**
+     * The error in a token-endpoint answer, in the shape mapError() reads (an
+     * RFC 6749 `error` with its `error_description`), or null when the answer
+     * is no error. Override where a provider answers its errors in another
+     * shape (Pinterest: `{code, message}`).
+     *
+     * @param  array<string, mixed>  $body
+     * @return array<string, mixed>|null
+     */
+    protected function tokenError(array $body, int $status): ?array
+    {
+        return empty($body['error']) ? null : $body;
+    }
+
+    /**
      * Classify a token-endpoint error: ERROR_TERMINAL, ERROR_CLIENT,
      * ERROR_TRANSIENT, or null when unrecognised (retried, and logged so it can
      * be catalogued). The default follows RFC 6749: invalid_grant (and an
@@ -117,8 +131,8 @@ abstract class OAuth2Connector extends AbstractConnector
         $body = $response->json();
         $body = is_array($body) ? $body : []; // a scalar JSON body is not an error object
 
-        if (! empty($body['error'])) {
-            return $this->mapError($body, $response->status());
+        if (($error = $this->tokenError($body, $response->status())) !== null) {
+            return $this->mapError($error, $response->status());
         }
 
         $accessToken = $body['access_token'] ?? null;

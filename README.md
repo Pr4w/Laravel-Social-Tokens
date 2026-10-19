@@ -22,7 +22,7 @@ accounts. Each works on its own; together they cover connect → publish → mea
 
 ## Why
 
-Nine providers across four renewal strategies, and any naive "access token +
+Ten providers across four renewal strategies, and any naive "access token +
 refresh token + cron" design breaks on at least one of them:
 
 | Provider | Access token | Renewal model | Strategy |
@@ -36,6 +36,7 @@ refresh token + cron" design breaks on at least one of them:
 | Threads | 60 days | extend the long lived token, no refresh token | `ExtendLongLived` |
 | LinkedIn | 60 days | refresh_token grant when the app receives refresh tokens, else re-auth | `StableRefreshToken` (`ReauthOnly` without a refresh token) |
 | Bluesky | minutes (DPoP-bound) | refresh_token grant, single-use refresh token rotates; renewed on demand, kept alive daily | `RotatingRefreshToken` |
+| Pinterest | 30 days | refresh_token grant, the 60-day refresh token rotates | `RotatingRefreshToken` |
 
 The package models "how do I keep this token alive" as a per-provider strategy,
 where one valid answer is "I cannot, the user must reconnect." That last case is
@@ -245,6 +246,7 @@ and Facebook share a single Meta app:
 // The same LinkedIn app, for Socialite's OpenID Connect driver (see "Connecting an account").
 'linkedin-openid' => ['client_id' => env('LINKEDIN_CLIENT_ID'), 'client_secret' => env('LINKEDIN_CLIENT_SECRET'), 'redirect' => env('LINKEDIN_REDIRECT')],
 'x'        => ['client_id' => env('X_CLIENT_ID'),        'client_secret' => env('X_CLIENT_SECRET'),        'redirect' => env('X_REDIRECT')],
+'pinterest' => ['client_id' => env('PINTEREST_APP_ID'),  'client_secret' => env('PINTEREST_APP_SECRET'),  'redirect' => env('PINTEREST_REDIRECT'), 'sandbox' => env('PINTEREST_SANDBOX', false)],
 ```
 
 `config/social-tokens.php` then only enables connectors (their `driver`) and
@@ -262,7 +264,9 @@ TikTok, Threads and Instagram Login aren't built into `laravel/socialite` itself
 drivers from [SocialiteProviders](https://socialiteproviders.com) (e.g.
 `composer require socialiteproviders/tiktok`) and register the listener, so
 `Socialite::driver('tiktok')` resolves. Their credentials still go in the same
-`services.php` entries above.
+`services.php` entries above. Bluesky and Pinterest use the package's own
+`bluesky` and `pinterest` drivers (see [Bluesky](#bluesky) and
+[Pinterest](#pinterest)).
 
 Two connector keys log in through a Socialite driver of another name:
 Instagram through a Facebook Page uses the `facebook` driver, and the LinkedIn
@@ -301,7 +305,7 @@ same X app. If your app already logs in with it:
 
 Socialite fires no event when the user returns, so you call the action yourself
 from your callback. Use **`StoreConnection`** for every provider — one callback
-handles TikTok, Google, X, Instagram (through a Facebook Page, or with Instagram
+handles TikTok, Google, X, Pinterest, Instagram (through a Facebook Page, or with Instagram
 Login), Threads and Facebook, and the LinkedIn personal profile (for LinkedIn
 organizations, see below). The routes below take the **connector key** from the
 URL: that is what `StoreConnection` needs, and it names the Socialite driver
@@ -326,6 +330,7 @@ $scopes = [
     'facebook' => ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement', 'business_management'],
     'instagram' => ['instagram_basic', 'instagram_content_publish', 'pages_show_list', 'pages_read_engagement', 'business_management'],
     'linkedin' => ['w_member_social'], // added to the driver's openid, profile and email
+    'pinterest' => ['user_accounts:read', 'boards:read', 'boards:write', 'pins:read', 'pins:write'],
     // ...one entry per provider you support
 ];
 
@@ -454,6 +459,52 @@ cannot point your server at its own network (`localhost`, `10.0.0.0/8`,
 - **Local development.** Leave `client_id` empty: the package uses the
   loopback client (`http://localhost`), a public client with no key, whose
   redirect must be on `http://127.0.0.1:{port}`.
+
+### Pinterest
+
+The package ships the `pinterest` driver. SocialiteProviders' Pinterest
+driver identifies the account by its username, which the member can change
+(and changing it kills their tokens); this one uses the account's id.
+
+```php
+// config/services.php
+'pinterest' => [
+    'client_id' => env('PINTEREST_APP_ID'),
+    'client_secret' => env('PINTEREST_APP_SECRET'),
+    'redirect' => env('PINTEREST_REDIRECT'),      // registered, exactly, in the Pinterest app
+    'sandbox' => env('PINTEREST_SANDBOX', false), // while the app only has Trial access
+],
+```
+
+```php
+Socialite::driver('pinterest')
+    ->scopes(['user_accounts:read', 'boards:read', 'boards:write', 'pins:read', 'pins:write'])
+    ->redirect();
+
+$user = Socialite::driver('pinterest')->user(); // a Socialite\PinterestUser: getId() is the account id, getNickname() the username
+$account = app(StoreConnection::class)->handle('pinterest', $user, owner: auth()->user())->sole();
+```
+
+- **Renewal.** Access tokens live 30 days and are renewed three days
+  ahead. Each renewal returns a new refresh token, valid 60 days, which the
+  package stores: a credential renewed in time never expires. Never refresh
+  a Pinterest token outside the package.
+- **Sandbox.** An app with Trial access cannot publish in production (HTTP
+  403, code 29): it works in the Sandbox (`api-sandbox.pinterest.com`), whose
+  tokens only work there. With `sandbox` on, the driver exchanges the code
+  there and renewals go there too; send your own calls to
+  `$tokens->connector('pinterest')->apiUrl()`. Accounts connected in the
+  Sandbox reconnect once it is off.
+- **Rejected tokens.** A member's tokens die when they change their username
+  or password. Report a 401 from your own calls with
+  `reportRejected($account, $reason, terminal: false)`: the connector asks
+  `GET /user_account` before anything is flagged, and an access token past
+  its 30 days is left to the renewal.
+- **Disconnecting.** Pinterest has no revocation for a member's tokens:
+  `disconnect()` forgets them here, and the member removes the app in their
+  Pinterest settings.
+- **Secret boards** need their own scopes: `boards:read_secret`,
+  `boards:write_secret`, `pins:read_secret`, `pins:write_secret`.
 
 ### Instagram without a Facebook Page
 
@@ -861,7 +912,7 @@ try {
 }
 ```
 
-When Meta, Threads or LinkedIn rejects a token at publish time, report it, so
+When Meta, Threads, LinkedIn or Pinterest rejects a token at publish time, report it, so
 every account sharing that credential stops posting (and your app is told
 once):
 
@@ -902,6 +953,11 @@ try {
   (`invalid_grant`), which flags the credential. These connectors cannot check
   a token, so `terminal: false` does nothing for them and returns `false`, and
   `terminal: true` would flag a healthy credential.
+- Pinterest: report a 401 (code 2, "Authentication failed.") with
+  `terminal: false`. Its access tokens live 30 days, so a rejection before
+  then means the member changed their username or password; the package
+  asks `GET /user_account`, and an access token past its 30 days is left to
+  the renewal.
 - LinkedIn with refresh tokens: report a `REVOKED_ACCESS_TOKEN`, or any other
   ambiguous 401, with `terminal: false`. The package introspects the token
   and flags the credential only when LinkedIn answers `revoked`; an `expired`
@@ -911,7 +967,7 @@ try {
 
 To catch revoked tokens between two renewals without waiting for a failed post,
 set `SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
-checks renewable Meta, Threads and LinkedIn credentials.
+checks renewable Meta, Threads, LinkedIn and Pinterest credentials.
 
 LinkedIn's token introspection uses the configured client (`services.linkedin`,
 or `client_id` / `client_secret` on the `linkedin` connector), which must be the
@@ -1178,7 +1234,8 @@ For an OAuth 2.0 provider, extend `OAuth2Connector`: declare `tokenUrl()`, the
 `renewalStrategy()` and `leadTime()`, and override only what differs —
 `refreshParameters()`, `tokenRequest()` (client authentication), `classifyError()`
 (which error codes mean a dead grant, an app-side problem or a temporary one),
-`refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
+`tokenError()` (errors in another shape than RFC 6749's, as Pinterest's
+`{code, message}`), `refreshExpiresInKey()`, `profileFrom()`. `XConnector` and `TikTokConnector` are
 complete references. A Graph API product on Facebook Login tokens can extend
 `MetaGraphConnector` (the base of `FacebookConnector` and `InstagramConnector`),
 which extends the user token with `fb_exchange_token`; a Meta API whose

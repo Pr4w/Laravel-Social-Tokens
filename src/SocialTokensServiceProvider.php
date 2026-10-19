@@ -19,6 +19,7 @@ use Pr4w\SocialTokens\Console\MergeLinkedInCredentialsCommand;
 use Pr4w\SocialTokens\Console\PruneCredentials;
 use Pr4w\SocialTokens\Console\ReencryptTokens;
 use Pr4w\SocialTokens\Socialite\BlueskyProvider;
+use Pr4w\SocialTokens\Socialite\PinterestProvider;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\Settings;
@@ -95,8 +96,9 @@ class SocialTokensServiceProvider extends ServiceProvider
     }
 
     /**
-     * The `bluesky` Socialite driver (AT Protocol OAuth), unless the app
-     * registered one of its own. Configured in services.bluesky.
+     * The `bluesky` Socialite driver (AT Protocol OAuth) and the `pinterest`
+     * one, unless the app registered its own. Configured in services.bluesky
+     * and services.pinterest.
      */
     protected function registerSocialiteDrivers(): void
     {
@@ -109,6 +111,12 @@ class SocialTokensServiceProvider extends ServiceProvider
                 $config = (array) $app['config']->get('services.bluesky', []);
 
                 return new BlueskyProvider($app['request'], $config['client_id'] ?? null, '', $config['redirect'] ?? null, $config['guzzle'] ?? []);
+            });
+
+            $socialite->extend('pinterest', function () use ($app) {
+                $config = (array) $app['config']->get('services.pinterest', []);
+
+                return new PinterestProvider($app['request'], $config['client_id'] ?? null, $config['client_secret'] ?? null, $config['redirect'] ?? null, $config['guzzle'] ?? []);
             });
         });
     }
