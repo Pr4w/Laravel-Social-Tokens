@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.4.0]
 
 ### Added
 - **Pinterest** (API v5, OAuth 2.0), connector key `pinterest`
