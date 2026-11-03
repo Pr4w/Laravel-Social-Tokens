@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.5.0]
 
 ### Changed
 - **Renewable credentials are checked daily by default.** `check_renewable`
