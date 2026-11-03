@@ -62,6 +62,7 @@ it('does not flag on a transient error', function () {
 });
 
 it('only checks active static credentials that back an account, on providers that can check', function () {
+    config(['social-tokens.check_renewable' => false]);
     Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'x'])]);
 
     staticCredential('facebook', ['expires_at' => now()->addDays(30), 'renew_at' => now()->addDays(23)]); // renewable
@@ -72,6 +73,22 @@ it('only checks active static credentials that back an account, on providers tha
     $this->artisan('social-tokens:check-static')->expectsOutputToContain('Checked 0 static credential(s), flagged 0.');
 
     Http::assertNothingSent();
+});
+
+it('checks renewable credentials between renewals by default', function () {
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'x'])]);
+
+    staticCredential('facebook', ['expires_at' => now()->addDays(30), 'renew_at' => now()->addDays(23)]); // renewable, not due
+    staticCredential('facebook', ['expires_at' => now()->addDays(3), 'renew_at' => now()->subHour()]);    // due: the renewal's
+    staticCredential('facebook', ['status' => AccountStatus::NeedsReconnect]);                             // already flagged
+    staticCredential('facebook', withAccount: false);                                                      // orphan
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Checked 0 static credential(s), flagged 0.')
+        ->expectsOutputToContain('Checked 1 renewable credential(s), flagged 0.')
+        ->assertSuccessful();
+
+    Http::assertSentCount(1);
 });
 
 it('completes when the breaker minimum is 0 and nothing was checked', function (int $minChecked) {

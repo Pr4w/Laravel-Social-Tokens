@@ -103,12 +103,12 @@ it('falls back to the shipped defaults for missing or unreadable booleans', func
     settingsForget('check_renewable');
 
     expect(Settings::logUnknownErrors())->toBeTrue()
-        ->and(Settings::checkRenewable())->toBeFalse();
+        ->and(Settings::checkRenewable())->toBeTrue();
 
     config(['social-tokens.log_unknown_errors' => 'maybe', 'social-tokens.check_renewable' => ['yes']]);
 
     expect(Settings::logUnknownErrors())->toBeTrue()
-        ->and(Settings::checkRenewable())->toBeFalse();
+        ->and(Settings::checkRenewable())->toBeTrue();
 });
 
 it('does not log uncatalogued errors when log_unknown_errors is the string "false"', function () {

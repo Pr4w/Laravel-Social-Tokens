@@ -34,9 +34,10 @@ use Throwable;
  *  - a credential whose token changed during the check (reconnected meanwhile)
  *    is left alone.
  *
- * With `check_renewable` on, it also asks about renewable credentials between
- * two renewals (the Meta user token behind Instagram, Threads, LinkedIn), so a
- * token revoked by the user is caught before its renewal comes due. A
+ * With `check_renewable` on (the default), it also asks about renewable
+ * credentials between two renewals (the Meta user token behind Instagram,
+ * Instagram Login, Threads, LinkedIn, Pinterest), so a token revoked by the
+ * user is caught within a day rather than at its renewal, weeks later. A
  * credential whose renewal is due, or whose token expired, is left to the
  * renewal job. Checks only ask: nothing is renewed or re-dated.
  */

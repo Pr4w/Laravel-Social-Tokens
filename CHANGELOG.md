@@ -3,6 +3,29 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+- **Renewable credentials are checked daily by default.** `check_renewable`
+  (`SOCIAL_TOKENS_CHECK_RENEWABLE`) now defaults to true, in the config and
+  in a published config without the option. The daily `check-static` run
+  then also asks Meta (the user token behind Instagram), Instagram Login,
+  Threads, LinkedIn and Pinterest whether a renewable credential's token
+  still works between two renewals. Off, a token the user revoked (app
+  removed, password changed) went unnoticed until its next renewal, up to
+  about eight weeks later for a 60-day token, and a
+  `reportRejected(terminal: false)` strike against such a credential was
+  never confirmed, so it was never flagged. One light call per credential
+  and per day, with the same two-strike rule and per-provider breaker as the
+  static checks; a credential whose renewal is due is left to the renewal.
+  Set `SOCIAL_TOKENS_CHECK_RENEWABLE=false` to keep 3.4's behaviour; a config
+  published with 3.4 or earlier keeps `false` until you change it.
+
+### Fixed
+- A Bluesky test failed about one run in 128: its DER helper read an ECDSA
+  value starting `0x00 0x8x` as negative. The package's own signatures were
+  never affected (3,000 checked with a correct verifier).
+
 ## [3.4.0]
 
 ### Added

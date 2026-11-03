@@ -66,7 +66,7 @@ final class Settings
 
     public static function checkRenewable(): bool
     {
-        return self::bool('check_renewable', false);
+        return self::bool('check_renewable', true);
     }
 
     /**

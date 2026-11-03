@@ -1,5 +1,23 @@
 # Upgrading
 
+## From 3.4 to 3.5
+
+Nothing to change. `check_renewable` is now on by default: the daily
+`check-static` run also checks renewable Meta, Instagram Login, Threads,
+LinkedIn and Pinterest credentials, one light call each, and flags those the
+provider no longer accepts (the same two-strike rule and per-provider breaker
+as the static checks). Expect `Checked N renewable credential(s)` in its
+output, and members asked to reconnect sooner after they revoke the app.
+
+- A config published with an earlier version keeps
+  `env('SOCIAL_TOKENS_CHECK_RENEWABLE', false)`: change the default to `true`,
+  or set `SOCIAL_TOKENS_CHECK_RENEWABLE=true`, to get the check.
+- LinkedIn introspection must use the LinkedIn app that issued the member
+  tokens (`services.linkedin`, or the `linkedin` connector's own client). With
+  another app, LinkedIn answers a bare "inactive": nothing is flagged, but
+  each such credential logs an uncatalogued check error every day.
+- To keep 3.4's behaviour, set `SOCIAL_TOKENS_CHECK_RENEWABLE=false`.
+
 ## From 3.0 or 3.1 to 3.2
 
 For apps posting as LinkedIn organizations; nothing to do otherwise.

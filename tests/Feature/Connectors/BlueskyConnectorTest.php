@@ -60,7 +60,16 @@ function verifiedClaims(string $jws, ?array $jwk = null): array
 
     // raw R || S → DER, and the JWK → a PEM public key, for openssl_verify
     $raw = $decode($signature);
-    $int = fn (string $bytes) => "\x02".chr(strlen($bytes = (ord($bytes[0]) & 0x80 ? "\0" : '').ltrim($bytes, "\0") ?: "\0")).$bytes;
+    // A positive, minimal DER INTEGER: leading zeros dropped, then one added
+    // back when the first byte left has its high bit set (checking the high
+    // bit before trimming read a value starting 0x00 0x8x as negative, and
+    // failed about one signature in 128)
+    $int = function (string $bytes): string {
+        $bytes = ltrim($bytes, "\0") ?: "\0";
+        $bytes = (ord($bytes[0]) & 0x80 ? "\0" : '').$bytes;
+
+        return "\x02".chr(strlen($bytes)).$bytes;
+    };
     $sequence = $int(substr($raw, 0, 32)).$int(substr($raw, 32));
     $der = "\x30".chr(strlen($sequence)).$sequence;
 

@@ -526,8 +526,8 @@ manages, so it cannot reach these.
   the Instagram-scoped user id), on its own renewable credential. The 1-hour
   token Socialite returns is exchanged for the 60-day one
   (`ig_exchange_token`), which is extended a week before it expires
-  (`ig_refresh_token`, once it is at least 24 hours old). `check-static` with
-  `check_renewable` asks `graph.instagram.com/me` about it.
+  (`ig_refresh_token`, once it is at least 24 hours old). The daily
+  `check-static` run asks `graph.instagram.com/me` about it between renewals.
 - **Publishing.** Call `graph.instagram.com` with the token, not
   `graph.facebook.com`. Code that picks Instagram accounts by
   `provider = 'instagram'` must include `instagram_login`.
@@ -940,8 +940,8 @@ try {
   credential only on a definitive answer (a session subcode, LinkedIn's
   `revoked`). A plain rejection counts as one strike against the token, and
   only `social-tokens:check-static` confirms it, flagging the credential if
-  the provider still rejects the token: Facebook Page tokens are always
-  checked, renewable credentials only when `SOCIAL_TOKENS_CHECK_RENEWABLE=true`.
+  the provider still rejects the token: static credentials (Facebook Page
+  tokens) always, renewable ones unless `SOCIAL_TOKENS_CHECK_RENEWABLE=false`.
   If you set `check_static_schedule` to `null`, schedule or run the command
   yourself, or such a report never flags the credential. Repeated reports
   never confirm each other: publish retries seconds apart would all see the
@@ -965,9 +965,15 @@ try {
   call `validAccessTokenFor()` again and retry. `terminal: true` would flag a
   credential whose refresh token still works.
 
-To catch revoked tokens between two renewals without waiting for a failed post,
-set `SOCIAL_TOKENS_CHECK_RENEWABLE=true`: the daily `check-static` run then also
-checks renewable Meta, Threads, LinkedIn and Pinterest credentials.
+The daily `check-static` run also checks renewable Meta, Instagram Login,
+Threads, LinkedIn and Pinterest credentials between two renewals
+(`check_renewable`, on by default), so a token the user revoked is caught
+within a day instead of at its next renewal, weeks later: one light call per
+credential and per day, with the same two-strike rule and per-provider
+breaker as the static checks. A credential whose renewal is due is left to
+the renewal. Set `SOCIAL_TOKENS_CHECK_RENEWABLE=false` to check static
+credentials only; a `terminal: false` report against a renewable credential
+is then never confirmed.
 
 LinkedIn's token introspection uses the configured client (`services.linkedin`,
 or `client_id` / `client_secret` on the `linkedin` connector), which must be the
