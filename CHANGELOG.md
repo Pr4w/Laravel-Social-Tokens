@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.5.1]
 
 ### Fixed
 - **A Facebook Page whose daily check got Meta's 100/33 was never resolved.**
