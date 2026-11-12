@@ -1083,6 +1083,14 @@ class SocialTokens
 
         $result = $this->checkAtProvider($connector, $token);
 
+        // A fresh token for the same grant (a Facebook Page token minted
+        // again): stored in place of the one the provider refused.
+        if ($result->succeeded() && $result->accessToken !== null && ! hash_equals($checkedToken, $result->accessToken)) {
+            $token->replaceCheckedAccessToken($cipher, $result->accessToken);
+
+            return false;
+        }
+
         if ($result->clientError) {
             $this->alertClientRejected($token, $result);
         }

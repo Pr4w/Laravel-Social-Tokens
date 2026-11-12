@@ -804,10 +804,35 @@ entirely. Either way the command exits with a failure code. A credential that
 cannot be checked (e.g. it cannot be decrypted after an `APP_KEY` change) is
 logged and skipped.
 
+Meta answers a Page token's `/me` with **100/33** ("Object with ID 'me' does
+not exist, cannot be loaded due to missing permissions…") both when the Page
+token is stale and when Facebook keeps the Page out of the API (restricted by
+country or age, or limited by Facebook). The check then asks the Page's user
+token (the Meta user credential of the user behind the Page, same owner),
+listing the user's Pages with `/me/accounts`:
+
+- the Page is no longer listed: rejected ("The Page is no longer among the
+  Pages its user manages");
+- a fresh Page token from the list reads the Page: the stale token is
+  replaced in place (only if it is still the one stored) and the Page is
+  healthy, with no strike and nothing for the user to do;
+- the fresh token gets 100/33 too: rejected ("Facebook refuses API access to
+  this Page"), since a reconnect cannot change it.
+
+Both rejections are ordinary strikes: flagged on the second consecutive run,
+and stopped by the breaker like any other. Without a usable user token (none,
+flagged, another owner's) or an answer from `/me/accounts`, nothing is
+decided and the error stays logged as uncatalogued. These calls only happen
+for a Page whose `/me` got 100/33, and a user's Page list serves all of their
+such Pages in a run. A `reportRejected(..., terminal: false)` about a stale
+Page token stores the fresh one the same way.
+
 A custom connector opts in by implementing `Contracts\ChecksCredential`. Its
 plain `terminalFailure()` needs two consecutive runs to flag (a
 `reportRejected()` check only records the first strike); return
-`terminalFailure($reason, ['definitive' => true])` to flag on the first.
+`terminalFailure($reason, ['definitive' => true])` to flag on the first. A
+success may carry another access token for the same grant: the caller stores
+it in place of the token checked, if that one is still stored.
 
 Renewals run under a per-credential lock so a scheduled job and a synchronous
 `validAccessTokenFor()` never refresh the same credential at once: TikTok and X

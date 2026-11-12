@@ -108,6 +108,22 @@ final class MetaErrorMapper
     }
 
     /**
+     * Meta's 100/33, "Object with ID '...' does not exist, cannot be loaded
+     * due to missing permissions, or does not support this operation". On a
+     * Facebook Page token's /me it does not tell a stale Page token from a
+     * Page Meta keeps out of the API (restricted by country or age, limited
+     * by Facebook): mapCredentialCheck() leaves it unknown, and
+     * FacebookConnector asks the Page's user token which it is.
+     */
+    public static function isUnreachableObject(mixed $error): bool
+    {
+        return is_array($error)
+            && (int) ($error['code'] ?? 0) === 100
+            && isset($error['error_subcode'])
+            && (int) $error['error_subcode'] === 33;
+    }
+
+    /**
      * @param  array<mixed>  $error
      * @return array{0: int, 1: ?int, 2: string, 3: array<string, mixed>}
      */

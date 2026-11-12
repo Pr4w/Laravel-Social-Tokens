@@ -3,6 +3,36 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **A Facebook Page whose daily check got Meta's 100/33 was never resolved.**
+  Meta answers a Page token's `/me` with 100/33 ("Object with ID 'me' does
+  not exist, cannot be loaded due to missing permissions, or does not support
+  this operation") both to a stale Page token and to a Page Facebook keeps out
+  of the API (restricted by country or age, limited by Facebook). The check
+  left it unknown: "Uncatalogued credential check error" every day, never
+  flagged, for a Page that could not be published to. `FacebookConnector` now
+  asks the Page's user token (`/me/accounts`, then `GET /{page-id}` with the
+  fresh Page token it lists):
+  - the Page is no longer listed: a rejection ("The Page is no longer among
+    the Pages its user manages");
+  - the fresh Page token reads the Page: it replaces the stale one, only if
+    that is still the one stored, and the check succeeds;
+  - the fresh token gets 100/33 too: a rejection ("Facebook refuses API
+    access to this Page").
+
+  Rejections are not definitive: two consecutive runs flag, and the
+  per-provider breaker still stops them when many Pages fail at once.
+  Without a usable user token, or an answer from it, nothing is decided and
+  the error stays logged as before. A user's Page list serves all of their
+  100/33 Pages in a run. `reportRejected(terminal: false)` stores a fresh Page
+  token the same way.
+- `Contracts\ChecksCredential::checkCredential()` may return a success with
+  another access token for the same grant; `check-static` and
+  `reportRejected()` store it (`SocialToken::replaceCheckedAccessToken()`).
+  `MetaErrorMapper::isUnreachableObject()` recognises 100/33.
+
 ## [3.5.0]
 
 ### Changed

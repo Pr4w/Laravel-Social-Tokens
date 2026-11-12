@@ -6,6 +6,8 @@ use Illuminate\Support\Carbon;
 use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
+use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
@@ -34,6 +36,18 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
 
+    /** How long a user's Page list, read to resolve a 100/33, serves the user's other Pages. */
+    protected const PAGE_LIST_SECONDS = 300;
+
+    /**
+     * Page lists read to resolve a 100/33, by user credential and its stored
+     * token, so a user with several such Pages is asked once per check-static
+     * run. In memory only: they hold Page tokens.
+     *
+     * @var array<string, array{at: int, pages: array<int, array<string, mixed>>}>
+     */
+    private array $pageLists = [];
+
     /** One account per Page the user manages, each with its own Page token. */
     public function connectionAction(): string
     {
@@ -43,6 +57,8 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
     /**
      * Page tokens never expire, but die when the user changes their password,
      * removes the app or loses the Page's admin role. A cheap /me call tells.
+     * A 100/33 on a Page token is resolved with the Page's user token
+     * (resolveUnreachablePage()), which can return a fresh Page token.
      */
     public function checkCredential(SocialToken $token): RenewalResult
     {
@@ -61,10 +77,138 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
 
         // The health check's own mapping: only a session subcode is definitive.
         if (! empty($body['error'])) {
-            return MetaErrorMapper::mapCredentialCheck($body['error']);
+            $result = MetaErrorMapper::mapCredentialCheck($body['error']);
+
+            return MetaErrorMapper::isUnreachableObject($body['error'])
+                ? $this->resolveUnreachablePage($token, $result)
+                : $result;
         }
 
         return RenewalResult::success(accessToken: $token->access_token);
+    }
+
+    /**
+     * Meta answered 100/33 to a Page token's /me, which happens both to a
+     * stale Page token and to a Page Meta keeps out of the API. The Page's
+     * user token tells which:
+     *  - the Page is no longer among the Pages the user manages: terminal;
+     *  - a fresh Page token from /me/accounts reads the Page: success, with
+     *    that token, which the caller stores in place of the stale one;
+     *  - the fresh Page token gets 100/33 too: terminal, Facebook refuses API
+     *    access to the Page, and a reconnect cannot change that.
+     * Neither verdict is definitive: two consecutive runs flag, and the
+     * per-provider breaker still stops them if every Page fails at once.
+     * Without a usable user token, or an answer to read, it stays
+     * $unresolved: nothing is decided on missing information.
+     */
+    protected function resolveUnreachablePage(SocialToken $page, RenewalResult $unresolved): RenewalResult
+    {
+        $user = $this->pageUserCredential($page);
+
+        if ($user === null) {
+            return $unresolved;
+        }
+
+        $pages = $this->pageListOf($user);
+
+        if ($pages instanceof RenewalResult) {
+            return $unresolved;
+        }
+
+        $pageId = (string) $page->provider_holder_id;
+        // data_get(): an entry Meta sent as something else than an object is
+        // skipped, not a TypeError.
+        $listed = collect($pages)->first(fn ($candidate) => (string) data_get($candidate, 'id', '') === $pageId);
+
+        if ($listed === null) {
+            return RenewalResult::terminalFailure('The Page is no longer among the Pages its user manages (Meta 100/33).', $unresolved->context);
+        }
+
+        $fresh = data_get($listed, 'access_token');
+
+        if (! is_string($fresh) || $fresh === '') {
+            return $unresolved;
+        }
+
+        $response = $this->attempt(fn () => $this->http()->withToken($fresh)
+            ->acceptJson()
+            ->get($this->graphUrl($pageId), ['fields' => 'id'] + $this->appSecretProofQuery($fresh)));
+
+        if ($response instanceof RenewalResult) {
+            return $unresolved;
+        }
+
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        if ($response->successful() && empty($body['error']) && (string) ($body['id'] ?? '') === $pageId) {
+            return RenewalResult::success(accessToken: $fresh);
+        }
+
+        if (MetaErrorMapper::isUnreachableObject($body['error'] ?? null)) {
+            return RenewalResult::terminalFailure(
+                'Facebook refuses API access to this Page, even with a fresh Page token: it may be restricted by country or age, or limited by Facebook (Meta 100/33).',
+                $unresolved->context,
+            );
+        }
+
+        return $unresolved;
+    }
+
+    /**
+     * The Meta user token a Page credential was minted from: the user behind
+     * the Page's account (its provider_holder_id; the Page credential's own
+     * is the Page id), their default facebook credential, same owner. Null
+     * when the credential is no Page's (the user token behind Instagram
+     * accounts), or the user's is missing, flagged or unreadable.
+     */
+    protected function pageUserCredential(SocialToken $page): ?SocialToken
+    {
+        $account = SocialAccount::query()
+            ->where('social_token_id', $page->getKey())
+            ->where('provider', 'facebook')
+            ->where('provider_user_id', $page->provider_holder_id)
+            ->whereNotNull('provider_holder_id')
+            ->first();
+
+        if ($account === null) {
+            return null;
+        }
+
+        $user = SocialToken::query()
+            ->where('provider', $page->provider)
+            ->where('provider_holder_id', $account->provider_holder_id)
+            ->forPurpose()
+            ->where('ownable_type', $page->ownable_type)
+            ->where('ownable_id', $page->ownable_id)
+            ->where('status', AccountStatus::Active->value)
+            ->first();
+
+        return $user !== null && $user->tokensDecrypt() && filled($user->access_token) ? $user : null;
+    }
+
+    /**
+     * The user's Pages with their tokens (fetchPages()), kept a few minutes
+     * per user credential and stored token.
+     *
+     * @return array<int, array<string, mixed>>|RenewalResult
+     */
+    protected function pageListOf(SocialToken $user): array|RenewalResult
+    {
+        $key = $user->getKey().':'.hash('sha256', (string) $user->getRawOriginal('access_token'));
+        $cached = $this->pageLists[$key] ?? null;
+
+        if ($cached !== null && time() - $cached['at'] < self::PAGE_LIST_SECONDS) {
+            return $cached['pages'];
+        }
+
+        $pages = $this->fetchPages((string) $user->access_token, 'id,access_token');
+
+        if (! $pages instanceof RenewalResult) {
+            $this->pageLists[$key] = ['at' => time(), 'pages' => $pages];
+        }
+
+        return $pages;
     }
 
     /**

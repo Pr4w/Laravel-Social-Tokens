@@ -115,7 +115,16 @@ class CheckStaticCredentials extends Command
                 $cipher = $token->getRawOriginal('access_token');
 
                 if ($result->succeeded()) {
-                    if ($token->failed_checks > 0) {
+                    // A fresh token for the same grant (a Facebook Page token
+                    // minted again): stored in place of the stale one.
+                    if ($result->accessToken !== null && $result->accessToken !== $token->access_token) {
+                        if ($token->replaceCheckedAccessToken($cipher, $result->accessToken)) {
+                            Log::info('[social-tokens] Replaced a token the provider refused with a fresh one for the same grant', [
+                                'provider' => $token->provider,
+                                'token_id' => $token->getKey(),
+                            ]);
+                        }
+                    } elseif ($token->failed_checks > 0) {
                         SocialToken::query()->whereKey($token->getKey())->where('access_token', $cipher)->update(['failed_checks' => 0]);
                     }
                 } elseif ($result->outcome === RenewalOutcome::Terminal) {

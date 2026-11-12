@@ -24,7 +24,10 @@ interface ChecksCredential
 {
     /**
      * Success when the provider still accepts the token; a terminal failure when
-     * it has been invalidated. Must not write to the database.
+     * it has been invalidated. Must not write to the database. A success may
+     * carry another access token for the same grant (FacebookConnector: a
+     * fresh Page token when Meta refused the stored one): the caller stores
+     * it in place of the token checked, if that one is still stored.
      */
     public function checkCredential(SocialToken $token): RenewalResult;
 }

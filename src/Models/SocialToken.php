@@ -515,6 +515,23 @@ class SocialToken extends Model
         }
     }
 
+    /**
+     * Store $accessToken in place of the access token a check read
+     * ($checkedCipher, as stored), when the provider handed out a fresh token
+     * for the same grant (a Facebook Page token minted again from its user's
+     * token). Only while that token is still stored: a reconnect meanwhile
+     * wrote a newer one. Clears the strikes against the old token.
+     */
+    public function replaceCheckedAccessToken(mixed $checkedCipher, #[\SensitiveParameter] string $accessToken): bool
+    {
+        $encrypted = (clone $this)->forceFill(['access_token' => $accessToken])->getAttributes()['access_token'];
+
+        return static::query()
+            ->whereKey($this->getKey())
+            ->where('access_token', $checkedCipher)
+            ->update(['access_token' => $encrypted, 'failed_checks' => 0, 'last_error' => null]) === 1;
+    }
+
     /** Whether its tokens, and the DPoP key they are bound to (Bluesky), decrypt (see canDecrypt()). */
     public function tokensDecrypt(): bool
     {
