@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.7.0]
 
 ### Added
 - **Accounts their holder no longer manages are flagged without waiting for a
