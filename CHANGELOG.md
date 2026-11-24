@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.8.0]
 
 ### Changed
 - **LinkedIn organizations are read from LinkedIn's versioned API.** LinkedIn
