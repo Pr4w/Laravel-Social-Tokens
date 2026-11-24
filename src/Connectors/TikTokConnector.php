@@ -39,10 +39,14 @@ class TikTokConnector extends OAuth2Connector implements FetchesProfile
 
     /**
      * The display name and the large avatar (user.info.basic), the picture
-     * SocialiteProviders' TikTok driver stores at connect. TikTok answers its
-     * errors in error.code, "ok" on success, and a missing scope with a 401
-     * whose code says so: read before the status, so that one is a missing
-     * grant and an invalid token a failure.
+     * SocialiteProviders' TikTok driver stores at connect, and the username
+     * as the nickname, as the driver stores it, when the account is known to
+     * have granted user.info.profile (the username's scope: asked for
+     * without it, the whole read is refused). Without it, the nickname is
+     * left as stored. TikTok answers its errors in error.code, "ok" on
+     * success, and a missing scope with a 401 whose code says so: read before
+     * the status, so that one is a missing grant and an invalid token a
+     * failure. Refused the username, it reads the rest again without it.
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {
@@ -51,16 +55,24 @@ class TikTokConnector extends OAuth2Connector implements FetchesProfile
         }
 
         $token = $accessToken();
-        $response = $this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
-            ->get(self::USER_INFO_URL, ['fields' => 'open_id,display_name,avatar_large_url']));
+        $withUsername = $this->grantsOneOf($account, ['user.info.profile']);
 
-        if ($response instanceof RenewalResult) {
-            return $response;
-        }
+        do {
+            $askedUsername = $withUsername;
+            $fields = 'open_id,display_name,avatar_large_url'.($withUsername ? ',username' : '');
+            $response = $this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
+                ->get(self::USER_INFO_URL, ['fields' => $fields]));
 
-        $body = $response->json();
-        $body = is_array($body) ? $body : [];
-        $code = data_get($body, 'error.code');
+            if ($response instanceof RenewalResult) {
+                return $response;
+            }
+
+            $body = $response->json();
+            $body = is_array($body) ? $body : [];
+            $code = data_get($body, 'error.code');
+            $retry = $code === 'scope_not_authorized' && $withUsername;
+            $withUsername = false;
+        } while ($retry);
 
         if ($code === 'scope_not_authorized') {
             return null;
@@ -73,7 +85,11 @@ class TikTokConnector extends OAuth2Connector implements FetchesProfile
             );
         }
 
-        return AccountProfile::from(data_get($body, 'data.user.display_name'), null, data_get($body, 'data.user.avatar_large_url'));
+        return AccountProfile::from(
+            data_get($body, 'data.user.display_name'),
+            $askedUsername ? data_get($body, 'data.user.username') : null,
+            data_get($body, 'data.user.avatar_large_url'),
+        );
     }
 
     public function leadTime(): CarbonInterval

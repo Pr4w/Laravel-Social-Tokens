@@ -197,6 +197,20 @@ abstract class AbstractConnector implements ProviderConnector
     }
 
     /**
+     * Whether the account's credential is known to hold one of $scopes: for
+     * an extra a read asks for only when it is on record, since asking for it
+     * without the grant would have the whole read refused.
+     *
+     * @param  array<int, string>  $scopes
+     */
+    protected function grantsOneOf(SocialAccount $account, array $scopes): bool
+    {
+        $granted = $account->credential?->scopes;
+
+        return is_array($granted) && array_intersect($scopes, $granted) !== [];
+    }
+
+    /**
      * A JSON API's answer to a profile read (FetchesProfile): its body, null
      * when refused for want of a grant (401 or 403 right after the token was
      * handed out valid: a scope the app did not request), or a failure.

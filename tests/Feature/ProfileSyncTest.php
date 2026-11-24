@@ -363,6 +363,38 @@ it('reads TikTok\'s display name and large avatar, and tells a missing scope fro
     Http::assertSent(fn (Request $request) => $request['fields'] === 'open_id,display_name,avatar_large_url');
 });
 
+/*
+ * The driver stores the username as the nickname. The username needs
+ * user.info.profile: asked for without it, TikTok refuses the whole read.
+ */
+it('reads the TikTok username as the nickname only when user.info.profile is granted', function (?array $scopes, string $fields, string $nickname) {
+    Http::fake(['open.tiktokapis.com/v2/user/info/*' => Http::response(['data' => ['user' => [
+        'display_name' => 'Acme', 'avatar_large_url' => 'https://p16-sign.tiktokcdn.com/large.jpg', 'username' => 'acme.studio',
+    ]], 'error' => ['code' => 'ok']])]);
+    $account = profileAccount('tiktok', credential: $scopes === null ? [] : ['scopes' => $scopes]);
+
+    syncProfile($account);
+
+    expect($account->fresh()->only(['name', 'nickname']))->toBe(['name' => 'Acme', 'nickname' => $nickname]);
+    Http::assertSent(fn (Request $request) => $request['fields'] === $fields);
+})->with([
+    'granted' => [['user.info.basic', 'user.info.profile', 'video.publish'], 'open_id,display_name,avatar_large_url,username', 'acme.studio'],
+    'not granted' => [['user.info.basic', 'video.publish'], 'open_id,display_name,avatar_large_url', 'old_handle'],
+    'scopes not on record' => [null, 'open_id,display_name,avatar_large_url', 'old_handle'],
+]);
+
+it('reads the rest of the TikTok profile when the username is refused', function () {
+    Http::fake(['open.tiktokapis.com/v2/user/info/*' => fn (Request $request) => str_contains($request['fields'], 'username')
+        ? Http::response(['data' => [], 'error' => ['code' => 'scope_not_authorized', 'message' => 'no']], 401)
+        : Http::response(['data' => ['user' => ['display_name' => 'Acme', 'avatar_large_url' => 'https://p16-sign.tiktokcdn.com/large.jpg']], 'error' => ['code' => 'ok']])]);
+    $account = profileAccount('tiktok', credential: ['scopes' => ['user.info.basic', 'user.info.profile']]);
+
+    expect(syncProfile($account)->outcome)->toBe(ProfileSyncOutcome::Updated)
+        ->and($account->fresh()->only(['name', 'nickname']))->toBe(['name' => 'Acme', 'nickname' => 'old_handle']);
+
+    Http::assertSentCount(2);
+});
+
 it('reads the Google account from /userinfo', function () {
     Http::fake(['openidconnect.googleapis.com/v1/userinfo' => Http::response(['name' => 'Acme Channel', 'picture' => 'https://lh3.googleusercontent.com/a'])]);
     $account = profileAccount('google');

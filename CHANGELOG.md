@@ -3,6 +3,18 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **TikTok's profile sync refreshes the nickname.** The driver stores the
+  username as the nickname at connect, but the sync read only the display
+  name and picture, so a renamed account kept its old username. When the
+  account granted `user.info.profile` (the username's scope), the sync now
+  also asks for `username` and stores it as the nickname; refused it, it
+  reads the rest again without it. Without that scope on record, the
+  nickname is left as stored, since asking for the username without it
+  would have the whole read refused.
+
 ## [3.9.0]
 
 ### Added

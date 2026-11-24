@@ -1340,9 +1340,9 @@ too, `['x', 'tiktok']` leaves both out). `social-tokens:sync-profiles
 | Instagram (through a Page) | `GET /{ig-user-id}?fields=username,profile_picture_url` | the username | — |
 | Instagram Login | `GET /me?fields=username,profile_picture_url` | the username (`nickname` left as stored) | — |
 | Threads | `GET /me?fields=username,threads_profile_picture_url` | left as stored | — |
-| LinkedIn member | OpenID Connect `/v2/userinfo` | the member's name | `profile` |
+| LinkedIn member | OpenID Connect `/v2/userinfo`, or the Profile API `/v2/me` | the member's name | `profile`, or `r_basicprofile` / `r_liteprofile` |
 | LinkedIn organization | the member's organization list (`/rest/organizationAcls`, `/rest/organizations`, `/rest/images`), read once for all of them | the organization's name | — |
-| TikTok | `/v2/user/info/` (`display_name`, `avatar_large_url`) | the display name | `user.info.basic` |
+| TikTok | `/v2/user/info/` (`display_name`, `avatar_large_url`, and `username` as the `nickname` with `user.info.profile`) | the display name | `user.info.basic` |
 | Google / YouTube | OpenID Connect `/v1/userinfo` | the **Google account's** name, not the channel's | `profile` |
 | X (left out by default) | `GET /2/users/me` | the display name | `users.read` |
 | Pinterest | `GET /user_account` (the Sandbox's when it is on) | the business name, or the username | `user_accounts:read` |
@@ -1354,9 +1354,10 @@ and fire an event each time. So an Instagram account's `name` is its
 username, through Facebook or through Instagram Login (whose driver stores no
 `nickname`, so the sync writes none); a Threads account keeps the name its
 connection stored (the driver stores none, only the username, in
-`nickname`); a TikTok account's picture is the large one its driver stores;
-and a YouTube account carries the Google account it was connected with, not
-its channel. If you show the channel's title, read it
+`nickname`); a TikTok account's picture is the large one its driver stores,
+and its `nickname` the username, read only when the account granted
+`user.info.profile` (otherwise left as stored); and a YouTube account carries
+the Google account it was connected with, not its channel. If you show the channel's title, read it
 in your app (`youtube/v3/channels?part=snippet&mine=true`, with
 `youtube.readonly`).
 
