@@ -4,8 +4,10 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
+use Pr4w\SocialTokens\Events\AccountConnected;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -205,21 +207,179 @@ it('decides nothing on a list it cannot read whole, and says so once per provide
     $this->artisan('social-tokens:check-static')->assertSuccessful();
 
     expect(SocialAccount::where('status', AccountStatus::Active->value)->count())->toBe(6);
-    Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context) => str_contains($message, 'could not list the accounts behind 2 linkedin credential(s)'))->once();
+    Log::shouldHaveReceived('warning')->withArgs(fn (string $message, array $context) => str_contains($message, 'could not list the accounts behind 2 credential(s) of linkedin accounts'))->once();
 });
 
-it('flags nothing when too many accounts of one provider go missing at once', function () {
+/** A LinkedIn member ($member-token) and the organizations they connected. */
+function reconcileMember(string $member, array $organizations): SocialToken
+{
+    $token = SocialToken::create([
+        'provider' => 'linkedin', 'provider_holder_id' => $member, 'access_token' => "{$member}-token", 'status' => AccountStatus::Active,
+        'expires_at' => now()->addDays(30), 'renew_at' => now()->addDays(25),
+    ]);
+
+    foreach ($organizations as $id) {
+        SocialAccount::create(['provider' => 'linkedin', 'provider_user_id' => (string) $id, 'provider_holder_id' => $member, 'social_token_id' => $token->getKey(), 'status' => AccountStatus::Active]);
+    }
+
+    return $token;
+}
+
+/**
+ * LinkedIn lists, per member token, these organizations; null fails the list.
+ *
+ * @param  array<string, array<int, string>|null>  $byMember
+ */
+function reconcileOrganizationsByMember(array $byMember): void
+{
+    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function (Request $request) use ($byMember) {
+        $member = Str::between((string) ($request->header('Authorization')[0] ?? ''), 'Bearer ', '-token');
+        $organizations = array_key_exists($member, $byMember) ? $byMember[$member] : [];
+
+        return $organizations === null
+            ? Http::response(['message' => 'Internal error'], 500)
+            : Http::response(['elements' => array_map(fn (string $id) => [
+                'role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => "urn:li:organization:{$id}", 'organization~' => ['id' => (int) $id, 'localizedName' => "Org {$id}"],
+            ], $organizations)]);
+    }]);
+}
+
+it('flags nothing when too many holders lose accounts at once', function () {
     Log::spy();
     config(['social-tokens.check_static_breaker' => ['min_checked' => 2, 'max_terminal_ratio' => 0.2]]);
-    reconcileLinkedIn();
-    reconcileOrganizations([], []);
+    reconcileMember('m1', ['11']);
+    reconcileMember('m2', ['21']);
+    reconcileMember('m3', ['31']);
+    reconcileOrganizationsByMember(['m1' => [], 'm2' => [], 'm3' => []]);
 
     $this->artisan('social-tokens:check-static')
-        ->expectsOutputToContain('Aborted reconciling linkedin: 2 of 2 linkedin accounts were missing at once')
+        ->expectsOutputToContain('Aborted reconciling linkedin: 0 of 3 lists failed and 3 holders lost accounts at once')
         ->assertFailed();
 
     expect(SocialAccount::where('status', AccountStatus::Active->value)->count())->toBe(3);
     Log::shouldHaveReceived('critical')->withArgs(fn (string $message) => str_contains($message, 'skipped reconciling linkedin'))->once();
+});
+
+/*
+ * The breaker counts holders, not accounts: an agency member who loses fifteen
+ * organizations at once is one holder. Counted by accounts, that one loss
+ * tripped the breaker every day and held up everyone else's.
+ */
+it('flags the accounts of one holder who lost many at once', function () {
+    config(['social-tokens.check_static_breaker' => ['min_checked' => 2, 'max_terminal_ratio' => 0.2]]);
+    $agency = array_map(fn (int $i) => (string) (100 + $i), range(1, 15));
+    reconcileMember('agency', $agency);
+
+    foreach (range(1, 5) as $i) {
+        reconcileMember("m{$i}", ["{$i}0"]);
+    }
+
+    reconcileOrganizationsByMember(['agency' => []] + collect(range(1, 5))->mapWithKeys(fn (int $i) => ["m{$i}" => ["{$i}0"]])->all());
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Checked 20 account(s) behind 6 shared credential(s), flagged 15.')
+        ->assertSuccessful();
+
+    expect(SocialAccount::where('provider_holder_id', 'agency')->where('status', AccountStatus::NeedsReconnect->value)->count())->toBe(15);
+});
+
+it('flags nothing when too many lists fail at once, short ones getting through', function () {
+    config(['social-tokens.check_static_breaker' => ['min_checked' => 2, 'max_terminal_ratio' => 0.2]]);
+    reconcileMember('m1', ['11']);
+    reconcileMember('m2', ['21']);
+    reconcileMember('m3', ['31']);
+    reconcileOrganizationsByMember(['m1' => null, 'm2' => null, 'm3' => []]);
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Aborted reconciling linkedin: 2 of 3 lists failed')
+        ->assertFailed();
+
+    expect(SocialAccount::where('status', AccountStatus::Active->value)->count())->toBe(3);
+});
+
+it('does not reconcile a provider the token checks found in an incident', function () {
+    config([
+        'social-tokens.check_renewable' => true,
+        'social-tokens.check_static_breaker' => ['min_checked' => 2, 'max_terminal_ratio' => 0.2],
+    ]);
+    reconcileMember('m1', ['11']);
+    reconcileMember('m2', ['21']);
+
+    // Healthy Facebook Pages: the run as a whole is below the breaker, only
+    // LinkedIn's own breaker trips.
+    foreach (range(1, 9) as $i) {
+        $page = SocialToken::create(['provider' => 'facebook', 'provider_holder_id' => "page-{$i}", 'access_token' => "page-token-{$i}", 'status' => AccountStatus::Active]);
+        SocialAccount::create(['provider' => 'facebook', 'provider_user_id' => "page-{$i}", 'provider_holder_id' => 'fb-user', 'social_token_id' => $page->getKey(), 'status' => AccountStatus::Active]);
+    }
+
+    Http::fake([
+        'www.linkedin.com/oauth/v2/introspectToken' => Http::response(['active' => false, 'status' => 'revoked']),
+        'api.linkedin.com/*' => Http::response(['elements' => []]),
+        'graph.facebook.com/*' => Http::response(['id' => 'page']),
+    ]);
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Aborted for linkedin')
+        ->assertFailed();
+
+    expect(SocialAccount::where('provider', 'linkedin')->where('status', AccountStatus::Active->value)->count())->toBe(2);
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'organizationAcls'));
+});
+
+it('never judges the holder\'s own profile, even on a row without a holder', function () {
+    $token = reconcileMember('member-1', ['111']);
+    SocialAccount::create(['provider' => 'linkedin', 'provider_user_id' => 'member-1', 'provider_holder_id' => null, 'social_token_id' => $token->getKey(), 'status' => AccountStatus::Active]);
+    reconcileOrganizationsByMember(['member-1' => ['111']]);
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('Checked 1 account(s) behind 1 shared credential(s), flagged 0.');
+
+    expect(reconcileAccount('linkedin', 'member-1')->status)->toBe(AccountStatus::Active);
+});
+
+it('does not flag on a list read with a token a reconnect replaced during the run', function () {
+    $token = reconcileLinkedIn();
+    $calls = 0;
+
+    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function () use (&$calls, $token) {
+        if (++$calls === 2) {
+            // The member, an admin again, reconnects: same credential, new token
+            $token->fresh()->forceFill(['access_token' => 'reconnected-token'])->save();
+        }
+
+        return Http::response(['elements' => [['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:111', 'organization~' => ['id' => 111, 'localizedName' => 'Org 111']]]]);
+    }]);
+
+    $this->artisan('social-tokens:check-static')->assertSuccessful();
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
+});
+
+it('brings back at reconnect an Instagram account flagged as no longer managed that the token reaches', function () {
+    Event::fake([AccountConnected::class]);
+    $token = reconcileInstagram();
+    reconcileAccount('instagram', 'ig-2')->forceFill(['status' => AccountStatus::NeedsReconnect, 'last_error' => 'Instagram account no longer managed by the connected Facebook user.'])->save();
+    reconcileInstagramGraph(['id' => 'ig-2']);
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'fb-user-1'])]);
+
+    $accounts = app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'fb-user-1', extend: false);
+
+    expect(reconcileAccount('instagram', 'ig-2')->status)->toBe(AccountStatus::Active)
+        ->and(reconcileAccount('instagram', 'ig-2')->last_error)->toBeNull()
+        ->and(reconcileAccount('instagram', 'ig-2')->social_token_id)->toBe($token->getKey())
+        ->and($accounts->pluck('provider_user_id'))->toContain('ig-2');
+
+    Event::assertDispatched(AccountConnected::class, fn ($event) => $event->account->provider_user_id === 'ig-2');
+});
+
+it('leaves an account flagged for another reason as it is at reconnect', function () {
+    reconcileInstagram();
+    reconcileAccount('instagram', 'ig-2')->forceFill(['status' => AccountStatus::NeedsReconnect, 'last_error' => 'Missing permission'])->save();
+    reconcileInstagramGraph(['id' => 'ig-2']);
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'fb-user-1'])]);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'fb-user-1', extend: false);
+
+    expect(reconcileAccount('instagram', 'ig-2')->status)->toBe(AccountStatus::NeedsReconnect);
 });
 
 it('leaves a token it cannot use now to the renewal', function (array $credential) {

@@ -252,7 +252,8 @@ class CheckStaticCredentials extends Command
             $this->warn("{$errors} credential(s) could not be checked; see the log.");
         }
 
-        $reconcileTripped = $this->reconcileAccounts($registry);
+        // A provider phase 1 found in an incident is not reconciled either.
+        $reconcileTripped = $this->reconcileAccounts($registry, $tripped);
 
         return $tripped === [] && ! $reconcileTripped ? self::SUCCESS : self::FAILURE;
     }
@@ -267,12 +268,19 @@ class CheckStaticCredentials extends Command
      * confirms it (a one-off answer leaving it out decides nothing) and the
      * connector, asked about that account itself, says it is out of reach
      * (isStillReachable(): an Instagram account reached through Business
-     * Manager is not on the list, yet posts). When too many accounts of one
-     * provider are missing at once, none of them is judged.
+     * Manager is not on the list, yet posts).
      *
-     * @return bool Whether a provider's breaker stopped its verdicts.
+     * Nothing is decided for an account provider when phase 1 found its
+     * credentials' provider in an incident ($trippedProviders), when too many
+     * of its lists could not be read (an outage letting a few short lists
+     * through), or when too many holders lost accounts at once. Holders, not
+     * accounts: a member who loses fifteen organizations at once is one
+     * holder, whose loss must not hold up everyone else's every day.
+     *
+     * @param  array<string, true>  $trippedProviders  credential providers phase 1's breaker stopped
+     * @return bool Whether a breaker stopped a provider's verdicts.
      */
-    protected function reconcileAccounts(ConnectorRegistry $registry): bool
+    protected function reconcileAccounts(ConnectorRegistry $registry, array $trippedProviders = []): bool
     {
         if (! Settings::reconcileAccounts()) {
             return false;
@@ -284,7 +292,7 @@ class CheckStaticCredentials extends Command
         foreach ($registry->configured() as $provider) {
             $connector = $registry->for($provider);
 
-            if ($connector instanceof ListsReachableAccounts) {
+            if ($connector instanceof ListsReachableAccounts && ! isset($trippedProviders[$provider])) {
                 $connectors[$provider] = $connector;
             }
         }
@@ -293,32 +301,47 @@ class CheckStaticCredentials extends Command
             return false;
         }
 
-        /** @var array<string, int> $candidates account provider => accounts listed against */
-        $candidates = [];
-
-        /** @var array<string, list<array{account: SocialAccount, reason: string}>> $missing */
-        $missing = [];
-
-        /** @var array<string, array{credentials: int, reason: ?string}> $unreadable */
+        // Per account provider: lists tried, lists that could not be read,
+        // holders with accounts confirmed missing, accounts listed against.
+        /** @var array<string, int> $lists */
+        $lists = [];
+        /** @var array<string, int> $unreadable */
         $unreadable = [];
+        /** @var array<string, int> $holders */
+        $holders = [];
+        /** @var array<string, int> $accountsChecked */
+        $accountsChecked = [];
+        /** @var array<string, string|null> $reasons */
+        $reasons = [];
 
-        $listed = 0;
+        /** @var array<string, list<array{account: SocialAccount, reason: string, cipher: mixed}>> $missing */
+        $missing = [];
 
         SocialToken::query()
             ->whereIn('provider', array_keys($connectors))
             ->where('status', AccountStatus::Active->value)
             ->lazyById()
-            ->each(function (SocialToken $token) use ($connectors, &$candidates, &$missing, &$unreadable, &$listed) {
+            ->each(function (SocialToken $token) use ($connectors, &$lists, &$unreadable, &$holders, &$accountsChecked, &$reasons, &$missing) {
                 $connector = $connectors[$token->provider];
 
+                // Never the holder's own account (a LinkedIn member's
+                // profile), whatever its row says about its holder.
                 $accounts = $token->accounts()
                     ->where('status', AccountStatus::Active->value)
                     ->whereIn('provider', $connector->reachableAccountProviders())
+                    ->when($token->provider_holder_id !== null, fn ($query) => $query->where('provider_user_id', '!=', $token->provider_holder_id))
                     ->where(fn ($query) => $query->whereNull('provider_holder_id')->orWhereColumn('provider_user_id', '!=', 'provider_holder_id'))
                     ->get();
 
                 if ($accounts->isEmpty() || ! $token->tokensDecrypt() || $token->isAccessTokenExpired()) {
                     return;
+                }
+
+                $cipher = $token->getRawOriginal('access_token');
+                $providers = $accounts->pluck('provider')->unique()->all();
+
+                foreach ($providers as $provider) {
+                    $lists[$provider] = ($lists[$provider] ?? 0) + 1;
                 }
 
                 $ids = $this->reachableAccountIds($connector, $token);
@@ -332,8 +355,10 @@ class CheckStaticCredentials extends Command
                 }
 
                 if ($ids instanceof RenewalResult) {
-                    $unreadable[$token->provider] ??= ['credentials' => 0, 'reason' => $ids->reason];
-                    $unreadable[$token->provider]['credentials']++;
+                    foreach ($providers as $provider) {
+                        $unreadable[$provider] = ($unreadable[$provider] ?? 0) + 1;
+                        $reasons[$provider] ??= $ids->reason;
+                    }
 
                     return;
                 }
@@ -342,50 +367,58 @@ class CheckStaticCredentials extends Command
                 // be reached another way. Only a "no" flags it.
                 $absent = $absent->filter(fn (SocialAccount $account) => $this->stillReachable($connector, $token, $account) === false);
 
-                $listed++;
-
                 foreach ($accounts as $account) {
-                    $candidates[$account->provider] = ($candidates[$account->provider] ?? 0) + 1;
+                    $accountsChecked[$account->provider] = ($accountsChecked[$account->provider] ?? 0) + 1;
+                }
+
+                foreach ($absent->pluck('provider')->unique() as $provider) {
+                    $holders[$provider] = ($holders[$provider] ?? 0) + 1;
                 }
 
                 foreach ($absent as $account) {
-                    $missing[$account->provider][] = ['account' => $account, 'reason' => $connector->unreachableAccountReason()];
+                    $missing[$account->provider][] = ['account' => $account, 'reason' => $connector->unreachableAccountReason(), 'cipher' => $cipher];
                 }
             });
-
-        foreach ($unreadable as $provider => $failure) {
-            Log::warning("[social-tokens] check-static could not list the accounts behind {$failure['credentials']} {$provider} credential(s); none of them was judged.", [
-                'provider' => (string) $provider,
-                'credentials' => $failure['credentials'],
-                'reason' => $failure['reason'],
-            ]);
-        }
 
         ['min_checked' => $minChecked, 'max_terminal_ratio' => $maxRatio] = Settings::staticCheckBreaker();
         $tripped = false;
         $flagged = 0;
 
-        foreach ($missing as $provider => $entries) {
+        foreach ($lists as $provider => $tried) {
             $provider = (string) $provider;
+            $failed = $unreadable[$provider] ?? 0;
+            $losing = $holders[$provider] ?? 0;
 
-            if ($this->tripsBreaker($candidates[$provider], count($entries), $minChecked, $maxRatio)) {
+            if ($failed > 0) {
+                Log::warning("[social-tokens] check-static could not list the accounts behind {$failed} credential(s) of {$provider} accounts; none of them was judged.", [
+                    'provider' => $provider,
+                    'credentials' => $failed,
+                    'reason' => $reasons[$provider] ?? null,
+                ]);
+            }
+
+            // An outage letting a few short lists through, or too many
+            // holders losing accounts at once: nobody is judged.
+            if ($this->tripsBreaker($tried, $failed, $minChecked, $maxRatio)
+                || $this->tripsBreaker($tried - $failed, $losing, $minChecked, $maxRatio)) {
                 $tripped = true;
 
-                Log::critical("[social-tokens] check-static skipped reconciling {$provider}: too many of its accounts missing from their holders' lists at once", [
+                Log::critical("[social-tokens] check-static skipped reconciling {$provider}: too many of its lists failed, or too many holders lost accounts, at once", [
                     'provider' => $provider,
-                    'checked' => $candidates[$provider],
-                    'missing' => count($entries),
+                    'lists' => $tried,
+                    'unreadable' => $failed,
+                    'holders_missing_accounts' => $losing,
                     'max_terminal_ratio' => $maxRatio,
                 ]);
 
-                $this->error('Aborted reconciling '.$provider.': '.count($entries)." of {$candidates[$provider]} {$provider} accounts were missing at once; none of them was flagged.");
+                $this->error("Aborted reconciling {$provider}: {$failed} of {$tried} lists failed and {$losing} holders lost accounts at once; none of them was flagged.");
 
                 continue;
             }
 
-            foreach ($entries as ['account' => $account, 'reason' => $reason]) {
+            foreach ($missing[$provider] ?? [] as ['account' => $account, 'reason' => $reason, 'cipher' => $cipher]) {
                 try {
-                    $flagged += $this->flagAccount($account, $reason) ? 1 : 0;
+                    $flagged += $this->flagAccount($account, $reason, $cipher) ? 1 : 0;
                 } catch (Throwable $e) {
                     Log::error('[social-tokens] Could not record an account check', [
                         'account_id' => $account->getKey(),
@@ -396,10 +429,11 @@ class CheckStaticCredentials extends Command
             }
         }
 
-        $checked = array_sum($candidates);
+        $checked = array_sum($accountsChecked);
 
         if ($checked > 0) {
-            $this->info("Checked {$checked} account(s) behind {$listed} shared credential(s), flagged {$flagged}.");
+            $credentials = array_sum($lists) - array_sum($unreadable);
+            $this->info("Checked {$checked} account(s) behind {$credentials} shared credential(s), flagged {$flagged}.");
         }
 
         return $tripped;
@@ -407,10 +441,11 @@ class CheckStaticCredentials extends Command
 
     /**
      * Flag an account its holder no longer reaches, only while it still posts
-     * with the credential that was listed: a reconnect meanwhile moved or
-     * restored it.
+     * with the credential that was listed, and that credential still holds
+     * the token that was listed: a reconnect during the run (onto another
+     * credential, or onto the same one with a new token) wins.
      */
-    protected function flagAccount(SocialAccount $account, string $reason): bool
+    protected function flagAccount(SocialAccount $account, string $reason, mixed $cipher): bool
     {
         $current = SocialAccount::query()
             ->whereKey($account->getKey())
@@ -418,7 +453,12 @@ class CheckStaticCredentials extends Command
             ->where('social_token_id', $account->social_token_id)
             ->first();
 
-        if ($current === null) {
+        $sameToken = SocialToken::query()
+            ->whereKey($account->social_token_id)
+            ->where('access_token', $cipher)
+            ->exists();
+
+        if ($current === null || ! $sameToken) {
             return false;
         }
 

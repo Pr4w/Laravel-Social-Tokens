@@ -1,5 +1,13 @@
 # Upgrading
 
+## From 3.7.0 to 3.7.1
+
+Nothing to change. If your app ran 3.7.0, an Instagram account reached
+through Business Manager may have been flagged "Instagram account no longer
+managed by the connected Facebook user": the account's next reconnect brings
+it back. `profile_sync_except` now defaults to null (every `XConnector`,
+whatever its key); a list you published, such as `['x']`, still applies.
+
 ## From 3.6 to 3.7
 
 Nothing to change, no migration. The daily `check-static` run now also lists,

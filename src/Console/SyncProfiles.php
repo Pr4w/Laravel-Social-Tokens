@@ -5,6 +5,7 @@ namespace Pr4w\SocialTokens\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Actions\SyncAccountProfile;
+use Pr4w\SocialTokens\Connectors\XConnector;
 use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\ProfileSyncOutcome;
@@ -22,8 +23,9 @@ use Pr4w\SocialTokens\Support\Settings;
  * A profile it cannot read is left as it is: the run logs one warning per
  * provider with failures, never one per account, and flags nothing.
  *
- * The providers in `profile_sync_except` (X by default, which bills every
- * read) are left out, unless --provider names them.
+ * The providers in `profile_sync_except` are left out, unless --provider
+ * names them: by default, every provider whose connector is an XConnector,
+ * whatever its key (X bills every read).
  */
 class SyncProfiles extends Command
 {
@@ -41,7 +43,10 @@ class SyncProfiles extends Command
         if ($only = (array) $this->option('provider')) {
             $providers = array_values(array_intersect($providers, $only));
         } else {
-            $providers = array_values(array_diff($providers, Settings::profileSyncExcept()));
+            $except = Settings::profileSyncExcept()
+                ?? array_values(array_filter($providers, fn (string $provider) => $registry->for($provider) instanceof XConnector));
+
+            $providers = array_values(array_diff($providers, $except));
         }
 
         $counts = array_fill_keys(array_map(fn (ProfileSyncOutcome $outcome) => $outcome->name, ProfileSyncOutcome::cases()), 0);

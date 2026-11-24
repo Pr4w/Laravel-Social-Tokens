@@ -128,13 +128,15 @@ return [
     | dispatch_schedule; null disables it (SyncAccountProfile still syncs one
     | account on demand).
     |
-    | profile_sync_except: the providers the run leaves out. X by default: it
-    | bills every API read, and the sync would read GET /2/users/me for each X
-    | account every day. Remove it from the list to sync X accounts too.
+    | profile_sync_except: the provider keys the run leaves out. Null (the
+    | default): every provider whose connector bills each API read, X under
+    | whatever key you registered XConnector (the sync would read
+    | GET /2/users/me for each X account every day). A list replaces it: []
+    | syncs X too, ['x', 'tiktok'] leaves both out.
     |
     */
     'profile_sync_schedule' => 'daily',
-    'profile_sync_except' => ['x'],
+    'profile_sync_except' => null,
 
     /*
     |--------------------------------------------------------------------------

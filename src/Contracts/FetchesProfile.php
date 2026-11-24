@@ -16,10 +16,12 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 interface FetchesProfile
 {
     /**
-     * The account's current profile. $accessToken hands out a valid token of
-     * the credential the account posts with (SocialTokens::validAccessTokenFor(),
-     * so it may renew it, or throw NeedsReconnectException): call it only when
-     * the profile needs one. Null when the token was not granted what the
+     * The account's current profile. $accessToken hands out the access token
+     * stored on the credential the account posts with, as it is: never
+     * renewed (that is the renewal's job), and a transient
+     * NeedsReconnectException when there is none to use now (expired, or
+     * unreadable), which skips the account. Call it only when the profile
+     * needs one. Null when the token was not granted what the
      * profile needs (a scope the app did not request): the stored profile
      * stays. A failure is a RenewalResult and says nothing about the token: a
      * profile read never flags a credential. Must not write to the database.

@@ -855,12 +855,22 @@ the member is an admin again, brings the account back.
   the list shows: two reads that agree are enough.)
 - A list that cannot be read whole (an error, a truncated page) decides
   nothing; one warning per provider says how many tokens could not be listed.
-- When too many accounts of one provider are missing at once, none is
-  flagged: the same breaker as the token checks (`check_static_breaker`), and
-  the command exits with a failure code.
+- Nobody is judged for a provider when its token checks tripped the breaker
+  in the same run (an incident on its side), when too many of its lists
+  could not be read (an outage letting a few short lists through), or when
+  too many holders lost accounts at once: the same thresholds as the token
+  checks (`check_static_breaker`), and the command exits with a failure
+  code. Holders, not accounts: a member who loses fifteen organizations at
+  once is one holder, and is flagged without holding up anyone else.
+- A verdict applies only if the account still posts with the token that was
+  listed: a reconnect during the run, onto another credential or with a new
+  token, wins.
 - A token that has expired (left to the renewal) or does not decrypt is not
-  listed, nor are accounts already flagged or disconnected, nor a LinkedIn
-  member's own profile.
+  listed, nor are accounts already flagged or disconnected, nor the holder's
+  own account (a LinkedIn member's profile), whatever its row says.
+- A reconnect brings back an Instagram account flagged as no longer managed
+  when Meta answers about it (one reached through Business Manager that 3.7.0
+  flagged).
 - One listing per such token and run (two when one is missing). Facebook Pages
   need none: each has its own token, which dies with the user's role.
 - A connector opts in with `Contracts\ListsReachableAccounts`; set
@@ -1278,20 +1288,22 @@ account and change their picture, and the picture URLs Meta, LinkedIn and
 TikTok hand out are signed and expire within days or weeks, so a stored one
 eventually stops loading. A daily `social-tokens:sync-profiles` run
 (`profile_sync_schedule`, `null` to disable) keeps them current, one light
-call per active account. **X is left out by default**
-(`profile_sync_except`, `['x']`): X bills every API read, and the run would
-read each X account every day. Take it out of the list, or run
-`social-tokens:sync-profiles --provider=x` when you choose, to sync them.
+call per active account. **X is left out by default**: X bills every API
+read, and the run would read each X account every day. `profile_sync_except`
+(null) leaves out every provider whose connector is an `XConnector`, under
+whatever key you registered it; a list replaces that default (`[]` syncs X
+too, `['x', 'tiktok']` leaves both out). `social-tokens:sync-profiles
+--provider=x` syncs them when you choose.
 
 | Provider | Read from | `name` | Needs |
 |---|---|---|---|
 | Facebook Page | `GET /{page-id}?fields=name,picture{url}` (its Page token) | the Page's name | — |
 | Instagram (through a Page) | `GET /{ig-user-id}?fields=username,profile_picture_url` | the username | — |
-| Instagram Login | `GET /me?fields=username,profile_picture_url` | the username | — |
+| Instagram Login | `GET /me?fields=username,profile_picture_url` | the username (`nickname` left as stored) | — |
 | Threads | `GET /me?fields=username,threads_profile_picture_url` | left as stored | — |
 | LinkedIn member | OpenID Connect `/v2/userinfo` | the member's name | `profile` |
 | LinkedIn organization | the member's organization list, read once for all of them | the organization's name | — |
-| TikTok | `/v2/user/info/` (`display_name`, `avatar_url`) | the display name | `user.info.basic` |
+| TikTok | `/v2/user/info/` (`display_name`, `avatar_large_url`) | the display name | `user.info.basic` |
 | Google / YouTube | OpenID Connect `/v1/userinfo` | the **Google account's** name, not the channel's | `profile` |
 | X (left out by default) | `GET /2/users/me` | the display name | `users.read` |
 | Pinterest | `GET /user_account` (the Sandbox's when it is on) | the business name, or the username | `user_accounts:read` |
@@ -1300,10 +1312,12 @@ read each X account every day. Take it out of the list, or run
 Each attribute gets what a connection stores in it, so that a reconnect and
 the next sync agree: on two different values, each would replace the other,
 and fire an event each time. So an Instagram account's `name` is its
-username, through Facebook or through Instagram Login; a Threads account
-keeps the name its connection stored (the driver stores none, only the
-username, in `nickname`); and a YouTube account carries the Google account it
-was connected with, not its channel. If you show the channel's title, read it
+username, through Facebook or through Instagram Login (whose driver stores no
+`nickname`, so the sync writes none); a Threads account keeps the name its
+connection stored (the driver stores none, only the username, in
+`nickname`); a TikTok account's picture is the large one its driver stores;
+and a YouTube account carries the Google account it was connected with, not
+its channel. If you show the channel's title, read it
 in your app (`youtube/v3/channels?part=snippet&mine=true`, with
 `youtube.readonly`).
 
@@ -1423,7 +1437,8 @@ Implement `Contracts\FetchesProfile` to have `sync-profiles` keep the
 accounts' names and pictures current: `fetchProfile($account, $accessToken)`
 returns an `AccountProfile` (`AccountProfile::from($name, $nickname,
 $avatar)`), `null` when the token lacks what the profile needs, or a failure
-`RenewalResult`; `$accessToken()` hands out a valid token only when called.
+`RenewalResult`; `$accessToken()` hands out the stored access token, as it is
+(never renewed; an expired one skips the account), only when called.
 `profileBody()` and `grantsNoneOf()` (in `AbstractConnector`) read a JSON
 answer and check the stored scopes.
 A connector whose connections yield several accounts also implements

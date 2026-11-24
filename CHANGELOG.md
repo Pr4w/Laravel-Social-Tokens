@@ -17,7 +17,36 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `ListsReachableAccounts::isStillReachable()` asks a connector about one
   missing account (LinkedIn answers false: its organization list is the only
   way to an organization), and `FacebookConnector::instagramAccountReachable()`
-  is the Instagram check.
+  is the Instagram check. A reconnect also brings back an Instagram account
+  flagged as no longer managed that Meta says the token reaches.
+- **The reconciliation's breaker counted accounts, not holders.** A member
+  losing fifteen organizations at once tripped it, every day, and held up
+  every other member's reconciliation until they reconnected. It now counts
+  holders with missing accounts. It also stops a provider's verdicts when the
+  token checks of the same run found it in an incident, or when too many of
+  its lists could not be read: an outage letting a few short lists through
+  no longer flags their accounts.
+- A reconciliation verdict applies only if the credential still holds the
+  token that was listed: a member who became an admin again and reconnected
+  during the run is no longer flagged on the old list.
+- The holder's own account (a LinkedIn member's profile) is never judged,
+  even on a row without a `provider_holder_id`.
+- A failed organization or Page list is kept for the run, like a successful
+  one: a member's other accounts no longer list again, up to 20 result
+  pages each, while the provider refuses.
+- **Profile sync:**
+  - `profile_sync_except` now defaults to null: every provider whose
+    connector is an `XConnector` is left out, under whatever key it was
+    registered (`twitter`, from the older driver), not only `x`. A list
+    still replaces the default.
+  - TikTok stores `avatar_large_url`, as its driver does at connect; the
+    smaller `avatar_url` replaced it after every reconnect. A TikTok 401 is
+    read by its `error.code`: `scope_not_authorized` is a missing grant,
+    `access_token_invalid` a failure (it was reported as a missing grant).
+  - Instagram Login no longer writes a `nickname`: its driver stores none,
+    so every reconnect and the next sync swapped it.
+  - `FetchesProfile` and the README describe the token a profile read gets:
+    the stored one, never renewed.
 
 ## [3.7.0]
 

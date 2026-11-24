@@ -46,9 +46,9 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
     /**
      * Page lists read to resolve a 100/33, by user credential and its stored
      * token, so a user with several such Pages is asked once per check-static
-     * run. In memory only: they hold Page tokens.
+     * run, a failure included. In memory only: they hold Page tokens.
      *
-     * @var array<string, array{at: int, pages: array<int, array<string, mixed>>}>
+     * @var array<string, array{at: int, pages: array<int, array<string, mixed>>|RenewalResult}>
      */
     private array $pageLists = [];
 
@@ -208,9 +208,9 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
 
         $pages = $this->fetchPages((string) $user->access_token, 'id,access_token');
 
-        if (! $pages instanceof RenewalResult) {
-            $this->pageLists[$key] = ['at' => time(), 'pages' => $pages];
-        }
+        // A failure too: the user's other Pages must not list again, up to
+        // 20 result pages each, while Meta is refusing.
+        $this->pageLists[$key] = ['at' => time(), 'pages' => $pages];
 
         return $pages;
     }

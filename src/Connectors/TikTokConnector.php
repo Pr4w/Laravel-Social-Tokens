@@ -38,8 +38,11 @@ class TikTokConnector extends OAuth2Connector implements FetchesProfile
     }
 
     /**
-     * The display name and avatar (user.info.basic). TikTok answers its
-     * errors in error.code, "ok" on success.
+     * The display name and the large avatar (user.info.basic), the picture
+     * SocialiteProviders' TikTok driver stores at connect. TikTok answers its
+     * errors in error.code, "ok" on success, and a missing scope with a 401
+     * whose code says so: read before the status, so that one is a missing
+     * grant and an invalid token a failure.
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {
@@ -48,24 +51,29 @@ class TikTokConnector extends OAuth2Connector implements FetchesProfile
         }
 
         $token = $accessToken();
-        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
-            ->get(self::USER_INFO_URL, ['fields' => 'open_id,display_name,avatar_url'])), 'the TikTok profile');
+        $response = $this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
+            ->get(self::USER_INFO_URL, ['fields' => 'open_id,display_name,avatar_large_url']));
 
-        if (! is_array($body)) {
-            return $body;
+        if ($response instanceof RenewalResult) {
+            return $response;
         }
 
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
         $code = data_get($body, 'error.code');
 
         if ($code === 'scope_not_authorized') {
             return null;
         }
 
-        if ($code !== null && $code !== 'ok') {
-            return RenewalResult::unknownFailure('Could not read the TikTok profile: '.(is_scalar($code) ? $code : 'unknown error').'.', ['code' => is_scalar($code) ? $code : null]);
+        if (! $response->successful() || ($code !== null && $code !== 'ok')) {
+            return RenewalResult::unknownFailure(
+                'Could not read the TikTok profile: '.(is_scalar($code) ? $code : 'HTTP '.$response->status()).'.',
+                ['status' => $response->status(), 'code' => is_scalar($code) ? $code : null],
+            );
         }
 
-        return AccountProfile::from(data_get($body, 'data.user.display_name'), null, data_get($body, 'data.user.avatar_url'));
+        return AccountProfile::from(data_get($body, 'data.user.display_name'), null, data_get($body, 'data.user.avatar_large_url'));
     }
 
     public function leadTime(): CarbonInterval

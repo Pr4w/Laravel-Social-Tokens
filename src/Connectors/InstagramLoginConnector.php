@@ -55,6 +55,12 @@ class InstagramLoginConnector extends LongLivedTokenConnector
         return 'Instagram';
     }
 
+    /** Instagram's driver stores the username as the name, and no nickname: neither does the sync. */
+    protected function profileNickname(array $body): mixed
+    {
+        return null;
+    }
+
     /** The Graph API version of the connector's block (`graph_version`), or the Facebook connectors' default. */
     public function graphVersion(): string
     {

@@ -8,11 +8,13 @@ use Illuminate\Support\Facades\Facade;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Actions\SyncAccountProfile;
+use Pr4w\SocialTokens\Connectors\XConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\ProfileSyncOutcome;
 use Pr4w\SocialTokens\Events\AccountProfileUpdated;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\ProfileSyncResult;
 use Pr4w\SocialTokens\Support\Settings;
 
@@ -185,17 +187,19 @@ it('takes a Meta permission error as a missing grant', function () {
  * an AccountProfileUpdated each time. Instagram's driver stores the username
  * as the name, as InstagramConnector does; Threads' stores no name.
  */
-it('reads Threads and Instagram Login accounts on their own /me, with the name a connection stores', function (string $provider, string $host, string $picture, string $name) {
+it('reads Threads and Instagram Login accounts on their own /me, with the name and nickname a connection stores', function (string $provider, string $host, string $picture, string $name, string $nickname) {
     Http::fake(["{$host}/*" => Http::response(['username' => 'acme', 'name' => 'Acme Studio', $picture => 'https://cdn.example.com/new.jpg'])]);
     $account = profileAccount($provider);
 
     syncProfile($account);
 
-    expect($account->fresh()->only(['name', 'nickname', 'avatar']))->toBe(['name' => $name, 'nickname' => 'acme', 'avatar' => 'https://cdn.example.com/new.jpg']);
+    expect($account->fresh()->only(['name', 'nickname', 'avatar']))->toBe(['name' => $name, 'nickname' => $nickname, 'avatar' => 'https://cdn.example.com/new.jpg']);
     Http::assertSent(fn (Request $request) => $request['fields'] === "username,{$picture}" && $request['access_token'] === "{$provider}-token");
 })->with([
-    'Threads: the name is left alone' => ['threads', 'graph.threads.net', 'threads_profile_picture_url', 'Old name'],
-    'Instagram Login: the username, as through Facebook' => ['instagram_login', 'graph.instagram.com', 'profile_picture_url', 'acme'],
+    // Threads' driver stores no name, the username as nickname
+    'Threads: the name is left alone' => ['threads', 'graph.threads.net', 'threads_profile_picture_url', 'Old name', 'acme'],
+    // Instagram's driver stores the username as name, and no nickname
+    'Instagram Login: the username as name, the nickname left alone' => ['instagram_login', 'graph.instagram.com', 'profile_picture_url', 'acme', 'old_handle'],
 ]);
 
 it('stores the same name for an Instagram account through Facebook and through Instagram Login', function () {
@@ -243,18 +247,25 @@ it('reads LinkedIn organizations from one listing of the member\'s', function ()
     Http::assertSentCount(1);
 });
 
-it('reads TikTok\'s display name and avatar, and its scope error as a missing grant', function () {
+/*
+ * TikTok's driver stores avatar_large_url at connect: the sync stores the same
+ * picture. TikTok answers a missing scope, and an invalid token, with HTTP 401
+ * and says which in error.code (its v2 error handling doc).
+ */
+it('reads TikTok\'s display name and large avatar, and tells a missing scope from an invalid token', function () {
     Http::fake(['open.tiktokapis.com/v2/user/info/*' => Http::sequence()
-        ->push(['data' => ['user' => ['display_name' => 'Acme', 'avatar_url' => 'https://p16-sign.tiktokcdn.com/a.jpg?x-expires=1']], 'error' => ['code' => 'ok']])
-        ->push(['data' => [], 'error' => ['code' => 'scope_not_authorized', 'message' => 'no']]),
+        ->push(['data' => ['user' => ['display_name' => 'Acme', 'avatar_url' => 'https://p16-sign.tiktokcdn.com/small.jpg', 'avatar_large_url' => 'https://p16-sign.tiktokcdn.com/large.jpg?x-expires=1']], 'error' => ['code' => 'ok']])
+        ->push(['data' => [], 'error' => ['code' => 'scope_not_authorized', 'message' => 'no']], 401)
+        ->push(['data' => [], 'error' => ['code' => 'access_token_invalid', 'message' => 'invalid']], 401),
     ]);
     $account = profileAccount('tiktok');
 
     expect(syncProfile($account)->outcome)->toBe(ProfileSyncOutcome::Updated)
-        ->and($account->fresh()->avatar)->toBe('https://p16-sign.tiktokcdn.com/a.jpg?x-expires=1')
-        ->and(syncProfile($account->fresh())->outcome)->toBe(ProfileSyncOutcome::Unavailable);
+        ->and($account->fresh()->avatar)->toBe('https://p16-sign.tiktokcdn.com/large.jpg?x-expires=1')
+        ->and(syncProfile($account->fresh())->outcome)->toBe(ProfileSyncOutcome::Unavailable)
+        ->and(syncProfile($account->fresh()))->outcome->toBe(ProfileSyncOutcome::Failed)->reason->toContain('access_token_invalid');
 
-    Http::assertSent(fn (Request $request) => $request['fields'] === 'open_id,display_name,avatar_url');
+    Http::assertSent(fn (Request $request) => $request['fields'] === 'open_id,display_name,avatar_large_url');
 });
 
 it('reads the Google account from /userinfo', function () {
@@ -360,17 +371,35 @@ it('leaves X out of the daily run unless asked', function () {
     expect($x->fresh()->name)->toBe('New name');
 });
 
-it('reads profile_sync_except as a list or a comma-separated string, X when missing', function (mixed $value, array $except) {
+it('reads profile_sync_except as a list or a comma-separated string, null (the billed connectors) when missing', function (mixed $value, ?array $except) {
     config(['social-tokens.profile_sync_except' => $value]);
 
     expect(Settings::profileSyncExcept())->toBe($except);
 })->with([
-    'the shipped default' => [['x'], ['x']],
+    'the shipped default' => [null, null],
     'a string' => ['x, tiktok', ['x', 'tiktok']],
     'nothing left out' => [[], []],
-    'missing from a published config' => [null, ['x']],
-    'unreadable' => [42, ['x']],
+    'a list of 3.6.1' => [['x'], ['x']],
+    'unreadable' => [42, null],
 ]);
+
+it('leaves X out by default under whatever key the app registered it', function () {
+    config(['social-tokens.connectors.twitter' => ['driver' => XConnector::class, 'credentials' => 'x']]);
+    app()->forgetInstance(ConnectorRegistry::class);
+    Http::fake(['api.x.com/2/users/me*' => Http::response(['data' => ['name' => 'New name']])]);
+    $twitter = profileAccount('twitter');
+
+    $this->artisan('social-tokens:sync-profiles')->assertSuccessful();
+
+    expect($twitter->fresh()->name)->toBe('Old name');
+    Http::assertNothingSent();
+
+    // An explicit list replaces the default: [] syncs it
+    config(['social-tokens.profile_sync_except' => []]);
+    $this->artisan('social-tokens:sync-profiles')->assertSuccessful();
+
+    expect($twitter->fresh()->name)->toBe('New name');
+});
 
 it('never renews a token to read a profile', function () {
     Http::fake();

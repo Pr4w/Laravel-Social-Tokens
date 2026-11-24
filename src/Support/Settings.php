@@ -65,22 +65,23 @@ final class Settings
     }
 
     /**
-     * The providers the daily profile sync leaves out (`profile_sync_except`):
-     * X by default, which bills every API read. A list, or a comma-separated
-     * string; a missing or unreadable value keeps the default.
+     * The providers the daily profile sync leaves out (`profile_sync_except`),
+     * as a list or a comma-separated string. Null (the default, a missing or
+     * an unreadable value): the providers whose connector bills every read,
+     * under whatever key (SyncProfiles: XConnector).
      *
-     * @return array<int, string>
+     * @return array<int, string>|null
      */
-    public static function profileSyncExcept(): array
+    public static function profileSyncExcept(): ?array
     {
-        $value = config('social-tokens.profile_sync_except', ['x']);
+        $value = config('social-tokens.profile_sync_except');
 
         if (is_string($value)) {
             $value = explode(',', $value);
         }
 
         if (! is_array($value)) {
-            return ['x'];
+            return null;
         }
 
         return array_values(array_filter(array_map(fn ($provider) => is_string($provider) ? trim($provider) : '', $value), fn (string $provider) => $provider !== ''));

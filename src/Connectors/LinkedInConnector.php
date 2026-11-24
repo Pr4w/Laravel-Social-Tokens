@@ -53,9 +53,10 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
     /**
      * Organization lists read for profiles, by member token, so a member's
-     * organizations cost one listing per sync-profiles run. In memory only.
+     * organizations cost one listing per sync-profiles run, a failure
+     * included. In memory only.
      *
-     * @var array<string, array{at: int, organizations: array<int, array<string, mixed>>}>
+     * @var array<string, array{at: int, organizations: array<int, array<string, mixed>>|RenewalResult}>
      */
     private array $organizationLists = [];
 
@@ -206,9 +207,9 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
         $organizations = $this->fetchOrganizations($accessToken);
 
-        if (! $organizations instanceof RenewalResult) {
-            $this->organizationLists[$key] = ['at' => time(), 'organizations' => $organizations];
-        }
+        // A failure too: the member's other organizations must not list
+        // again, up to 20 result pages each, while LinkedIn is refusing.
+        $this->organizationLists[$key] = ['at' => time(), 'organizations' => $organizations];
 
         return $organizations;
     }

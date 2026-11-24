@@ -34,6 +34,9 @@ class StoreInstagramAccounts implements StoresConnections
 
     private const PAGE_FIELDS = 'id,name,access_token,instagram_business_account{id,username,profile_picture_url}';
 
+    /** The reason an Instagram account missing from the user's Pages is flagged with. */
+    private const NO_LONGER_MANAGED = 'Instagram account no longer managed by the connected Facebook user.';
+
     public function __construct(protected ConnectorRegistry $registry) {}
 
     /**
@@ -247,9 +250,29 @@ class StoreInstagramAccounts implements StoresConnections
             ->when($managedIgIds !== [], fn ($query) => $query->whereNotIn('provider_user_id', $managedIgIds))
             ->get()
             ->filter(fn (SocialAccount $account) => $facebook->instagramAccountReachable($userToken, (string) $account->provider_user_id) === false)
-            ->each(fn (SocialAccount $account) => $account->markNeedsReconnect(
-                'Instagram account no longer managed by the connected Facebook user.'
-            ));
+            ->each(fn (SocialAccount $account) => $account->markNeedsReconnect(self::NO_LONGER_MANAGED));
+
+        // 6. Bring back this owner's accounts flagged as no longer managed
+        // that the token reaches after all: one reached through Business
+        // Manager is not on /me/accounts, and 3.7.0 flagged it. Only that
+        // flag, and only when Meta answers about the account itself.
+        if ($credential !== null) {
+            SocialAccount::query()
+                ->ownedBy($owner)
+                ->where('provider', 'instagram')
+                ->where('provider_holder_id', $userId)
+                ->where('status', AccountStatus::NeedsReconnect->value)
+                ->where('last_error', self::NO_LONGER_MANAGED)
+                ->whereNotIn('provider_user_id', $managedIgIds)
+                ->get()
+                ->filter(fn (SocialAccount $account) => $facebook->instagramAccountReachable($userToken, (string) $account->provider_user_id) === true)
+                ->each(fn (SocialAccount $account) => $accounts->push($this->persistAccount(
+                    ['provider' => 'instagram', 'provider_user_id' => $account->provider_user_id] + SocialAccount::ownerKey($owner),
+                    ['social_token_id' => $credential->getKey(), 'status' => AccountStatus::Active, 'last_error' => null],
+                    $owner,
+                    $connectedBy,
+                )));
+        }
 
         return $accounts;
     }

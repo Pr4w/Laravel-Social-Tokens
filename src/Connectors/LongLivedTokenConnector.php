@@ -165,8 +165,20 @@ abstract class LongLivedTokenConnector extends AbstractConnector implements Chec
     }
 
     /**
-     * The account's username and picture (GET /me with its token), and its
-     * name as a connection stores it (profileName()).
+     * The account's `nickname` as a connection stores it: the username, as
+     * Threads' driver stores it. Null leaves the stored one alone (Instagram
+     * Login, whose driver stores none).
+     *
+     * @param  array<string, mixed>  $body  The /me answer.
+     */
+    protected function profileNickname(array $body): mixed
+    {
+        return $body['username'] ?? null;
+    }
+
+    /**
+     * The account's picture (GET /me with its token), and its name and
+     * nickname as a connection stores them (profileName(), profileNickname()).
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {
@@ -178,7 +190,7 @@ abstract class LongLivedTokenConnector extends AbstractConnector implements Chec
             'access_token' => $token,
         ]));
 
-        return $this->graphProfile($response, fn (array $body) => AccountProfile::from($this->profileName($body), $body['username'] ?? null, $body[$picture] ?? null));
+        return $this->graphProfile($response, fn (array $body) => AccountProfile::from($this->profileName($body), $this->profileNickname($body), $body[$picture] ?? null));
     }
 
     /**
