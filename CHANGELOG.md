@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.6.1]
 
 ### Fixed
 - **X accounts are left out of the daily profile sync by default.** X bills
