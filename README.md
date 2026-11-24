@@ -1253,6 +1253,14 @@ call per active account:
 | Pinterest | `GET /user_account` (the Sandbox's when it is on) | `user_accounts:read` |
 | Bluesky | the public AppView, by DID | no token |
 
+**The package updates the accounts itself.** When a profile differs, the
+sync writes the new values to the account's row in `social_accounts`, then
+fires `AccountProfileUpdated` to tell you. You need no listener to keep them
+current: read `$account->name`, `nickname` and `avatar` as usual. The event
+is only for what the package cannot do for you: copy the picture to your own
+storage (it stores the URL, not the image), refresh copies of the name your
+app keeps elsewhere, or notify someone.
+
 The sync only ever writes those three attributes, and only values the
 provider gave: a blank one (a throttled LinkedIn decoration, a provider with no
 handle) never erases a stored one, and a picture is kept only as an http(s)
@@ -1264,8 +1272,9 @@ profile needs (a scope your app did not request, a 401 or 403 on the read) is
 skipped quietly; other failures are logged once per provider and run
 (`Could not read N {provider} profile(s)`), never once per account.
 
-When something changed, `AccountProfileUpdated` fires with the account (already
-holding the new values) and `$event->previous`, the values it replaced. A
+When something changed, `AccountProfileUpdated` fires after the row is
+written, with the account (already holding the new values) and
+`$event->previous`, the values it replaced. A
 picture URL from Meta, LinkedIn or TikTok changes on its own as it is signed
 again: if the image must last, copy it from that event to your own storage.
 
