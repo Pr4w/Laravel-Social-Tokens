@@ -64,6 +64,28 @@ final class Settings
         return self::bool('log_unknown_errors', true);
     }
 
+    /**
+     * The providers the daily profile sync leaves out (`profile_sync_except`):
+     * X by default, which bills every API read. A list, or a comma-separated
+     * string; a missing or unreadable value keeps the default.
+     *
+     * @return array<int, string>
+     */
+    public static function profileSyncExcept(): array
+    {
+        $value = config('social-tokens.profile_sync_except', ['x']);
+
+        if (is_string($value)) {
+            $value = explode(',', $value);
+        }
+
+        if (! is_array($value)) {
+            return ['x'];
+        }
+
+        return array_values(array_filter(array_map(fn ($provider) => is_string($provider) ? trim($provider) : '', $value), fn (string $provider) => $provider !== ''));
+    }
+
     public static function checkRenewable(): bool
     {
         return self::bool('check_renewable', true);

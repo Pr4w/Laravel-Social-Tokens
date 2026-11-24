@@ -8,7 +8,6 @@ use Pr4w\SocialTokens\Enums\ProfileSyncOutcome;
 use Pr4w\SocialTokens\Events\AccountProfileUpdated;
 use Pr4w\SocialTokens\Exceptions\NeedsReconnectException;
 use Pr4w\SocialTokens\Models\SocialAccount;
-use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\ProfileSyncResult;
@@ -24,15 +23,14 @@ use Throwable;
  * gave: a blank one never erases a stored one, and the account's identity
  * (its ids, its owner) and status are never touched. A profile it cannot
  * read changes nothing and flags nothing: whether the token still works is
- * the renewal's and check-static's business. AccountProfileUpdated fires when
- * something changed.
+ * the renewal's and check-static's business. Nor does it renew a token: an
+ * account whose access token has expired (or does not decrypt) is skipped,
+ * and waits for the renewal. AccountProfileUpdated fires when something
+ * changed.
  */
 class SyncAccountProfile
 {
-    public function __construct(
-        protected ConnectorRegistry $registry,
-        protected SocialTokens $tokens,
-    ) {}
+    public function __construct(protected ConnectorRegistry $registry) {}
 
     public function handle(SocialAccount $account): ProfileSyncResult
     {
@@ -51,11 +49,9 @@ class SyncAccountProfile
         }
 
         try {
-            $profile = $connector->fetchProfile($account, fn (): string => $this->tokens->validAccessTokenFor($account));
+            $profile = $connector->fetchProfile($account, fn (): string => $this->storedAccessToken($account));
         } catch (NeedsReconnectException $e) {
-            return $e->transient
-                ? new ProfileSyncResult(ProfileSyncOutcome::Failed, reason: 'No valid token for now: '.($e->getMessage() ?: 'the renewal failed'))
-                : new ProfileSyncResult(ProfileSyncOutcome::Skipped, reason: 'The account needs a reconnect.');
+            return new ProfileSyncResult(ProfileSyncOutcome::Skipped, reason: $e->getMessage() ?: 'No usable access token.');
         } catch (Throwable $e) {
             return new ProfileSyncResult(ProfileSyncOutcome::Failed, reason: 'Unexpected error: '.$e::class);
         }
@@ -69,6 +65,28 @@ class SyncAccountProfile
         }
 
         return $this->apply($account, $profile);
+    }
+
+    /**
+     * The access token stored on the account's credential, as it is: a read
+     * must not renew it (that is the renewal's job, under its lock). Throws a
+     * transient NeedsReconnectException when there is none to use now: the
+     * credential is not active, its token does not decrypt, or it has
+     * expired.
+     */
+    protected function storedAccessToken(SocialAccount $account): string
+    {
+        $credential = $account->credential()->first();
+
+        if ($credential === null || $credential->status !== AccountStatus::Active || ! $credential->tokensDecrypt() || blank($credential->access_token)) {
+            throw NeedsReconnectException::transient($account, 'No usable access token.');
+        }
+
+        if ($credential->isAccessTokenExpired()) {
+            throw NeedsReconnectException::transient($account, 'The access token has expired: left to the renewal.');
+        }
+
+        return (string) $credential->access_token;
     }
 
     protected function apply(SocialAccount $account, AccountProfile $profile): ProfileSyncResult

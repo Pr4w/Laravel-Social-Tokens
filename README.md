@@ -1238,20 +1238,34 @@ account and change their picture, and the picture URLs Meta, LinkedIn and
 TikTok hand out are signed and expire within days or weeks, so a stored one
 eventually stops loading. A daily `social-tokens:sync-profiles` run
 (`profile_sync_schedule`, `null` to disable) keeps them current, one light
-call per active account:
+call per active account. **X is left out by default**
+(`profile_sync_except`, `['x']`): X bills every API read, and the run would
+read each X account every day. Take it out of the list, or run
+`social-tokens:sync-profiles --provider=x` when you choose, to sync them.
 
-| Provider | Read from | Needs |
-|---|---|---|
-| Facebook Page | `GET /{page-id}?fields=name,picture{url}` (its Page token) | — |
-| Instagram (through a Page) | `GET /{ig-user-id}?fields=username,profile_picture_url` | — |
-| Instagram Login, Threads | `GET /me?fields=username,name,…picture…` | — |
-| LinkedIn member | OpenID Connect `/v2/userinfo` | `profile` |
-| LinkedIn organization | the member's organization list, read once for all of them | — |
-| TikTok | `/v2/user/info/` (`display_name`, `avatar_url`) | `user.info.basic` |
-| Google / YouTube | OpenID Connect `/v1/userinfo` | `profile` |
-| X | `GET /2/users/me` | `users.read` |
-| Pinterest | `GET /user_account` (the Sandbox's when it is on) | `user_accounts:read` |
-| Bluesky | the public AppView, by DID | no token |
+| Provider | Read from | `name` | Needs |
+|---|---|---|---|
+| Facebook Page | `GET /{page-id}?fields=name,picture{url}` (its Page token) | the Page's name | — |
+| Instagram (through a Page) | `GET /{ig-user-id}?fields=username,profile_picture_url` | the username | — |
+| Instagram Login | `GET /me?fields=username,profile_picture_url` | the username | — |
+| Threads | `GET /me?fields=username,threads_profile_picture_url` | left as stored | — |
+| LinkedIn member | OpenID Connect `/v2/userinfo` | the member's name | `profile` |
+| LinkedIn organization | the member's organization list, read once for all of them | the organization's name | — |
+| TikTok | `/v2/user/info/` (`display_name`, `avatar_url`) | the display name | `user.info.basic` |
+| Google / YouTube | OpenID Connect `/v1/userinfo` | the **Google account's** name, not the channel's | `profile` |
+| X (left out by default) | `GET /2/users/me` | the display name | `users.read` |
+| Pinterest | `GET /user_account` (the Sandbox's when it is on) | the business name, or the username | `user_accounts:read` |
+| Bluesky | the public AppView, by DID | the display name, or the handle | no token |
+
+Each attribute gets what a connection stores in it, so that a reconnect and
+the next sync agree: on two different values, each would replace the other,
+and fire an event each time. So an Instagram account's `name` is its
+username, through Facebook or through Instagram Login; a Threads account
+keeps the name its connection stored (the driver stores none, only the
+username, in `nickname`); and a YouTube account carries the Google account it
+was connected with, not its channel. If you show the channel's title, read it
+in your app (`youtube/v3/channels?part=snippet&mine=true`, with
+`youtube.readonly`).
 
 **The package updates the accounts itself.** When a profile differs, the
 sync writes the new values to the account's row in `social_accounts`, then
@@ -1267,7 +1281,9 @@ handle) never erases a stored one, and a picture is kept only as an http(s)
 URL. It never touches an account's ids, owner or status, never writes over an
 account flagged or disconnected during the read, and never flags anything: a
 profile it cannot read is left as it is, and whether the token still works
-stays the renewal's and `check-static`'s business. A token not granted what the
+stays the renewal's and `check-static`'s business. Nor does it ever renew a
+token to read a profile: an account whose access token has expired is skipped
+and waits for the renewal. A token not granted what the
 profile needs (a scope your app did not request, a 401 or 403 on the read) is
 skipped quietly; other failures are logged once per provider and run
 (`Could not read N {provider} profile(s)`), never once per account.
@@ -1299,7 +1315,8 @@ $result->outcome; // ProfileSyncOutcome::Updated, Unchanged, Unavailable, Failed
 ```
 
 `php artisan social-tokens:sync-profiles --provider=instagram` limits a run to
-some providers. The package draws the line at the account's identity (who it
+some providers, those in `profile_sync_except` included. `SyncAccountProfile`
+syncs the account you give it, whatever its provider. The package draws the line at the account's identity (who it
 is, whether it is still connected): follower counts, insights and posts are
 your app's own API calls.
 

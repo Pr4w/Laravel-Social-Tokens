@@ -1,5 +1,15 @@
 # Upgrading
 
+## From 3.6.0 to 3.6.1
+
+X accounts are no longer synced by the daily profile run: X bills every
+read. To keep syncing them, set `'profile_sync_except' => []` in a published
+config (or a list without `x`). A config published with 3.6.0 has no such
+key and leaves X out. Instagram Login accounts get their username as `name`
+again on the next run, and Threads accounts keep the name they were
+connected with: expect one `AccountProfileUpdated` for each that 3.6.0 had
+changed.
+
 ## From 3.5 to 3.6
 
 Nothing to change. A new daily `social-tokens:sync-profiles` run keeps each

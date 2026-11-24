@@ -10,6 +10,7 @@ use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\ProfileSyncOutcome;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\Settings;
 
 /**
  * Keep every active account's name, handle and picture current with its
@@ -20,6 +21,9 @@ use Pr4w\SocialTokens\Support\ConnectorRegistry;
  *
  * A profile it cannot read is left as it is: the run logs one warning per
  * provider with failures, never one per account, and flags nothing.
+ *
+ * The providers in `profile_sync_except` (X by default, which bills every
+ * read) are left out, unless --provider names them.
  */
 class SyncProfiles extends Command
 {
@@ -36,6 +40,8 @@ class SyncProfiles extends Command
 
         if ($only = (array) $this->option('provider')) {
             $providers = array_values(array_intersect($providers, $only));
+        } else {
+            $providers = array_values(array_diff($providers, Settings::profileSyncExcept()));
         }
 
         $counts = array_fill_keys(array_map(fn (ProfileSyncOutcome $outcome) => $outcome->name, ProfileSyncOutcome::cases()), 0);

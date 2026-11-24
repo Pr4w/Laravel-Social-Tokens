@@ -111,11 +111,18 @@ return [
     | picture current with its provider: names change, and the picture URLs
     | Meta, LinkedIn and TikTok hand out are signed and expire within days or
     | weeks. One light call per account per run; AccountProfileUpdated fires on
-    | a change. It never flags anything. Same forms as dispatch_schedule; null
-    | disables it (SyncAccountProfile still syncs one account on demand).
+    | a change. It never flags anything, and never renews a token: an account
+    | whose access token has expired waits for the renewal. Same forms as
+    | dispatch_schedule; null disables it (SyncAccountProfile still syncs one
+    | account on demand).
+    |
+    | profile_sync_except: the providers the run leaves out. X by default: it
+    | bills every API read, and the sync would read GET /2/users/me for each X
+    | account every day. Remove it from the list to sync X accounts too.
     |
     */
     'profile_sync_schedule' => 'daily',
+    'profile_sync_except' => ['x'],
 
     /*
     |--------------------------------------------------------------------------

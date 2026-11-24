@@ -58,6 +58,12 @@ class ThreadsConnector extends LongLivedTokenConnector
         return 'threads_profile_picture_url';
     }
 
+    /** Threads' driver stores no name, only the username (nickname): neither does the sync. */
+    protected function profileName(array $body): mixed
+    {
+        return null;
+    }
+
     /**
      * Threads' exchange has always sent the client id with the secret.
      *

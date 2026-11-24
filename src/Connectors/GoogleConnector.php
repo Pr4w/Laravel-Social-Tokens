@@ -39,7 +39,8 @@ class GoogleConnector extends OAuth2Connector implements FetchesProfile
     /**
      * The Google account's name and picture (OpenID Connect /userinfo, with
      * the `profile` scope Socialite's driver asks for), as a connection
-     * stores them.
+     * stores them. Not the YouTube channel's: a connection stores the Google
+     * account, and on two values each reconnect would undo the sync.
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {

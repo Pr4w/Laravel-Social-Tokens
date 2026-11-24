@@ -3,6 +3,31 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **X accounts are left out of the daily profile sync by default.** X bills
+  every API read, and 3.6.0 read `GET /2/users/me` for each X account every
+  day: an app upgrading from 3.5 started paying without changing anything.
+  The new `profile_sync_except` setting (`['x']`, also when a published
+  config lacks it; a list or a comma-separated string) names the providers
+  the run leaves out. `--provider=x`, or taking X out of the list, syncs them;
+  `SyncAccountProfile` syncs any account it is given.
+- **Instagram Login and Threads profiles store what their connections
+  store.** The sync took the display name as `name` where the driver stores
+  the username (Instagram Login) or no name (Threads), so the first sync
+  changed every such account, a reconnect changed it back, and each swap
+  fired `AccountProfileUpdated`; an Instagram account also had another `name`
+  through Instagram Login than through Facebook. Instagram Login's `name` is
+  now the username, as through Facebook, and Threads' `name` is left as
+  stored. `LongLivedTokenConnector::profileName()` holds the rule.
+- **A profile read never renews a token.** 3.6.0 asked
+  `validAccessTokenFor()`, which renews an expired token; the sync now uses the
+  stored token as it is, and skips an account whose access token has expired
+  (`ProfileSyncOutcome::Skipped`), leaving it to the renewal.
+- The README says that a YouTube account's profile is its Google account's,
+  not its channel's, as a connection stores it.
+
 ## [3.6.0]
 
 ### Added

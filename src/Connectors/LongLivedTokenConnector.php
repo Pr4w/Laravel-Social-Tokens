@@ -152,8 +152,21 @@ abstract class LongLivedTokenConnector extends AbstractConnector implements Chec
     }
 
     /**
-     * The account's name, username and picture (GET /me with its token): its
-     * name when it set one, its username otherwise.
+     * The account's `name` as a connection stores it, so that the sync and a
+     * reconnect agree (on two values, each would replace the other): the
+     * username, as Instagram's driver stores it and InstagramConnector does.
+     * Null leaves the stored name alone (Threads).
+     *
+     * @param  array<string, mixed>  $body  The /me answer.
+     */
+    protected function profileName(array $body): mixed
+    {
+        return $body['username'] ?? null;
+    }
+
+    /**
+     * The account's username and picture (GET /me with its token), and its
+     * name as a connection stores it (profileName()).
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {
@@ -161,15 +174,11 @@ abstract class LongLivedTokenConnector extends AbstractConnector implements Chec
         $picture = $this->pictureField();
 
         $response = $this->attempt(fn () => $this->http()->acceptJson()->get($this->meUrl(), [
-            'fields' => "username,name,{$picture}",
+            'fields' => "username,{$picture}",
             'access_token' => $token,
         ]));
 
-        return $this->graphProfile($response, function (array $body) use ($picture) {
-            $name = is_string($body['name'] ?? null) && trim($body['name']) !== '' ? $body['name'] : ($body['username'] ?? null);
-
-            return AccountProfile::from($name, $body['username'] ?? null, $body[$picture] ?? null);
-        });
+        return $this->graphProfile($response, fn (array $body) => AccountProfile::from($this->profileName($body), $body['username'] ?? null, $body[$picture] ?? null));
     }
 
     /**

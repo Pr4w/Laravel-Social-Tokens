@@ -14,6 +14,7 @@ use Pr4w\SocialTokens\Events\AccountProfileUpdated;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ProfileSyncResult;
+use Pr4w\SocialTokens\Support\Settings;
 
 /*
  * Names change, and Meta, LinkedIn and TikTok hand out picture URLs that are
@@ -178,18 +179,39 @@ it('takes a Meta permission error as a missing grant', function () {
     expect(syncProfile(profileAccount('instagram', ['provider_user_id' => 'ig-1']))->outcome)->toBe(ProfileSyncOutcome::Unavailable);
 });
 
-it('reads Threads and Instagram Login accounts on their own /me', function (string $provider, string $host, string $picture) {
+/*
+ * A reconnect stores what the driver maps (StoreAccountFromSocialite): a sync
+ * storing another value for the same attribute would swap it back and forth,
+ * an AccountProfileUpdated each time. Instagram's driver stores the username
+ * as the name, as InstagramConnector does; Threads' stores no name.
+ */
+it('reads Threads and Instagram Login accounts on their own /me, with the name a connection stores', function (string $provider, string $host, string $picture, string $name) {
     Http::fake(["{$host}/*" => Http::response(['username' => 'acme', 'name' => 'Acme Studio', $picture => 'https://cdn.example.com/new.jpg'])]);
     $account = profileAccount($provider);
 
     syncProfile($account);
 
-    expect($account->fresh()->only(['name', 'nickname', 'avatar']))->toBe(['name' => 'Acme Studio', 'nickname' => 'acme', 'avatar' => 'https://cdn.example.com/new.jpg']);
-    Http::assertSent(fn (Request $request) => $request['fields'] === "username,name,{$picture}" && $request['access_token'] === "{$provider}-token");
+    expect($account->fresh()->only(['name', 'nickname', 'avatar']))->toBe(['name' => $name, 'nickname' => 'acme', 'avatar' => 'https://cdn.example.com/new.jpg']);
+    Http::assertSent(fn (Request $request) => $request['fields'] === "username,{$picture}" && $request['access_token'] === "{$provider}-token");
 })->with([
-    'Threads' => ['threads', 'graph.threads.net', 'threads_profile_picture_url'],
-    'Instagram Login' => ['instagram_login', 'graph.instagram.com', 'profile_picture_url'],
+    'Threads: the name is left alone' => ['threads', 'graph.threads.net', 'threads_profile_picture_url', 'Old name'],
+    'Instagram Login: the username, as through Facebook' => ['instagram_login', 'graph.instagram.com', 'profile_picture_url', 'acme'],
 ]);
+
+it('stores the same name for an Instagram account through Facebook and through Instagram Login', function () {
+    Http::fake([
+        'graph.facebook.com/*/ig-1*' => Http::response(['username' => 'acme', 'profile_picture_url' => 'https://cdn.example.com/a.jpg']),
+        'graph.instagram.com/*' => Http::response(['username' => 'acme', 'name' => 'Acme Studio', 'profile_picture_url' => 'https://cdn.example.com/a.jpg']),
+    ]);
+    $throughFacebook = profileAccount('instagram', ['provider_user_id' => 'ig-1']);
+    $throughLogin = profileAccount('instagram_login', ['provider_user_id' => 'ig-login-1'], ['provider_holder_id' => 'holder-2']);
+
+    syncProfile($throughFacebook);
+    syncProfile($throughLogin);
+
+    expect($throughFacebook->fresh()->name)->toBe('acme')
+        ->and($throughLogin->fresh()->name)->toBe('acme');
+});
 
 it('reads the LinkedIn member\'s own profile from /userinfo', function () {
     Http::fake(['api.linkedin.com/v2/userinfo' => Http::response(['sub' => 'member-1', 'name' => 'Ada Lovelace', 'picture' => 'https://media.licdn.com/ada.jpg?e=1'])]);
@@ -269,6 +291,7 @@ it('reads Bluesky from the public AppView, without asking for a token', function
 // The command -------------------------------------------------------------
 
 it('syncs every active account and logs one warning per provider that failed', function () {
+    config(['social-tokens.profile_sync_except' => []]);
     Log::spy();
     Http::fake([
         'api.x.com/2/users/me*' => Http::response(['data' => ['name' => 'New name']]),
@@ -314,4 +337,51 @@ it('is scheduled daily in the background, and can be turned off', function () {
 
     config(['social-tokens.profile_sync_schedule' => null]);
     expect($events())->toBe([]);
+});
+
+// X bills every read --------------------------------------------------------
+
+it('leaves X out of the daily run unless asked', function () {
+    Http::fake([
+        'api.x.com/2/users/me*' => Http::response(['data' => ['name' => 'New name']]),
+        'api.pinterest.com/v5/user_account' => Http::response(['username' => 'acme']),
+    ]);
+    $x = profileAccount('x');
+    profileAccount('pinterest');
+
+    $this->artisan('social-tokens:sync-profiles')->expectsOutputToContain('Synced 1 profile(s)')->assertSuccessful();
+
+    expect($x->fresh()->name)->toBe('Old name');
+    Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'api.x.com'));
+
+    // Named on the command line, or taken out of the list, it is synced
+    $this->artisan('social-tokens:sync-profiles', ['--provider' => ['x']])->expectsOutputToContain('1 updated');
+
+    expect($x->fresh()->name)->toBe('New name');
+});
+
+it('reads profile_sync_except as a list or a comma-separated string, X when missing', function (mixed $value, array $except) {
+    config(['social-tokens.profile_sync_except' => $value]);
+
+    expect(Settings::profileSyncExcept())->toBe($except);
+})->with([
+    'the shipped default' => [['x'], ['x']],
+    'a string' => ['x, tiktok', ['x', 'tiktok']],
+    'nothing left out' => [[], []],
+    'missing from a published config' => [null, ['x']],
+    'unreadable' => [42, ['x']],
+]);
+
+it('never renews a token to read a profile', function () {
+    Http::fake();
+    // TikTok, its 24-hour access token expired, its refresh token still good
+    $account = profileAccount('tiktok', credential: ['expires_at' => now()->subMinute(), 'renew_at' => now()->subHour()]);
+
+    $result = syncProfile($account);
+
+    expect($result->outcome)->toBe(ProfileSyncOutcome::Skipped)
+        ->and($result->reason)->toContain('left to the renewal')
+        ->and($account->credential->fresh()->access_token)->toBe('tiktok-token');
+
+    Http::assertNothingSent();
 });
