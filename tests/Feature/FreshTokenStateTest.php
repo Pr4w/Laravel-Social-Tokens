@@ -129,11 +129,11 @@ it('clears the strike when a renewal hands back the same token', function () {
 });
 
 it('clears the strike when LinkedIn organizations are stored again', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [[
+    Http::fake(linkedInRest(Http::response(['elements' => [[
         'role' => 'ADMINISTRATOR',
         'state' => 'APPROVED',
         'organization~' => ['id' => '111', 'localizedName' => 'Acme'],
-    ]]])]);
+    ]]])));
 
     $credential = SocialToken::create([
         'provider' => 'linkedin',

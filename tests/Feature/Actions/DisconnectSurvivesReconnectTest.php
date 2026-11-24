@@ -36,6 +36,11 @@ class ReconnectGraph
 beforeEach(function () {
     $this->owner = Owner::create();
 
+    Http::fake(linkedInRest(Http::response(['elements' => [
+        ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => '111', 'localizedName' => 'Acme']],
+        ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => '222', 'localizedName' => 'Globex']],
+    ]])));
+
     Http::fake(function ($request) {
         $url = $request->url();
         $token = ReconnectGraph::$token;
@@ -47,10 +52,6 @@ beforeEach(function () {
                 'id' => $page, 'name' => $page, 'access_token' => "{$page}-{$token}",
                 'instagram_business_account' => ['id' => "ig-{$page}", 'username' => "ig-{$page}"],
             ], ReconnectGraph::$pages)]),
-            str_contains($url, 'api.linkedin.com/v2/organizationAcls') => Http::response(['elements' => [
-                ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => '111', 'localizedName' => 'Acme']],
-                ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => '222', 'localizedName' => 'Globex']],
-            ]]),
             default => Http::response([], 404),
         };
     });

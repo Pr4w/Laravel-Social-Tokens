@@ -114,7 +114,7 @@ it('maps an unknown oauth error to transient', function () {
 });
 
 it('lists approved organizations the member administers', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [
+    Http::fake(linkedInRest(Http::response(['elements' => [
         [
             'role' => 'ADMINISTRATOR',
             'state' => 'APPROVED',
@@ -129,7 +129,7 @@ it('lists approved organizations the member administers', function () {
             'state' => 'REQUESTED', // pending, must be excluded
             'organization~' => ['id' => 456, 'localizedName' => 'Pending Co'],
         ],
-    ]])]);
+    ]])));
 
     $orgs = linkedin()->fetchOrganizations('member-token');
 
@@ -147,53 +147,66 @@ it('lists approved organizations the member administers', function () {
 });
 
 /*
- * LinkedIn refuses a projection naming `organization` beside its
- * `organization~` decoration: 400 ILLEGAL_ARGUMENT "Can't merge incompatible
- * specs 'organization'". 3.0 to 3.2 sent both, so no organization could be
- * listed, and the tests, which faked the response without reading the
- * request, passed anyway.
+ * LinkedIn sunset its unversioned /v2 Marketing APIs in June 2023, and its
+ * /rest/organizationAcls refuses projections (400 "projection parameter is
+ * not allowed for this endpoint"). The grants come undecorated; the names in
+ * one batch from /rest/organizations, and the logos' URLs in one batch from
+ * /rest/images, which take urn:li:image URNs. Rest.li 2.0: List( , ) left
+ * unencoded, the URNs inside encoded. Shapes as LinkedIn served them in
+ * production with LinkedIn-Version 202605.
  */
-it('asks for the organizations with a projection LinkedIn accepts', function () {
-    Http::fake(function ($request) {
-        $projection = (string) ($request['projection'] ?? '');
+it('lists the organizations from LinkedIn\'s versioned API', function () {
+    config(['social-tokens.connectors.linkedin.api_version' => '202611']);
+    Http::fake([
+        'api.linkedin.com/rest/organizationAcls*' => fn ($request) => isset($request['projection'])
+            ? Http::response(['status' => 400, 'message' => 'projection parameter is not allowed for this endpoint'], 400)
+            : Http::response(['paging' => ['start' => 0, 'count' => 100, 'links' => []], 'elements' => [
+                ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:123', 'roleAssignee' => 'urn:li:person:abc'],
+                ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:456', 'roleAssignee' => 'urn:li:person:abc'],
+            ]]),
+        'api.linkedin.com/rest/organizations*' => Http::response([
+            'results' => [
+                '123' => ['id' => 123, 'localizedName' => 'Acme', 'logoV2' => ['original' => 'urn:li:digitalmediaAsset:C4D0BAQE6V6rj_w1yVQ']],
+                '456' => ['id' => 456, 'localizedName' => 'Globex'], // no logo
+            ],
+            'statuses' => ['123' => 200, '456' => 200],
+            'errors' => [],
+        ]),
+        'api.linkedin.com/rest/images*' => Http::response(['results' => [
+            'urn:li:image:C4D0BAQE6V6rj_w1yVQ' => [
+                'id' => 'urn:li:image:C4D0BAQE6V6rj_w1yVQ',
+                'status' => 'AVAILABLE',
+                'downloadUrl' => 'https://media.licdn.com/dms/image/acme.png?e=1',
+                'downloadUrlExpiresAt' => 1767225600000,
+            ],
+        ], 'statuses' => [], 'errors' => []]),
+    ]);
 
-        if (str_contains($projection, 'organization~') && preg_match('/[(,]organization[,)]/', $projection) === 1) {
-            return Http::response([
-                'status' => 400,
-                'code' => 'ILLEGAL_ARGUMENT',
-                'message' => "Can't merge incompatible specs 'organization' (com.linkedin.deco.urn.projections.SpecBuilders\$LocalSpecBuilder) and 'organization' (com.linkedin.deco.urn.projections.SpecBuilders\$UrnSpecBuilder)",
-            ], 400);
-        }
+    expect(linkedin()->fetchOrganizations('member-token'))->toBe([
+        ['id' => '123', 'urn' => 'urn:li:organization:123', 'name' => 'Acme', 'logo' => 'https://media.licdn.com/dms/image/acme.png?e=1', 'role' => 'ADMINISTRATOR'],
+        ['id' => '456', 'urn' => 'urn:li:organization:456', 'name' => 'Globex', 'logo' => null, 'role' => 'ADMINISTRATOR'],
+    ]);
 
-        return Http::response(['elements' => [[
-            'role' => 'ADMINISTRATOR',
-            'state' => 'APPROVED',
-            'organization' => 'urn:li:organization:123',
-            'organization~' => ['id' => 123, 'localizedName' => 'Acme'],
-        ]]]);
-    });
+    Http::assertSentCount(3);
+    Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://api.linkedin.com/rest/organizationAcls?')
+        && $request['q'] === 'roleAssignee'
+        && ! isset($request['projection']));
+    Http::assertSent(fn ($request) => $request->url() === 'https://api.linkedin.com/rest/organizations?ids=List(123,456)');
+    Http::assertSent(fn ($request) => $request->url() === 'https://api.linkedin.com/rest/images?ids=List(urn%3Ali%3Aimage%3AC4D0BAQE6V6rj_w1yVQ)');
 
-    expect(linkedin()->fetchOrganizations('member-token'))->toBe([[
-        'id' => '123',
-        'urn' => 'urn:li:organization:123',
-        'name' => 'Acme',
-        'logo' => null,
-        'role' => 'ADMINISTRATOR',
-    ]]);
-
-    // Every field of the element (the URN the throttled fallback reads), and
-    // the organization decorated: LinkedIn's documented form.
-    Http::assertSent(fn ($request) => $request['projection'] === '(paging,elements*(*,organization~(id,localizedName,logoV2(original~:playableStreams))))');
+    expect(collect(Http::recorded())->every(fn (array $sent) => $sent[0]->hasHeader('LinkedIn-Version', '202611')
+        && $sent[0]->hasHeader('X-Restli-Protocol-Version', '2.0.0')
+        && $sent[0]->hasHeader('Authorization', 'Bearer member-token')))->toBeTrue();
 });
 
 it('returns a failure result when the org listing errors', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['message' => 'forbidden'], 403)]);
+    Http::fake(linkedInRest(Http::response(['message' => 'forbidden'], 403)));
 
     expect(linkedin()->fetchOrganizations('member-token'))->toBeInstanceOf(RenewalResult::class);
 });
 
 it('pages through organizations until the total is reached', function () {
-    Http::fake(function ($request) {
+    Http::fake(linkedInRest(function ($request) {
         $start = (int) ($request['start'] ?? 0);
 
         return Http::response([
@@ -204,20 +217,20 @@ it('pages through organizations until the total is reached', function () {
                 'organization~' => ['id' => $start + 1, 'localizedName' => 'Org '.($start + 1)],
             ]],
         ]);
-    });
+    }));
 
     expect(collect(linkedin()->fetchOrganizations('member-token'))->pluck('id')->all())->toBe(['1', '2']);
 
-    Http::assertSentCount(2);
+    Http::assertSentCount(3); // two result pages, then both names in one batch
 });
 
 it('fails instead of returning a partial organization list when a later page errors', function () {
-    Http::fake(fn ($request) => (int) ($request['start'] ?? 0) > 0
+    Http::fake(linkedInRest(fn ($request) => (int) ($request['start'] ?? 0) > 0
         ? Http::response(['message' => 'boom'], 500)
         : Http::response([
             'paging' => ['start' => 0, 'count' => 100, 'total' => 2],
             'elements' => [['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => 1]]],
-        ]));
+        ])));
 
     expect(linkedin()->fetchOrganizations('member-token'))->toBeInstanceOf(RenewalResult::class);
 });

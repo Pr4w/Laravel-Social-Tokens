@@ -65,7 +65,7 @@ function reconcileOrganizations(array ...$answers): void
         ])->values()->all()]);
     }
 
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => $sequence]);
+    Http::fake(linkedInRest($sequence));
 }
 
 function reconcileAccount(string $provider, string $id): SocialAccount
@@ -232,7 +232,7 @@ function reconcileMember(string $member, array $organizations): SocialToken
  */
 function reconcileOrganizationsByMember(array $byMember): void
 {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function (Request $request) use ($byMember) {
+    Http::fake(linkedInRest(function (Request $request) use ($byMember) {
         $member = Str::between((string) ($request->header('Authorization')[0] ?? ''), 'Bearer ', '-token');
         $organizations = array_key_exists($member, $byMember) ? $byMember[$member] : [];
 
@@ -241,7 +241,7 @@ function reconcileOrganizationsByMember(array $byMember): void
             : Http::response(['elements' => array_map(fn (string $id) => [
                 'role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => "urn:li:organization:{$id}", 'organization~' => ['id' => (int) $id, 'localizedName' => "Org {$id}"],
             ], $organizations)]);
-    }]);
+    }));
 }
 
 it('flags nothing when too many holders lose accounts at once', function () {
@@ -340,14 +340,14 @@ it('does not flag on a list read with a token a reconnect replaced during the ru
     $token = reconcileLinkedIn();
     $calls = 0;
 
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function () use (&$calls, $token) {
+    Http::fake(linkedInRest(function () use (&$calls, $token) {
         if (++$calls === 2) {
             // The member, an admin again, reconnects: same credential, new token
             $token->fresh()->forceFill(['access_token' => 'reconnected-token'])->save();
         }
 
         return Http::response(['elements' => [['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:111', 'organization~' => ['id' => 111, 'localizedName' => 'Org 111']]]]);
-    }]);
+    }));
 
     $this->artisan('social-tokens:check-static')->assertSuccessful();
 
@@ -415,7 +415,7 @@ it('does not flag an account a reconnect moved to another credential during the 
     $other = SocialToken::create(['provider' => 'linkedin', 'provider_holder_id' => 'member-1', 'purpose' => 'organizations', 'access_token' => 'new-token', 'status' => AccountStatus::Active]);
     $calls = 0;
 
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function (Request $request) use (&$calls, $other) {
+    Http::fake(linkedInRest(function (Request $request) use (&$calls, $other) {
         // The new token (the reconnect's) lists 222; the old one no longer does.
         $ids = $request->hasHeader('Authorization', 'Bearer new-token') ? [111, 222] : [111];
 
@@ -426,7 +426,7 @@ it('does not flag an account a reconnect moved to another credential during the 
         return Http::response(['elements' => array_map(fn (int $id) => [
             'role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => "urn:li:organization:{$id}", 'organization~' => ['id' => $id, 'localizedName' => "Org {$id}"],
         ], $ids)]);
-    }]);
+    }));
 
     $this->artisan('social-tokens:check-static')->assertSuccessful();
 

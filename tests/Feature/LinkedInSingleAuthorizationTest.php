@@ -28,9 +28,9 @@ beforeEach(function () {
     $this->organizations = ['111' => 'Acme', '222' => 'Globex'];
 
     Http::fake([
-        'api.linkedin.com/v2/organizationAcls*' => fn () => Http::response(['elements' => collect($this->organizations)
+        ...linkedInRest(fn () => Http::response(['elements' => collect($this->organizations)
             ->map(fn (string $name, string $id) => ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => $id, 'localizedName' => $name]])
-            ->values()->all()]),
+            ->values()->all()])),
         '*' => Http::response([]),
     ]);
 

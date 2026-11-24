@@ -92,9 +92,9 @@ it('lets the user reconnect an account whose stored tokens no longer decrypt', f
 })->with(['google', 'tiktok'])->with(['a new refresh token' => 'r-2', 'no new refresh token' => null])->with('previous keys');
 
 it('lets the member reconnect their LinkedIn organizations over a credential that no longer decrypts', function (bool $withPreviousKeys) {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [[
+    Http::fake(linkedInRest(Http::response(['elements' => [[
         'role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => '111', 'localizedName' => 'Acme'],
-    ]]])]);
+    ]]])));
     $store = app(StoreLinkedInOrganizations::class);
     $store->handle(accessToken: 'member-token', memberId: 'm-1', refreshToken: 'r-1', expiresAt: now()->addDays(60));
     $credential = encryptedUnderLostKey(SocialToken::sole());

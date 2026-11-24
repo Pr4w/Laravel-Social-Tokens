@@ -229,10 +229,10 @@ it('reads the LinkedIn member\'s own profile from /userinfo', function () {
 });
 
 it('reads LinkedIn organizations from one listing of the member\'s', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [
+    Http::fake(linkedInRest(Http::response(['elements' => [
         ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:111', 'organization~' => ['id' => 111, 'localizedName' => 'Acme']],
         ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:222', 'organization~' => ['id' => 222, 'localizedName' => 'Globex']],
-    ]])]);
+    ]])));
     $acme = profileAccount('linkedin', ['provider_user_id' => '111', 'provider_holder_id' => 'member-1'], ['provider_holder_id' => 'member-1']);
     $globex = SocialAccount::create(['provider' => 'linkedin', 'provider_user_id' => '222', 'provider_holder_id' => 'member-1', 'social_token_id' => $acme->social_token_id, 'name' => 'Old', 'status' => AccountStatus::Active]);
     $gone = SocialAccount::create(['provider' => 'linkedin', 'provider_user_id' => '333', 'provider_holder_id' => 'member-1', 'social_token_id' => $acme->social_token_id, 'name' => 'Initech', 'status' => AccountStatus::Active]);
@@ -244,7 +244,21 @@ it('reads LinkedIn organizations from one listing of the member\'s', function ()
         ->and($gone->fresh()->name)->toBe('Initech')
         ->and($gone->fresh()->status)->toBe(AccountStatus::Active); // reconciliation is the connection's job
 
-    Http::assertSentCount(1);
+    Http::assertSentCount(2); // the grants, then both names in one batch (no logos)
+});
+
+it('counts an organization LinkedIn did not describe as a failed read, keeping its name', function () {
+    Http::fake(linkedInRest(Http::response(['elements' => [
+        ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:111'],
+    ]])));
+    $acme = profileAccount('linkedin', ['provider_user_id' => '111', 'provider_holder_id' => 'member-1', 'name' => 'Acme'], ['provider_holder_id' => 'member-1']);
+
+    $result = app(SyncAccountProfile::class)->handle($acme);
+
+    expect($result->outcome)->toBe(ProfileSyncOutcome::Failed)
+        ->and($result->reason)->toContain('did not describe')
+        ->and($acme->fresh()->name)->toBe('Acme')
+        ->and($acme->fresh()->avatar)->toBe('https://cdn.example.com/old.jpg');
 });
 
 /*

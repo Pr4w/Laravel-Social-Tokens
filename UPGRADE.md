@@ -1,5 +1,23 @@
 # Upgrading
 
+## From 3.7 to 3.8
+
+Nothing to change, no migration. LinkedIn organizations are now read from
+LinkedIn's versioned API (`/rest`), which needs a `LinkedIn-Version`: the
+package sends `202605` unless `LINKEDIN_API_VERSION` names another. LinkedIn
+supports each version for at least a year; from 11 months on, a daily warning
+says so. Then update the package, or set `LINKEDIN_API_VERSION` to a recent
+version from LinkedIn's versioning page. A version LinkedIn no longer serves
+makes every organization listing fail, logged as critical.
+
+- The member token needs no new scope: the grants and names need what they
+  needed under `/v2` (`r_organization_admin` or `rw_organization_admin`), and
+  `/rest/images` `w_organization_social`, which posting as the organizations
+  needs anyway (without it, the logos are left as stored).
+- A connection or profile sync makes up to three LinkedIn calls per member
+  instead of one. If your app stores the organization logos itself, note that
+  they are signed URLs that expire within weeks, as they were under `/v2`.
+
 ## From 3.7.0 to 3.7.1
 
 Nothing to change. If your app ran 3.7.0, an Instagram account reached

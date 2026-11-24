@@ -85,11 +85,10 @@ function ownerScopedFakeMeta(array $pagesByUserToken): void
  */
 function ownerScopedFakeLinkedIn(array $orgIdsByMemberToken): void
 {
-    Http::fake(function (Request $request) use ($orgIdsByMemberToken) {
+    Http::fake(linkedInRest(function (Request $request) use ($orgIdsByMemberToken) {
         $memberToken = Str::after($request->header('Authorization')[0] ?? '', 'Bearer ');
 
-        if (! str_contains($request->url(), 'api.linkedin.com/v2/organizationAcls')
-            || ! array_key_exists($memberToken, $orgIdsByMemberToken)) {
+        if (! array_key_exists($memberToken, $orgIdsByMemberToken)) {
             return Http::response(['message' => 'Unexpected LinkedIn call'], 404);
         }
 
@@ -98,7 +97,7 @@ function ownerScopedFakeLinkedIn(array $orgIdsByMemberToken): void
             'state' => 'APPROVED',
             'organization~' => ['id' => $id, 'localizedName' => "Org {$id}"],
         ], $orgIdsByMemberToken[$memberToken])]);
-    });
+    }) + ['*' => Http::response(['message' => 'Unexpected LinkedIn call'], 404)]);
 }
 
 /** A Facebook Page as /me/accounts returns it, optionally with its linked IG account. */

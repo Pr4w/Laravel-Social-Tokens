@@ -17,7 +17,7 @@ use Pr4w\SocialTokens\Tests\Fixtures\Owner;
 
 function fakeOrganizations(array $elements): void
 {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => $elements])]);
+    Http::fake(linkedInRest(Http::response(['elements' => $elements])));
 }
 
 function orgElement(string $id, string $name): array
@@ -78,7 +78,7 @@ it('reconciles organizations the member no longer administers', function () {
 });
 
 it('throws when the organization listing fails', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['message' => 'forbidden'], 403)]);
+    Http::fake(linkedInRest(Http::response(['message' => 'forbidden'], 403)));
 
     $this->store->handle(accessToken: 'member-token', memberId: 'member-1');
 })->throws(RuntimeException::class);
@@ -89,9 +89,9 @@ it('keeps organizations from a later result page', function () {
         'provider_holder_id' => 'member-1', 'status' => AccountStatus::Active,
     ]);
 
-    Http::fake(fn ($request) => Http::response((int) ($request['start'] ?? 0) === 0
+    Http::fake(linkedInRest(fn ($request) => Http::response((int) ($request['start'] ?? 0) === 0
         ? ['paging' => ['start' => 0, 'count' => 100, 'total' => 2], 'elements' => [orgElement('111', 'Acme')]]
-        : ['paging' => ['start' => 1, 'count' => 100, 'total' => 2], 'elements' => [orgElement('222', 'Globex')]]));
+        : ['paging' => ['start' => 1, 'count' => 100, 'total' => 2], 'elements' => [orgElement('222', 'Globex')]])));
 
     $this->store->handle(accessToken: 'member-token', memberId: 'member-1');
 

@@ -2,8 +2,12 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
+use Carbon\Carbon;
 use Carbon\CarbonInterval;
 use Closure;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
@@ -42,19 +46,39 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
-    /**
-     * Still the unversioned /v2 endpoint. LinkedIn now documents
-     * /rest/organizationAcls (with a LinkedIn-Version header), which was checked
-     * in production on 2026-11-24 with version 202605: q=roleAssignee returned
-     * the same grants as /v2 (same organizations, roles and states), but it
-     * refuses the projection (400 "projection parameter is not allowed for
-     * this endpoint"). Moving to /rest therefore means reading names and logos
-     * with a separate /rest/organizations call, and bumping the version header
-     * before LinkedIn sunsets it. Left as is while /v2 keeps working; if it
-     * stops, connecting LinkedIn Pages fails (StoreLinkedInOrganizations throws)
-     * and the daily reconciliation decides nothing.
+    /*
+     * LinkedIn's versioned API: base path /rest, a LinkedIn-Version header on
+     * every call. The unversioned /v2 Marketing APIs, organizationAcls among
+     * them, were officially sunset in June 2023. /rest/organizationAcls lists
+     * the same grants (checked in production on 2026-11-24) but refuses
+     * projections: names and logos come from /rest/organizations, and the
+     * logos' URLs from /rest/images.
      */
-    protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
+    protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/rest/organizationAcls';
+
+    protected const ORGANIZATIONS_URL = 'https://api.linkedin.com/rest/organizations';
+
+    protected const IMAGES_URL = 'https://api.linkedin.com/rest/images';
+
+    /**
+     * The LinkedIn-Version sent unless config `api_version` names another.
+     * LinkedIn supports each version for at least a year, then answers 426:
+     * the package's releases move it forward.
+     */
+    public const DEFAULT_API_VERSION = '202605';
+
+    /** How old the configured version gets before a daily warning asks for a newer one. */
+    protected const API_VERSION_WARNING_MONTHS = 11;
+
+    /** How many organizations, or logos, one batch read asks for. */
+    protected const BATCH_SIZE = 50;
+
+    /**
+     * What was logged today about the API version, so a run says it once.
+     *
+     * @var array<string, true>
+     */
+    private static array $notices = [];
 
     protected const INTROSPECT_URL = 'https://www.linkedin.com/oauth/v2/introspectToken';
 
@@ -74,7 +98,10 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
     protected const ORGANIZATION_PAGE_SIZE = 100;
 
-    /** LinkedIn's documented organizationAcls projection, with the organization decorated. */
+    /**
+     * @deprecated 3.8.0 No longer sent: /rest/organizationAcls refuses
+     *             projections. Removed in 4.0.
+     */
     public const ORGANIZATION_PROJECTION = '(paging,elements*(*,organization~(id,localizedName,logoV2(original~:playableStreams))))';
 
     /** Safety cap on organizationAcls result pages. */
@@ -100,6 +127,18 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
     public function singleAuthorization(): bool
     {
         return Settings::flag($this->config['single_authorization'] ?? true, true);
+    }
+
+    /**
+     * The LinkedIn-Version of the /rest calls: config `api_version`
+     * (LINKEDIN_API_VERSION) as YYYYMM, or DEFAULT_API_VERSION when it is
+     * missing or malformed.
+     */
+    public function apiVersion(): string
+    {
+        $version = trim((string) ($this->config['api_version'] ?? ''));
+
+        return preg_match('/^\d{4}(0[1-9]|1[0-2])(\.\d{2})?$/', $version) === 1 ? $version : self::DEFAULT_API_VERSION;
     }
 
     /**
@@ -162,7 +201,11 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
         $organization = collect($organizations)->first(fn ($candidate) => (string) data_get($candidate, 'id', '') === (string) $account->provider_user_id);
 
-        return $organization === null ? null : AccountProfile::from(data_get($organization, 'name'), null, data_get($organization, 'logo'));
+        return match (true) {
+            $organization === null => null,
+            data_get($organization, 'name') === null => RenewalResult::unknownFailure('LinkedIn did not describe the organization (/rest/organizations).'),
+            default => AccountProfile::from(data_get($organization, 'name'), null, data_get($organization, 'logo')),
+        };
     }
 
     /** A member's organizations: the linkedin accounts other than their profile. */
@@ -173,7 +216,8 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
     /**
      * The organizations the member can still post as: approved grants with a
-     * posting role (fetchOrganizations()), as a connection lists them.
+     * posting role (fetchOrganizationGrants()), as a connection lists them,
+     * without their names.
      */
     public function reachableAccountIds(SocialToken $credential): array|RenewalResult
     {
@@ -181,11 +225,9 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
             return RenewalResult::unknownFailure('No access token to list the organizations with.');
         }
 
-        $organizations = $this->fetchOrganizations((string) $credential->access_token);
+        $grants = $this->fetchOrganizationGrants((string) $credential->access_token);
 
-        return $organizations instanceof RenewalResult
-            ? $organizations
-            : array_values(array_map(fn (array $organization) => (string) $organization['id'], $organizations));
+        return $grants instanceof RenewalResult ? $grants : array_map('strval', array_keys($grants));
     }
 
     /**
@@ -318,54 +360,91 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
     }
 
     /**
-     * List the organizations (company Pages) a member administers, via
-     * organizationAcls. Each posts with this same member token
+     * List the organizations (company Pages) a member administers, with their
+     * names and logos. Each posts with this same member token
      * (w_organization_social), so an organization row mirrors the member's
-     * credential rather than holding its own. Requires the member token to carry
-     * an organization admin scope (e.g. rw_organization_admin). Only approved
-     * grants with a posting role (config `posting_roles`) are kept, one entry
-     * per organization.
+     * credential rather than holding its own. Requires the member token to
+     * carry an organization admin scope (e.g. rw_organization_admin). Which
+     * organizations, and the role each is held through: fetchOrganizationGrants().
      *
-     * Pages through the results with start/count: the action reconciles against
-     * this list, so a truncated one would flag organizations the member still
-     * administers. It goes on while LinkedIn announces paging.links rel=next or
-     * serves a full page (per paging.count). An organization whose decoration
-     * LinkedIn throttled is resolved from its URN. Any failure returns a
-     * RenewalResult, never a partial list: a non-2xx, a 2xx without an
-     * `elements` list, an approved grant it cannot resolve, or the safety cap.
+     * Names and logos come after the grants, in batches: from
+     * /rest/organizations, then the logos' URLs from /rest/images. Those URLs
+     * are signed and expire within weeks: the daily profile sync renews them.
+     * Names and logos are best effort, and never fail the list. An
+     * organization LinkedIn does not describe comes back with a null `name`
+     * (a connection then keeps the name and logo it stored); one whose logo
+     * URL it does not give, without a `logo` key (the stored logo is kept).
+     * `logo` is null only for an organization without a logo.
      *
      * @return array<int, array<string, mixed>>|RenewalResult
      */
     public function fetchOrganizations(#[\SensitiveParameter] string $accessToken): array|RenewalResult
     {
+        $grants = $this->fetchOrganizationGrants($accessToken);
+
+        if ($grants instanceof RenewalResult || $grants === []) {
+            return $grants;
+        }
+
+        $details = $this->organizationDetails($accessToken, array_map('strval', array_keys($grants)));
+        $logoUrls = $this->imageUrls($accessToken, array_values(array_filter(array_column($details, 'logo'))));
+        $organizations = [];
+
+        foreach ($grants as $id => $role) {
+            $id = (string) $id;
+            $detail = $details[$id] ?? null;
+            $organization = ['id' => $id, 'urn' => "urn:li:organization:{$id}", 'name' => $detail['name'] ?? null];
+
+            if ($detail !== null && $detail['logo'] === null) {
+                $organization['logo'] = null;
+            } elseif ($detail !== null && isset($logoUrls[$detail['logo']])) {
+                $organization['logo'] = $logoUrls[$detail['logo']];
+            }
+
+            $organizations[] = $organization + ['role' => $role];
+        }
+
+        return $organizations;
+    }
+
+    /**
+     * The organizations the member can post as, keyed by id (an int, as PHP
+     * keys digits), with the role each is held through: /rest/organizationAcls, approved grants with a posting
+     * role (config `posting_roles`), the first posting role seen for each.
+     * The reconciliation needs no more: one listing, no names.
+     *
+     * Pages through the results with start/count: the reconciliation and a
+     * connection both go by this list, so a truncated one would flag
+     * organizations the member still administers. It goes on while LinkedIn
+     * announces paging.links rel=next or serves a full page (per
+     * paging.count). LinkedIn orders the grants differently from one call to
+     * the next, so a page can repeat a grant an earlier page served, and skip
+     * another in its place. Any failure returns a RenewalResult, never a
+     * partial list: a non-2xx, a 2xx without an `elements` list, a grant
+     * served twice, an approved posting grant without an organization URN, or
+     * the safety cap.
+     *
+     * @return array<int, string>|RenewalResult
+     */
+    public function fetchOrganizationGrants(#[\SensitiveParameter] string $accessToken): array|RenewalResult
+    {
         $elements = [];
+        $served = [];
         $start = 0;
 
         for ($resultPage = 0; $resultPage < self::MAX_RESULT_PAGES; $resultPage++) {
-            $response = $this->attempt(fn () => $this->http()->withToken($accessToken)
-                ->acceptJson()
-                ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
-                ->get(self::ORGANIZATION_ACLS_URL, [
-                    'q' => 'roleAssignee',
-                    // `*` brings every field of the element, the organization
-                    // URN included (read when the decoration is throttled), and
-                    // `organization~` decorates it. Naming `organization` beside
-                    // `organization~` is refused (400 ILLEGAL_ARGUMENT, "Can't
-                    // merge incompatible specs 'organization'").
-                    'projection' => self::ORGANIZATION_PROJECTION,
-                    'start' => $start,
-                    'count' => self::ORGANIZATION_PAGE_SIZE,
-                ]));
+            $response = $this->attempt(fn () => $this->rest($accessToken)->get(self::ORGANIZATION_ACLS_URL, [
+                'q' => 'roleAssignee',
+                'start' => $start,
+                'count' => self::ORGANIZATION_PAGE_SIZE,
+            ]));
 
             if ($response instanceof RenewalResult) {
                 return $response;
             }
 
             if ($response->failed()) {
-                return RenewalResult::unknownFailure('Could not list LinkedIn organizations (HTTP '.$response->status().').', [
-                    'status' => $response->status(),
-                    'start' => $start,
-                ]);
+                return $this->restFailure($response, 'Could not list LinkedIn organizations', ['start' => $start]);
             }
 
             $batch = $response->json('elements');
@@ -377,6 +456,25 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
                 ]);
             }
 
+            $page = [];
+
+            foreach ($batch as $element) {
+                $key = is_array($element) && is_string($element['organization'] ?? null)
+                    ? json_encode([$element['organization'], $element['role'] ?? null])
+                    : false;
+
+                if ($key !== false && isset($served[$key])) {
+                    return RenewalResult::unknownFailure('LinkedIn served an organization grant twice while paging; refusing a list that may miss another.', [
+                        'start' => $start,
+                    ]);
+                }
+
+                if ($key !== false) {
+                    $page[$key] = true;
+                }
+            }
+
+            $served += $page;
             $elements = array_merge($elements, $batch);
             $start += count($batch);
             $total = $response->json('paging.total');
@@ -390,7 +488,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
                 || ($total !== null ? $start >= (int) $total : (! $hasNext && count($batch) < $pageSize));
 
             if ($done) {
-                return $this->mapOrganizations($elements);
+                return $this->postableGrants($elements);
             }
         }
 
@@ -418,19 +516,93 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $elements  Raw organizationAcls elements.
-     * @return array<int, array<string, mixed>>|RenewalResult
+     * Name and logo of each organization LinkedIn describes, by id, read in
+     * batches from /rest/organizations: `logo` is its image URN, null for an
+     * organization without a logo. One it does not describe (a batch that
+     * failed, an error for that id) is left out.
+     *
+     * @param  array<int, string>  $ids
+     * @return array<array-key, array{name: ?string, logo: ?string}>
      */
-    private function mapOrganizations(array $elements): array|RenewalResult
+    protected function organizationDetails(#[\SensitiveParameter] string $accessToken, array $ids): array
     {
-        $organizations = [];
+        $details = [];
+
+        foreach (array_chunk($ids, self::BATCH_SIZE) as $chunk) {
+            // Rest.li 2.0 batch syntax: List( , ) left unencoded.
+            $response = $this->attempt(fn () => $this->rest($accessToken)->get(self::ORGANIZATIONS_URL.'?ids=List('.implode(',', $chunk).')'));
+            $results = $response instanceof RenewalResult || $response->failed() ? null : $response->json('results');
+
+            foreach (is_array($results) ? $results : [] as $id => $organization) {
+                if (! is_array($organization)) {
+                    continue;
+                }
+
+                $name = $organization['localizedName'] ?? null;
+                $logo = data_get($organization, 'logoV2.original');
+
+                $details[(string) $id] = [
+                    'name' => is_string($name) && trim($name) !== '' ? $name : null,
+                    'logo' => is_string($logo) && $logo !== '' ? $logo : null,
+                ];
+            }
+        }
+
+        return $details;
+    }
+
+    /**
+     * The download URL of each logo, keyed by the URN /rest/organizations
+     * gave, read in batches from /rest/images. Those take urn:li:image URNs:
+     * a logo's urn:li:digitalmediaAsset URN names the same asset. A URL
+     * LinkedIn does not give is left out.
+     *
+     * @param  array<int, string>  $urns
+     * @return array<string, string>
+     */
+    protected function imageUrls(#[\SensitiveParameter] string $accessToken, array $urns): array
+    {
+        $images = [];
+
+        foreach (array_unique($urns) as $urn) {
+            if (preg_match('/^urn:li:(?:digitalmediaAsset|image):([A-Za-z0-9_-]+)$/', $urn, $matches) === 1) {
+                $images["urn:li:image:{$matches[1]}"] = $urn;
+            }
+        }
+
+        $urls = [];
+
+        foreach (array_chunk($images, self::BATCH_SIZE, true) as $chunk) {
+            $list = implode(',', array_map('rawurlencode', array_keys($chunk)));
+            $response = $this->attempt(fn () => $this->rest($accessToken)->get(self::IMAGES_URL."?ids=List({$list})"));
+            $results = $response instanceof RenewalResult || $response->failed() ? null : $response->json('results');
+
+            foreach ($chunk as $imageUrn => $urn) {
+                $url = is_array($results) ? ($results[$imageUrn]['downloadUrl'] ?? null) : null;
+
+                if (is_string($url) && $url !== '') {
+                    $urls[$urn] = $url;
+                }
+            }
+        }
+
+        return $urls;
+    }
+
+    /**
+     * @param  array<int, mixed>  $elements  Raw organizationAcls elements.
+     * @return array<int, string>|RenewalResult
+     */
+    private function postableGrants(array $elements): array|RenewalResult
+    {
+        $grants = [];
         $postingRoles = $this->postingRoles();
 
         foreach ($elements as $element) {
             // Only approved grants with a posting role are postable. Filter
             // before resolving ids, so a grant we would drop anyway (ANALYST,
             // CURATOR...) never blocks the listing.
-            if (($element['state'] ?? null) !== 'APPROVED') {
+            if (! is_array($element) || ($element['state'] ?? null) !== 'APPROVED') {
                 continue;
             }
 
@@ -438,36 +610,83 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
                 continue;
             }
 
-            // LinkedIn swaps `organization~` for `organization!` when it throttles
-            // decoration: name and logo are then unknown, the id is in the URN.
-            $org = is_array($element['organization~'] ?? null) ? $element['organization~'] : [];
-            $id = $org['id'] ?? null;
-
-            if ($id === null && preg_match('/^urn:li:organization:(\d+)$/', (string) ($element['organization'] ?? ''), $matches)) {
-                $id = $matches[1];
-            }
+            $urn = $element['organization'] ?? $element['organizationTarget'] ?? null;
 
             // An approved grant we cannot place would read as "no longer
             // administered": refuse the whole list rather than reconcile on it.
-            if ($id === null) {
+            if (! is_string($urn) || preg_match('/^urn:li:organization:(\d+)$/', $urn, $matches) !== 1) {
                 return RenewalResult::unknownFailure('LinkedIn returned an approved organization grant without a resolvable organization.');
             }
 
             // LinkedIn returns one element per (organization, role): keep the
             // first posting role seen for each organization.
-            if (isset($organizations[(string) $id])) {
-                continue;
-            }
-
-            $organizations[(string) $id] = [
-                'id' => (string) $id,
-                'urn' => "urn:li:organization:{$id}",
-                'name' => $org['localizedName'] ?? null,
-                'logo' => data_get($org, 'logoV2.original~.elements.0.identifiers.0.identifier'),
-                'role' => $element['role'],
-            ];
+            $grants[(int) $matches[1]] ??= (string) $element['role'];
         }
 
-        return array_values($organizations);
+        return $grants;
+    }
+
+    /** A request to LinkedIn's versioned API, as the member. */
+    protected function rest(#[\SensitiveParameter] string $accessToken): PendingRequest
+    {
+        $this->warnAboutAgingVersion();
+
+        return $this->http()->withToken($accessToken)->acceptJson()->withHeaders([
+            'LinkedIn-Version' => $this->apiVersion(),
+            'X-Restli-Protocol-Version' => '2.0.0',
+        ]);
+    }
+
+    /**
+     * A failed /rest call. A 426 means LinkedIn no longer serves the
+     * configured version: every LinkedIn listing fails until it is moved to a
+     * current one, so it is logged as critical, once a day.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    protected function restFailure(Response $response, string $what, array $context = []): RenewalResult
+    {
+        if ($response->status() !== 426) {
+            return RenewalResult::unknownFailure("{$what} (HTTP {$response->status()}).", ['status' => $response->status()] + $context);
+        }
+
+        $version = $this->apiVersion();
+        $reason = "LinkedIn no longer serves API version {$version} (HTTP 426): set LINKEDIN_API_VERSION (connectors.linkedin.api_version) to a current version.";
+
+        if ($this->firstTimeToday("refused:{$version}")) {
+            Log::critical("[social-tokens] {$reason}", ['provider' => 'linkedin', 'api_version' => $version]);
+        }
+
+        return RenewalResult::unknownFailure($reason, ['status' => 426, 'api_version' => $version] + $context);
+    }
+
+    /**
+     * Once a day: the configured LinkedIn-Version nears the end of the year
+     * LinkedIn guarantees each version.
+     */
+    protected function warnAboutAgingVersion(): void
+    {
+        $version = $this->apiVersion();
+        $released = Carbon::createMidnightDate((int) substr($version, 0, 4), (int) substr($version, 4, 2), 1);
+
+        if ($released->addMonths(self::API_VERSION_WARNING_MONTHS)->isFuture() || ! $this->firstTimeToday("aging:{$version}")) {
+            return;
+        }
+
+        Log::warning("[social-tokens] LinkedIn API version {$version} is over ".self::API_VERSION_WARNING_MONTHS.' months old, and LinkedIn supports a version for as little as a year: set LINKEDIN_API_VERSION (connectors.linkedin.api_version) to a recent version.', [
+            'provider' => 'linkedin',
+            'api_version' => $version,
+        ]);
+    }
+
+    private function firstTimeToday(string $what): bool
+    {
+        $key = $what.'@'.Carbon::now()->toDateString();
+
+        if (isset(self::$notices[$key])) {
+            return false;
+        }
+
+        return self::$notices[$key] = true;
     }
 }

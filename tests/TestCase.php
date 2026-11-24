@@ -66,6 +66,11 @@ abstract class TestCase extends Orchestra
             $app['config']->set("services.{$service}.redirect", "https://app.test/oauth/{$service}/callback");
         }
 
+        // This month's LinkedIn-Version, so the warning about an aging version
+        // never fires by the calendar alone (LinkedInRestApiTest checks the
+        // age of the default).
+        $app['config']->set('social-tokens.connectors.linkedin.api_version', date('Ym'));
+
         // A test-only connector whose behaviour is controlled per test.
         $app['config']->set('social-tokens.connectors.fake', [
             'driver' => FakeConnector::class,

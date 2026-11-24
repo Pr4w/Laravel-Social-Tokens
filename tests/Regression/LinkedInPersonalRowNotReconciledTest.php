@@ -83,25 +83,23 @@ beforeEach(function () {
     // any pagination strategy (paging.total, short page, empty page) terminates.
     $this->administeredOrganizationIds = [];
 
-    Http::fake([
-        'api.linkedin.com/*organizationAcls*' => function (Request $request) {
-            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+    Http::fake(linkedInRest(function (Request $request) {
+        parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
 
-            $ids = $this->administeredOrganizationIds;
-            $page = array_slice($ids, (int) ($query['start'] ?? 0), (int) ($query['count'] ?? 100));
+        $ids = $this->administeredOrganizationIds;
+        $page = array_slice($ids, (int) ($query['start'] ?? 0), (int) ($query['count'] ?? 100));
 
-            return Http::response([
-                'paging' => ['start' => (int) ($query['start'] ?? 0), 'count' => count($page), 'total' => count($ids)],
-                'elements' => array_map(fn (string $id) => [
-                    'role' => 'ADMINISTRATOR',
-                    'state' => 'APPROVED',
-                    'roleAssignee' => 'urn:li:person:member-1',
-                    'organization' => "urn:li:organization:{$id}",
-                    'organization~' => ['id' => (int) $id, 'localizedName' => "Org {$id}"],
-                ], $page),
-            ]);
-        },
-    ]);
+        return Http::response([
+            'paging' => ['start' => (int) ($query['start'] ?? 0), 'count' => count($page), 'total' => count($ids)],
+            'elements' => array_map(fn (string $id) => [
+                'role' => 'ADMINISTRATOR',
+                'state' => 'APPROVED',
+                'roleAssignee' => 'urn:li:person:member-1',
+                'organization' => "urn:li:organization:{$id}",
+                'organization~' => ['id' => (int) $id, 'localizedName' => "Org {$id}"],
+            ], $page),
+        ]);
+    }));
 });
 
 it('keeps the personal LinkedIn row usable when storing organizations', function (string $via) {

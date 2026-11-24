@@ -29,11 +29,11 @@ beforeEach(function () {
     // come from two LinkedIn apps (single authorization mode is the default).
     config(['social-tokens.connectors.linkedin.single_authorization' => false]);
 
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [[
+    Http::fake(linkedInRest(Http::response(['elements' => [[
         'role' => 'ADMINISTRATOR',
         'state' => 'APPROVED',
         'organization~' => ['id' => '111', 'localizedName' => 'Acme'],
-    ]]])]);
+    ]]])));
 
     $this->owner = Owner::create();
 });

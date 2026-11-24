@@ -704,6 +704,22 @@ whichever comes first. The personal row carries the member id as
 its `provider_user_id` (the member id), so it only ever touches the
 organization rows.
 
+**LinkedIn API version.** The organizations are read from LinkedIn's versioned
+API (`/rest`; LinkedIn sunset the unversioned `/v2` Marketing APIs in 2023),
+which takes a `LinkedIn-Version` header: `connectors.linkedin.api_version`
+(`LINKEDIN_API_VERSION`), `202605` by default, moved forward by the package's
+releases. LinkedIn supports each version for at least a year, then refuses it
+with HTTP 426, and every organization listing fails until the version moves:
+logged as critical, once a day. From 11 months on, a daily warning asks for a
+newer one. You need not wait for a release: set `LINKEDIN_API_VERSION` to a
+recent version from LinkedIn's versioning page. A connection or profile sync
+lists a member's organizations in three calls (their grants, then their names
+from `/rest/organizations` and their logos' URLs from `/rest/images`, by 50);
+the daily reconciliation, which needs no names, in one. Names and logos are
+best effort: one LinkedIn does not give leaves the stored one as it is. The
+logo is a signed URL that expires within weeks, as with Meta and TikTok: the
+daily profile sync renews it, and an app that keeps the image copies it.
+
 Disconnecting one account (`disconnect()`) keeps a shared credential while
 another account still posts with it: with one authorization, disconnecting
 the personal profile leaves the organizations posting, and the credential is
@@ -1302,7 +1318,7 @@ too, `['x', 'tiktok']` leaves both out). `social-tokens:sync-profiles
 | Instagram Login | `GET /me?fields=username,profile_picture_url` | the username (`nickname` left as stored) | — |
 | Threads | `GET /me?fields=username,threads_profile_picture_url` | left as stored | — |
 | LinkedIn member | OpenID Connect `/v2/userinfo` | the member's name | `profile` |
-| LinkedIn organization | the member's organization list, read once for all of them | the organization's name | — |
+| LinkedIn organization | the member's organization list (`/rest/organizationAcls`, `/rest/organizations`, `/rest/images`), read once for all of them | the organization's name | — |
 | TikTok | `/v2/user/info/` (`display_name`, `avatar_large_url`) | the display name | `user.info.basic` |
 | Google / YouTube | OpenID Connect `/v1/userinfo` | the **Google account's** name, not the channel's | `profile` |
 | X (left out by default) | `GET /2/users/me` | the display name | `users.read` |
@@ -1330,8 +1346,8 @@ storage (it stores the URL, not the image), refresh copies of the name your
 app keeps elsewhere, or notify someone.
 
 The sync only ever writes those three attributes, and only values the
-provider gave: a blank one (a throttled LinkedIn decoration, a provider with no
-handle) never erases a stored one, and a picture is kept only as an http(s)
+provider gave: a blank one (a LinkedIn organization LinkedIn did not describe,
+a provider with no handle) never erases a stored one, and a picture is kept only as an http(s)
 URL. It never touches an account's ids, owner or status, never writes over an
 account flagged or disconnected during the read, and never flags anything: a
 profile it cannot read is left as it is, and whether the token still works

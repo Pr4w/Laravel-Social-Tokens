@@ -324,6 +324,12 @@ return [
             // with its own token: on one credential, each would replace the
             // other's.
             'single_authorization' => env('LINKEDIN_SINGLE_AUTHORIZATION', true),
+            // The LinkedIn-Version (YYYYMM) of the versioned API the
+            // organizations are read from. LinkedIn supports each version for
+            // at least a year, then refuses it: a warning comes daily from 11
+            // months on. Defaults to LinkedInConnector::DEFAULT_API_VERSION,
+            // moved forward by the package's releases.
+            'api_version' => env('LINKEDIN_API_VERSION'),
             // organizationAcls roles that can publish as the Page. Organizations
             // the member holds only through other roles (ANALYST, CURATOR,
             // LEAD_GEN_FORMS_MANAGER...) are not stored, and are reconciled away.

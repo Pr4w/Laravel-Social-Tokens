@@ -203,10 +203,13 @@ class StoreLinkedInOrganizations
                 'last_error' => null,
             ] + $withScopes;
 
-            // Resolved from its URN because LinkedIn throttled the decoration:
-            // keep the name and logo already stored rather than erase them.
+            // An organization LinkedIn did not describe (no name), or whose
+            // logo URL it did not give (no `logo` key): keep what is stored
+            // rather than erase it. A null `logo` is an organization without one.
             if (($org['name'] ?? null) === null) {
                 unset($attributes['name'], $attributes['avatar']);
+            } elseif (! array_key_exists('logo', $org)) {
+                unset($attributes['avatar']);
             }
 
             // profile is merged, not replaced: keys the app stored itself survive.

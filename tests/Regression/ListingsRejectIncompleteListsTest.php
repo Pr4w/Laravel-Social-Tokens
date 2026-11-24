@@ -110,8 +110,9 @@ function incompleteListsAcl(string $id, string $state = 'APPROVED'): array
 }
 
 /**
- * The same element when LinkedIn could not decorate it (documented behaviour
- * under decoration rate limiting): a 200, the URN, and `organization!` in
+ * The same grant, its organization undescribed: /rest/organizations answers
+ * no name for it (linkedInRest() reads `organization!` so). Under /v2, it was
+ * LinkedIn throttling the decoration: a 200, the URN, and `organization!` in
  * place of `organization~`.
  */
 function incompleteListsThrottledAcl(string $id): array
@@ -239,6 +240,7 @@ beforeEach(function () {
     // One stub for the whole test (Http::fake stubs match first-come); each
     // phase swaps the provider behaviour it reads at request time.
     $this->provider = fn () => Http::response(['error' => 'no provider behaviour set'], 500);
+    Http::fake(linkedInRest(fn (Request $request) => ($this->provider)($request)));
     Http::fake(fn (Request $request) => ($this->provider)($request));
 });
 
@@ -388,7 +390,7 @@ it('follows LinkedIn to the last page when it returns fewer organizations than r
     expect($accounts->pluck('provider_user_id')->sort()->values()->all())->toBe($ids);
 });
 
-it('keeps an organization whose decoration LinkedIn throttled, resolving its id from the URN', function () {
+it('keeps an organization LinkedIn did not describe, and its stored name', function () {
     $this->provider = incompleteListsAcls([incompleteListsAcl('111'), incompleteListsAcl('222')]);
     incompleteListsConnectLinkedIn();
 
@@ -403,11 +405,11 @@ it('keeps an organization whose decoration LinkedIn throttled, resolving its id 
     expect($accounts->pluck('provider_user_id')->sort()->values()->all())->toBe(['111', '222'])
         ->and($throttled->last_error)->toBeNull()
         ->and($throttled->profile['organization_urn'])->toBe('urn:li:organization:222')
-        // A missing decoration is not a new name: what the last listing stored stays.
+        // A missing description is not a new name: what the last listing stored stays.
         ->and($throttled->name)->toBe('Org 222');
 });
 
-it('flags no organization when LinkedIn throttled every decoration', function () {
+it('flags no organization when LinkedIn described none of them', function () {
     $this->provider = incompleteListsAcls([incompleteListsAcl('111'), incompleteListsAcl('222')]);
     incompleteListsConnectLinkedIn();
 

@@ -77,7 +77,7 @@ function storedDataHygieneDebugToken(array $scopes): array
  */
 function storedDataHygieneFakeLinkedIn(ArrayObject $roles): void
 {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => function (Request $request) use ($roles) {
+    Http::fake(linkedInRest(function (Request $request) use ($roles) {
         parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
         $start = (int) ($query['start'] ?? 0);
         $elements = [];
@@ -95,7 +95,7 @@ function storedDataHygieneFakeLinkedIn(ArrayObject $roles): void
             'paging' => ['start' => $start, 'count' => (int) ($query['count'] ?? 10), 'total' => count($elements), 'links' => []],
             'elements' => $start === 0 ? $elements : [],
         ]);
-    }]);
+    }));
 }
 
 /** The Threads short-to-long exchange StoreAccountFromSocialite performs. */

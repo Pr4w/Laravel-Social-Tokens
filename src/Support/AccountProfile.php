@@ -7,9 +7,10 @@ namespace Pr4w\SocialTokens\Support;
  * handle and its picture. Read by a connector (Contracts\FetchesProfile) and
  * stored on the account by Actions\SyncAccountProfile.
  *
- * Only the values the provider gave count: a blank one (LinkedIn throttling an
- * organization's decoration, a provider with no handle) means "unknown", never
- * "erase what is stored". A picture is kept only as an http(s) URL.
+ * Only the values the provider gave count: a blank one (a LinkedIn
+ * organization LinkedIn did not describe, a provider with no handle) means
+ * "unknown", never "erase what is stored". A picture is kept only as an
+ * http(s) URL.
  */
 final class AccountProfile
 {

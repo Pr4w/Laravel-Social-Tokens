@@ -47,7 +47,7 @@ function postingRoleAcl(string $orgId, string $role, string $state = 'APPROVED')
 
 function fakePostingRoleAcls(array $elements): void
 {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => $elements])]);
+    Http::fake(linkedInRest(Http::response(['elements' => $elements])));
 }
 
 /*
@@ -133,9 +133,9 @@ it('returns an organization listed under two posting roles once', function () {
 });
 
 it('deduplicates an organization whose roles come back on different result pages', function () {
-    Http::fake(fn ($request) => Http::response((int) ($request['start'] ?? 0) === 0
+    Http::fake(linkedInRest(fn ($request) => Http::response((int) ($request['start'] ?? 0) === 0
         ? ['paging' => ['start' => 0, 'count' => 100, 'total' => 2], 'elements' => [postingRoleAcl('40', 'ANALYST')]]
-        : ['paging' => ['start' => 1, 'count' => 100, 'total' => 2], 'elements' => [postingRoleAcl('40', 'ADMINISTRATOR')]]));
+        : ['paging' => ['start' => 1, 'count' => 100, 'total' => 2], 'elements' => [postingRoleAcl('40', 'ADMINISTRATOR')]])));
 
     $orgs = app(ConnectorRegistry::class)->for('linkedin')->fetchOrganizations('member-token');
 
@@ -183,9 +183,9 @@ it('does not store organizations held only through a non-posting role', function
 });
 
 it('flags an organization for reconnect when the member is demoted to a non-posting role', function () {
-    Http::fake(['api.linkedin.com/v2/organizationAcls*' => Http::sequence()
+    Http::fake(linkedInRest(Http::sequence()
         ->push(['elements' => [postingRoleAcl('10', 'ADMINISTRATOR'), postingRoleAcl('11', 'ADMINISTRATOR')]])
-        ->push(['elements' => [postingRoleAcl('10', 'ANALYST'), postingRoleAcl('11', 'ADMINISTRATOR')]])]);
+        ->push(['elements' => [postingRoleAcl('10', 'ANALYST'), postingRoleAcl('11', 'ADMINISTRATOR')]])));
 
     $store = app(StoreLinkedInOrganizations::class);
     $store->handle(accessToken: 'member-token', memberId: 'member-2');

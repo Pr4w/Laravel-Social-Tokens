@@ -3,6 +3,43 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+- **LinkedIn organizations are read from LinkedIn's versioned API.** LinkedIn
+  sunset its unversioned `/v2` Marketing APIs, `organizationAcls` among them,
+  in June 2023; `/v2/organizationAcls` still answered, unsupported. The
+  package now lists the grants from `/rest/organizationAcls`, the names in
+  batches of 50 from `/rest/organizations`, and the logos' URLs from
+  `/rest/images` (`/rest` refuses projections, so names and logos are no
+  longer decorations of the grant list). The grants, names and logo URLs are
+  those `/v2` gave (checked in production). A connection or profile sync
+  costs up to three calls per member instead of one; the daily
+  reconciliation, which needs no names, still one
+  (`LinkedInConnector::fetchOrganizationGrants()`).
+- Names and logos are best effort: an organization LinkedIn does not describe
+  keeps its stored name and logo, and so does a logo whose URL LinkedIn does
+  not give (a connection stores no `logo` key for it). The profile sync counts
+  an organization LinkedIn did not describe as a failed read, instead of an
+  unchanged one.
+
+### Added
+- `connectors.linkedin.api_version` (`LINKEDIN_API_VERSION`): the
+  `LinkedIn-Version` the `/rest` calls send, `202605` by default
+  (`LinkedInConnector::DEFAULT_API_VERSION`), moved forward by releases.
+  LinkedIn supports a version for at least a year, then answers HTTP 426:
+  the listing then fails with a reason naming the version, logged as critical
+  once a day. From 11 months on, a warning asks for a newer one, once a day.
+
+### Fixed
+- A listing whose result pages served a grant twice is refused: LinkedIn
+  orders the grants differently from one call to the next, so a page could
+  repeat a grant and skip another, which would have read as no longer
+  administered.
+
+### Deprecated
+- `LinkedInConnector::ORGANIZATION_PROJECTION`: no longer sent. Removed in 4.0.
+
 ## [3.7.1]
 
 ### Fixed

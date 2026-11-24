@@ -69,11 +69,11 @@ use Pr4w\SocialTokens\Support\ConnectorRegistry;
 function refreshPrewarnFakeLinkedIn(array $refreshTokens, bool $capped = false): void
 {
     Http::fake([
-        'api.linkedin.com/v2/organizationAcls*' => Http::response(['elements' => [[
+        ...linkedInRest(Http::response(['elements' => [[
             'role' => 'ADMINISTRATOR',
             'state' => 'APPROVED',
             'organization~' => ['id' => '111', 'localizedName' => 'Acme'],
-        ]]]),
+        ]]])),
         'www.linkedin.com/oauth/v2/accessToken' => function (Request $request) use ($refreshTokens, $capped) {
             $refreshExpiresAt = $refreshTokens[$request['refresh_token']] ?? null;
 
