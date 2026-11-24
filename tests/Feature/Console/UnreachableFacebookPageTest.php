@@ -176,6 +176,7 @@ it('decides nothing without a usable user token or an answer from it', function 
 ]);
 
 it('does not resolve a 100/33 on a token that is no Page\'s', function () {
+    config(['social-tokens.reconcile_accounts' => false]); // its own listing of the Instagram accounts is checked elsewhere
     // The Meta user token behind Instagram accounts: no Page account of its own
     $user = unreachablePageUser(['expires_at' => null, 'renew_at' => null]);
     SocialAccount::create(['provider' => 'instagram', 'provider_user_id' => 'ig-1', 'provider_holder_id' => 'fb-user-1', 'social_token_id' => $user->getKey(), 'status' => AccountStatus::Active]);

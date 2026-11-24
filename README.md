@@ -587,7 +587,8 @@ configured app. Threads calls (`graph.threads.net`) and Instagram Login calls
   Login for Business configurations for Facebook and Instagram, check the
   Facebook flow's token also carries the `instagram_*` permissions, since it
   replaces the shared credential. Every account records the Facebook user id, so
-  a reconnect flags targets that user no longer manages — scoped to that user, so
+  a reconnect (and the daily `check-static`) flags targets that user no longer
+  manages — scoped to that user, so
   another Facebook user's rows are never touched (see "Owners" for rows of the
   same user under another owner). (Instagram and Facebook authenticate via the
   Facebook driver: see `$drivers` above.)
@@ -697,7 +698,8 @@ the member holds a posting role are stored — by default `ADMINISTRATOR`,
 `CONTENT_ADMINISTRATOR`, `DIRECT_SPONSORED_CONTENT_POSTER` and
 `RECRUITING_POSTER`, configurable with `connectors.linkedin.posting_roles`; an
 organization the member now holds only as `ANALYST`, `CURATOR`, etc. is flagged
-at the next connect. The personal row carries the member id as
+by the next daily `check-static` (see [Renewing](#renewing)) or connection,
+whichever comes first. The personal row carries the member id as
 `provider_holder_id`, like the organizations, and reconciliation excludes it by
 its `provider_user_id` (the member id), so it only ever touches the
 organization rows.
@@ -826,6 +828,37 @@ decided and the error stays logged as uncatalogued. These calls only happen
 for a Page whose `/me` got 100/33, and a user's Page list serves all of their
 such Pages in a run. A `reportRejected(..., terminal: false)` about a stale
 Page token stores the fresh one the same way.
+
+**Accounts their holder no longer manages.** A LinkedIn member who is no
+longer an organization's admin (or holds only a non-posting role), or a
+Facebook user who unlinked the Page behind an Instagram account, keeps a
+working token: the renewal and the token checks see nothing, while every post
+as that account fails. A connection reconciles them, and so does
+`check-static` every day in between (`reconcile_accounts`, on by default): for
+each token several accounts post with, it lists the accounts its holder can
+still post as (the member's organizations, the Instagram accounts of the
+user's Pages), with the stored token, and flags those missing from the list
+`needs_reconnect`, with the reason a reconnect gives ("Organization no longer
+administered by the connected LinkedIn member", "Instagram account no longer
+managed by the connected Facebook user"). `AccountNeedsReconnect` fires for
+each; the token and the other accounts are untouched, and a reconnect, once
+the member is an admin again, brings the account back.
+
+- A missing account is read again before anything is decided: one answer
+  leaving it out flags nothing.
+- A list that cannot be read whole (an error, a truncated page) decides
+  nothing; one warning per provider says how many tokens could not be listed.
+- When too many accounts of one provider are missing at once, none is
+  flagged: the same breaker as the token checks (`check_static_breaker`), and
+  the command exits with a failure code.
+- A token that has expired (left to the renewal) or does not decrypt is not
+  listed, nor are accounts already flagged or disconnected, nor a LinkedIn
+  member's own profile.
+- One listing per such token and run (two when one is missing). Facebook Pages
+  need none: each has its own token, which dies with the user's role.
+- A connector opts in with `Contracts\ListsReachableAccounts`; set
+  `SOCIAL_TOKENS_RECONCILE_ACCOUNTS=false` to leave them to the next
+  connection.
 
 A custom connector opts in by implementing `Contracts\ChecksCredential`. Its
 plain `terminalFailure()` needs two consecutive runs to flag (a

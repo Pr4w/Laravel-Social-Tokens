@@ -6,6 +6,7 @@ use Carbon\CarbonInterval;
 use Closure;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FetchesProfile;
+use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -37,7 +38,7 @@ use Pr4w\SocialTokens\Support\Settings;
  *    ahead of the 60 day expiry; the credential keeps posting until then, and
  *    is flagged needs_reconnect only once it has actually expired
  */
-class LinkedInConnector extends OAuth2Connector implements ChecksCredential, FetchesProfile
+class LinkedInConnector extends OAuth2Connector implements ChecksCredential, FetchesProfile, ListsReachableAccounts
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
@@ -149,6 +150,34 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
         $organization = collect($organizations)->first(fn ($candidate) => (string) data_get($candidate, 'id', '') === (string) $account->provider_user_id);
 
         return $organization === null ? null : AccountProfile::from(data_get($organization, 'name'), null, data_get($organization, 'logo'));
+    }
+
+    /** A member's organizations: the linkedin accounts other than their profile. */
+    public function reachableAccountProviders(): array
+    {
+        return ['linkedin'];
+    }
+
+    /**
+     * The organizations the member can still post as: approved grants with a
+     * posting role (fetchOrganizations()), as a connection lists them.
+     */
+    public function reachableAccountIds(SocialToken $credential): array|RenewalResult
+    {
+        if (blank($credential->access_token)) {
+            return RenewalResult::unknownFailure('No access token to list the organizations with.');
+        }
+
+        $organizations = $this->fetchOrganizations((string) $credential->access_token);
+
+        return $organizations instanceof RenewalResult
+            ? $organizations
+            : array_values(array_map(fn (array $organization) => (string) $organization['id'], $organizations));
+    }
+
+    public function unreachableAccountReason(): string
+    {
+        return 'Organization no longer administered by the connected LinkedIn member.';
     }
 
     /**

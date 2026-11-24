@@ -1,5 +1,19 @@
 # Upgrading
 
+## From 3.6 to 3.7
+
+Nothing to change, no migration. The daily `check-static` run now also lists,
+for each LinkedIn member token and Meta user token behind Instagram accounts,
+the organizations and Instagram accounts it can still post as, and flags the
+missing ones `needs_reconnect` (`AccountNeedsReconnect`), as a reconnect
+would. Expect a `Checked N account(s) behind M shared credential(s)` line in
+its output, and accounts flagged sooner after a member loses an admin role or
+a Page is unlinked.
+
+- If your app runs its own job for this (re-listing organizations or Pages
+  and disabling the missing ones), you can drop it.
+- Set `SOCIAL_TOKENS_RECONCILE_ACCOUNTS=false` to keep 3.6's behaviour.
+
 ## From 3.6.0 to 3.6.1
 
 X accounts are no longer synced by the daily profile run: X bills every

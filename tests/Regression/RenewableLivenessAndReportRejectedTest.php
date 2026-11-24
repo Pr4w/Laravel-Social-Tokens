@@ -331,7 +331,7 @@ it('flags a revoked LinkedIn member credential during the renewable liveness che
 });
 
 it('does not check renewable credentials when renewable checks are disabled', function () {
-    config(['social-tokens.check_renewable' => false]);
+    config(['social-tokens.check_renewable' => false, 'social-tokens.reconcile_accounts' => false]);
     livenessReportMetaRejects();
 
     $credential = livenessReportCredential('facebook', accounts: 1, accountProvider: 'instagram');

@@ -10,6 +10,16 @@ use Pr4w\SocialTokens\Tests\Fixtures\FakeConnector;
 
 abstract class TestCase extends Orchestra
 {
+    /**
+     * The package migrations (sorted by filename) and the test fixtures',
+     * included once per process: each include of a migration file defines a
+     * new anonymous class, which PHP never frees, and including them before
+     * every test ran the suite out of memory. They hold no state.
+     *
+     * @var list<object>|null
+     */
+    private static ?array $migrations = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -18,13 +28,15 @@ abstract class TestCase extends Orchestra
         // make the suite depend on the network (and on Meta's mood).
         Http::preventStrayRequests();
 
-        // Run every package migration (sorted by filename) plus the test
-        // fixtures against the in-memory sqlite database.
-        foreach (glob(__DIR__.'/../database/migrations/*.php') as $migration) {
-            (include $migration)->up();
-        }
+        self::$migrations ??= [
+            ...array_map(fn (string $migration) => include $migration, glob(__DIR__.'/../database/migrations/*.php') ?: []),
+            include __DIR__.'/Fixtures/database/migrations/0000_00_00_000000_create_owners_table.php',
+        ];
 
-        (include __DIR__.'/Fixtures/database/migrations/0000_00_00_000000_create_owners_table.php')->up();
+        // Against the in-memory sqlite database, fresh for each test.
+        foreach (self::$migrations as $migration) {
+            $migration->up();
+        }
     }
 
     protected function getPackageProviders($app): array

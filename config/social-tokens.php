@@ -84,6 +84,18 @@ return [
     'check_renewable' => env('SOCIAL_TOKENS_CHECK_RENEWABLE', true),
 
     /*
+    | On by default: that same run also lists, for a token several accounts
+    | post with, the accounts its holder can still post as (a LinkedIn
+    | member's organizations, the Instagram accounts of a Facebook user's
+    | Pages), and flags those missing from it, as a reconnect would: the member
+    | is no longer an admin, the Page was unlinked. The token keeps working, so
+    | nothing else notices. One listing per such token per run (a second one
+    | confirms a missing account), under the same breaker; false leaves them
+    | to the next connection.
+    */
+    'reconcile_accounts' => env('SOCIAL_TOKENS_RECONCILE_ACCOUNTS', true),
+
+    /*
     |--------------------------------------------------------------------------
     | Pruning
     |--------------------------------------------------------------------------

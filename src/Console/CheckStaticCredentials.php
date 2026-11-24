@@ -5,11 +5,14 @@ namespace Pr4w\SocialTokens\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
+use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
 use Throwable;
 
@@ -40,6 +43,14 @@ use Throwable;
  * user is caught within a day rather than at its renewal, weeks later. A
  * credential whose renewal is due, or whose token expired, is left to the
  * renewal job. Checks only ask: nothing is renewed or re-dated.
+ *
+ * With `reconcile_accounts` on (the default), it then lists, for each token
+ * several accounts post with, the accounts its holder can still post as
+ * (Contracts\ListsReachableAccounts: a LinkedIn member's organizations, the
+ * Instagram accounts of a Facebook user's Pages), and flags those missing
+ * from it, as a reconnect would, once a second read confirms it. The token
+ * keeps working there, so nothing else notices. Same safeguards: a list read
+ * whole or nothing decided, and the breaker, per account provider.
  */
 class CheckStaticCredentials extends Command
 {
@@ -241,7 +252,187 @@ class CheckStaticCredentials extends Command
             $this->warn("{$errors} credential(s) could not be checked; see the log.");
         }
 
-        return $tripped === [] ? self::SUCCESS : self::FAILURE;
+        $reconcileTripped = $this->reconcileAccounts($registry);
+
+        return $tripped === [] && ! $reconcileTripped ? self::SUCCESS : self::FAILURE;
+    }
+
+    /**
+     * Phase 3: the accounts of a token several accounts post with that its
+     * holder can no longer post as (ListsReachableAccounts). Each such token
+     * still in use is listed once, with its stored token: one expired (left
+     * to the renewal) or unreadable is skipped, and a list that cannot be read
+     * whole decides nothing. A missing account is flagged with the reason a
+     * reconnect gives, as a reconnect would, once a second read of the list
+     * confirms it (a one-off answer leaving it out decides nothing). When too
+     * many accounts of one provider are missing at once, none of them is
+     * judged.
+     *
+     * @return bool Whether a provider's breaker stopped its verdicts.
+     */
+    protected function reconcileAccounts(ConnectorRegistry $registry): bool
+    {
+        if (! Settings::reconcileAccounts()) {
+            return false;
+        }
+
+        /** @var array<string, ListsReachableAccounts> $connectors */
+        $connectors = [];
+
+        foreach ($registry->configured() as $provider) {
+            $connector = $registry->for($provider);
+
+            if ($connector instanceof ListsReachableAccounts) {
+                $connectors[$provider] = $connector;
+            }
+        }
+
+        if ($connectors === []) {
+            return false;
+        }
+
+        /** @var array<string, int> $candidates account provider => accounts listed against */
+        $candidates = [];
+
+        /** @var array<string, list<array{account: SocialAccount, reason: string}>> $missing */
+        $missing = [];
+
+        /** @var array<string, array{credentials: int, reason: ?string}> $unreadable */
+        $unreadable = [];
+
+        $listed = 0;
+
+        SocialToken::query()
+            ->whereIn('provider', array_keys($connectors))
+            ->where('status', AccountStatus::Active->value)
+            ->lazyById()
+            ->each(function (SocialToken $token) use ($connectors, &$candidates, &$missing, &$unreadable, &$listed) {
+                $connector = $connectors[$token->provider];
+
+                $accounts = $token->accounts()
+                    ->where('status', AccountStatus::Active->value)
+                    ->whereIn('provider', $connector->reachableAccountProviders())
+                    ->where(fn ($query) => $query->whereNull('provider_holder_id')->orWhereColumn('provider_user_id', '!=', 'provider_holder_id'))
+                    ->get();
+
+                if ($accounts->isEmpty() || ! $token->tokensDecrypt() || $token->isAccessTokenExpired()) {
+                    return;
+                }
+
+                $ids = $this->reachableAccountIds($connector, $token);
+                $absent = $ids instanceof RenewalResult ? $accounts : $accounts->reject(fn (SocialAccount $account) => in_array((string) $account->provider_user_id, $ids, true));
+
+                // A missing account is read again before anything is decided:
+                // one answer leaving it out could be a fluke.
+                if (! $ids instanceof RenewalResult && $absent->isNotEmpty()) {
+                    $ids = $this->reachableAccountIds($connector, $token);
+                    $absent = $ids instanceof RenewalResult ? $absent : $absent->reject(fn (SocialAccount $account) => in_array((string) $account->provider_user_id, $ids, true));
+                }
+
+                if ($ids instanceof RenewalResult) {
+                    $unreadable[$token->provider] ??= ['credentials' => 0, 'reason' => $ids->reason];
+                    $unreadable[$token->provider]['credentials']++;
+
+                    return;
+                }
+
+                $listed++;
+
+                foreach ($accounts as $account) {
+                    $candidates[$account->provider] = ($candidates[$account->provider] ?? 0) + 1;
+                }
+
+                foreach ($absent as $account) {
+                    $missing[$account->provider][] = ['account' => $account, 'reason' => $connector->unreachableAccountReason()];
+                }
+            });
+
+        foreach ($unreadable as $provider => $failure) {
+            Log::warning("[social-tokens] check-static could not list the accounts behind {$failure['credentials']} {$provider} credential(s); none of them was judged.", [
+                'provider' => (string) $provider,
+                'credentials' => $failure['credentials'],
+                'reason' => $failure['reason'],
+            ]);
+        }
+
+        ['min_checked' => $minChecked, 'max_terminal_ratio' => $maxRatio] = Settings::staticCheckBreaker();
+        $tripped = false;
+        $flagged = 0;
+
+        foreach ($missing as $provider => $entries) {
+            $provider = (string) $provider;
+
+            if ($this->tripsBreaker($candidates[$provider], count($entries), $minChecked, $maxRatio)) {
+                $tripped = true;
+
+                Log::critical("[social-tokens] check-static skipped reconciling {$provider}: too many of its accounts missing from their holders' lists at once", [
+                    'provider' => $provider,
+                    'checked' => $candidates[$provider],
+                    'missing' => count($entries),
+                    'max_terminal_ratio' => $maxRatio,
+                ]);
+
+                $this->error('Aborted reconciling '.$provider.': '.count($entries)." of {$candidates[$provider]} {$provider} accounts were missing at once; none of them was flagged.");
+
+                continue;
+            }
+
+            foreach ($entries as ['account' => $account, 'reason' => $reason]) {
+                try {
+                    $flagged += $this->flagAccount($account, $reason) ? 1 : 0;
+                } catch (Throwable $e) {
+                    Log::error('[social-tokens] Could not record an account check', [
+                        'account_id' => $account->getKey(),
+                        'exception' => $e::class,
+                        'message' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+
+        $checked = array_sum($candidates);
+
+        if ($checked > 0) {
+            $this->info("Checked {$checked} account(s) behind {$listed} shared credential(s), flagged {$flagged}.");
+        }
+
+        return $tripped;
+    }
+
+    /**
+     * Flag an account its holder no longer reaches, only while it still posts
+     * with the credential that was listed: a reconnect meanwhile moved or
+     * restored it.
+     */
+    protected function flagAccount(SocialAccount $account, string $reason): bool
+    {
+        $current = SocialAccount::query()
+            ->whereKey($account->getKey())
+            ->where('status', AccountStatus::Active->value)
+            ->where('social_token_id', $account->social_token_id)
+            ->first();
+
+        if ($current === null) {
+            return false;
+        }
+
+        $current->markNeedsReconnect($reason);
+
+        return $current->status === AccountStatus::NeedsReconnect;
+    }
+
+    /**
+     * The connector's list, an exception taken as a list that cannot be read.
+     *
+     * @return array<int, string>|RenewalResult
+     */
+    protected function reachableAccountIds(ListsReachableAccounts $connector, SocialToken $token): array|RenewalResult
+    {
+        try {
+            return $connector->reachableAccountIds($token);
+        } catch (Throwable $e) {
+            return RenewalResult::unknownFailure('Unexpected error: '.$e::class);
+        }
     }
 
     /** More than $maxRatio of at least $minChecked checked credentials came back terminal. */

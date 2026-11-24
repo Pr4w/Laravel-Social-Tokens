@@ -86,6 +86,12 @@ final class Settings
         return array_values(array_filter(array_map(fn ($provider) => is_string($provider) ? trim($provider) : '', $value), fn (string $provider) => $provider !== ''));
     }
 
+    /** Whether check-static also flags fan-out accounts their holder no longer manages. */
+    public static function reconcileAccounts(): bool
+    {
+        return self::bool('reconcile_accounts', true);
+    }
+
     public static function checkRenewable(): bool
     {
         return self::bool('check_renewable', true);

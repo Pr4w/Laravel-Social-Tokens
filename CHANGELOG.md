@@ -3,6 +3,30 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Accounts their holder no longer manages are flagged without waiting for a
+  reconnect.** A LinkedIn member who is no longer an organization's admin
+  (or holds only a non-posting role), or a Facebook user who unlinked the Page
+  behind an Instagram account, keeps a working token: the renewal and the
+  token checks saw nothing, the account stayed `active`, and every post as it
+  failed until the member's next connection reconciled it. `check-static`
+  now does that reconciliation every day (`reconcile_accounts`,
+  `SOCIAL_TOKENS_RECONCILE_ACCOUNTS`, on by default): for each token several
+  accounts post with, it lists the accounts its holder can still post as,
+  with the stored token, and flags those missing `needs_reconnect` with the
+  reason a reconnect gives (`AccountNeedsReconnect` fires). A missing account
+  is read again before it is flagged; a list that cannot be read whole
+  decides nothing (one warning per provider); the per-provider breaker stops
+  the verdicts when too many accounts go missing at once; expired or
+  unreadable tokens, flagged or disconnected accounts and a LinkedIn member's
+  own profile are left out. One listing per such token and run. No
+  migration.
+  - `Contracts\ListsReachableAccounts`, implemented by `LinkedInConnector`
+    (the member's organizations) and `FacebookConnector` (the Instagram
+    accounts of the user's Pages).
+
 ## [3.6.1]
 
 ### Fixed

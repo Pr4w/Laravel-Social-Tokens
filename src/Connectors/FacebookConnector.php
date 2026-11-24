@@ -8,6 +8,7 @@ use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\FetchesProfile;
+use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -34,7 +35,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * The exchange call, the Graph version and appsecret_proof signing are
  * shared with Instagram (MetaGraphConnector).
  */
-class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections, FetchesProfile
+class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections, FetchesProfile, ListsReachableAccounts
 {
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
@@ -227,6 +228,43 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
             ->get($this->graphUrl((string) $account->provider_user_id), ['fields' => 'name,picture{url}'] + $this->appSecretProofQuery($token)));
 
         return $this->graphProfile($response, fn (array $body) => AccountProfile::from($body['name'] ?? null, null, data_get($body, 'picture.data.url')));
+    }
+
+    /**
+     * The Instagram accounts a Facebook user's token posts as. Their Pages
+     * have tokens of their own, which die with the user's role, so the token
+     * checks already catch those.
+     */
+    public function reachableAccountProviders(): array
+    {
+        return ['instagram'];
+    }
+
+    /**
+     * The Instagram accounts linked to the Pages the user still manages
+     * (fetchPages()), as StoreInstagramAccounts lists them.
+     */
+    public function reachableAccountIds(SocialToken $credential): array|RenewalResult
+    {
+        if (blank($credential->access_token)) {
+            return RenewalResult::unknownFailure('No access token to list the Pages with.');
+        }
+
+        $pages = $this->fetchPages((string) $credential->access_token, 'id,instagram_business_account{id}');
+
+        if ($pages instanceof RenewalResult) {
+            return $pages;
+        }
+
+        return array_values(array_filter(array_map(
+            fn ($page) => (string) data_get($page, 'instagram_business_account.id', ''),
+            $pages,
+        ), fn (string $id) => $id !== ''));
+    }
+
+    public function unreachableAccountReason(): string
+    {
+        return 'Instagram account no longer managed by the connected Facebook user.';
     }
 
     /**
