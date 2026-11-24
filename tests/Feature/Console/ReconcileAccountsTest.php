@@ -4,6 +4,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Events\AccountNeedsReconnect;
 use Pr4w\SocialTokens\Models\SocialAccount;
@@ -108,7 +109,9 @@ it('lists once when every account is there', function () {
     Http::assertSentCount(1);
 });
 
-it('flags an Instagram account no longer linked to a Page the user manages', function () {
+/** A Facebook user's token behind Instagram accounts ig-1 and ig-2. */
+function reconcileInstagram(): SocialToken
+{
     $token = SocialToken::create([
         'provider' => 'facebook', 'provider_holder_id' => 'fb-user-1', 'access_token' => 'user-token', 'status' => AccountStatus::Active,
         'expires_at' => now()->addDays(40), 'renew_at' => now()->addDays(33),
@@ -118,10 +121,24 @@ it('flags an Instagram account no longer linked to a Page the user manages', fun
         SocialAccount::create(['provider' => 'instagram', 'provider_user_id' => $id, 'provider_holder_id' => 'fb-user-1', 'social_token_id' => $token->getKey(), 'status' => AccountStatus::Active]);
     }
 
-    Http::fake(['graph.facebook.com/*/me/accounts*' => Http::response(['data' => [
-        ['id' => 'page-1', 'instagram_business_account' => ['id' => 'ig-1']],
-        ['id' => 'page-2'], // ig-2's Page, unlinked
-    ]])]);
+    return $token;
+}
+
+/** /me/accounts lists only ig-1's Page; Meta answers $igTwo when asked about ig-2 itself. */
+function reconcileInstagramGraph(mixed $igTwo, int $status = 200): void
+{
+    Http::fake([
+        'graph.facebook.com/*/me/accounts*' => Http::response(['data' => [
+            ['id' => 'page-1', 'instagram_business_account' => ['id' => 'ig-1']],
+            ['id' => 'page-2'], // no linked Instagram account
+        ]]),
+        'graph.facebook.com/*/ig-2*' => Http::response($igTwo, $status),
+    ]);
+}
+
+it('flags an Instagram account Meta says the user no longer reaches', function (array $error) {
+    reconcileInstagram();
+    reconcileInstagramGraph(['error' => $error], 400);
 
     $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 1.')->assertSuccessful();
 
@@ -130,7 +147,54 @@ it('flags an Instagram account no longer linked to a Page the user manages', fun
         ->and(reconcileAccount('instagram', 'ig-1')->status)->toBe(AccountStatus::Active);
 
     Http::assertSent(fn (Request $request) => $request['fields'] === 'id,instagram_business_account{id}' && $request->hasHeader('Authorization', 'Bearer user-token'));
+    Http::assertSent(fn (Request $request) => str_ends_with((string) parse_url($request->url(), PHP_URL_PATH), '/ig-2') && $request['fields'] === 'id');
+})->with([
+    'not found (100/33)' => [['code' => 100, 'error_subcode' => 33, 'type' => 'GraphMethodException', 'message' => "Object with ID 'ig-2' does not exist"]],
+    'no permission (10)' => [['code' => 10, 'type' => 'OAuthException', 'message' => 'Application does not have permission for this action']],
+    'no permission (200)' => [['code' => 200, 'type' => 'OAuthException', 'message' => 'Permissions error']],
+]);
+
+/*
+ * Seen in production: an Instagram account the user reaches through Business
+ * Manager is not on /me/accounts (only Pages with a role are), yet reads and
+ * posts with the user token. 3.7.0 flagged it.
+ */
+it('leaves an Instagram account the token still reads, as one reached through Business Manager', function () {
+    reconcileInstagram();
+    reconcileInstagramGraph(['id' => 'ig-2']);
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.')->assertSuccessful();
+
+    expect(reconcileAccount('instagram', 'ig-2')->status)->toBe(AccountStatus::Active);
 });
+
+it('decides nothing when Meta does not answer about the account', function (int $status, array $body) {
+    reconcileInstagram();
+    reconcileInstagramGraph($body, $status);
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.')->assertSuccessful();
+
+    expect(reconcileAccount('instagram', 'ig-2')->status)->toBe(AccountStatus::Active);
+})->with([
+    'an outage' => [503, []],
+    'a rate limit' => [400, ['error' => ['code' => 4, 'message' => 'Application request limit reached', 'type' => 'OAuthException']]],
+    'a dead token' => [400, ['error' => ['code' => 190, 'message' => 'Error validating access token', 'type' => 'OAuthException']]],
+    'an unexpected answer' => [200, ['id' => 'someone-else']],
+]);
+
+it('leaves an Instagram account the token still reads at reconnect too', function (mixed $answer, int $status, AccountStatus $expected) {
+    $token = reconcileInstagram();
+    reconcileInstagramGraph($answer, $status);
+    Http::fake(['graph.facebook.com/*/me*' => Http::response(['id' => 'fb-user-1'])]);
+
+    app(StoreInstagramAccounts::class)->handle(userToken: 'user-token', userId: 'fb-user-1', extend: false);
+
+    expect(reconcileAccount('instagram', 'ig-2')->status)->toBe($expected);
+})->with([
+    'reached through Business Manager' => [['id' => 'ig-2'], 200, AccountStatus::Active],
+    'out of reach' => [['error' => ['code' => 100, 'error_subcode' => 33, 'type' => 'GraphMethodException', 'message' => 'gone']], 400, AccountStatus::NeedsReconnect],
+    'no answer' => [[], 503, AccountStatus::Active],
+]);
 
 it('decides nothing on a list it cannot read whole, and says so once per provider', function () {
     Log::spy();

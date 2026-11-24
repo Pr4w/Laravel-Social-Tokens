@@ -3,6 +3,22 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **An Instagram account reached through Business Manager was flagged.** It
+  is not on `/me/accounts` (only Pages the user holds a role on are), yet it
+  reads and posts with the user token: 3.7.0's daily reconciliation flagged
+  it, and so did a reconnect (`StoreInstagramAccounts`), since 1.x. Before
+  flagging an Instagram account missing from the user's Pages, the package
+  now reads `GET /{ig-user-id}?fields=id` with the user token: an answer
+  leaves it alone, a permission or not-found error (10, 200-299, 100/33)
+  flags it, anything else decides nothing.
+  `ListsReachableAccounts::isStillReachable()` asks a connector about one
+  missing account (LinkedIn answers false: its organization list is the only
+  way to an organization), and `FacebookConnector::instagramAccountReachable()`
+  is the Instagram check.
+
 ## [3.7.0]
 
 ### Added

@@ -845,7 +845,14 @@ each; the token and the other accounts are untouched, and a reconnect, once
 the member is an admin again, brings the account back.
 
 - A missing account is read again before anything is decided: one answer
-  leaving it out flags nothing.
+  leaving it out flags nothing. Then the account itself is asked about: an
+  Instagram account reached through Business Manager is not on
+  `/me/accounts`, yet reads and posts with the user token, so the package
+  reads `GET /{ig-user-id}?fields=id` and flags the account only when Meta
+  answers with a permission or not-found error (10, 200–299, 100/33); any
+  other answer decides nothing. A connection's reconciliation asks the same
+  way. (A LinkedIn member reaches an organization only through a role, which
+  the list shows: two reads that agree are enough.)
 - A list that cannot be read whole (an error, a truncated page) decides
   nothing; one warning per provider says how many tokens could not be listed.
 - When too many accounts of one provider are missing at once, none is

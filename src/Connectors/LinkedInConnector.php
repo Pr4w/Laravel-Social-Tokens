@@ -175,6 +175,16 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
             : array_values(array_map(fn (array $organization) => (string) $organization['id'], $organizations));
     }
 
+    /**
+     * A member reaches an organization only through a role on it, and
+     * organizationAcls lists every one: missing from two reads of that list,
+     * the organization is out of reach.
+     */
+    public function isStillReachable(SocialToken $credential, SocialAccount $account): ?bool
+    {
+        return false;
+    }
+
     public function unreachableAccountReason(): string
     {
         return 'Organization no longer administered by the connected LinkedIn member.';

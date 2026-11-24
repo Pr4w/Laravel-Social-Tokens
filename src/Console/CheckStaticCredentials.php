@@ -264,9 +264,11 @@ class CheckStaticCredentials extends Command
      * to the renewal) or unreadable is skipped, and a list that cannot be read
      * whole decides nothing. A missing account is flagged with the reason a
      * reconnect gives, as a reconnect would, once a second read of the list
-     * confirms it (a one-off answer leaving it out decides nothing). When too
-     * many accounts of one provider are missing at once, none of them is
-     * judged.
+     * confirms it (a one-off answer leaving it out decides nothing) and the
+     * connector, asked about that account itself, says it is out of reach
+     * (isStillReachable(): an Instagram account reached through Business
+     * Manager is not on the list, yet posts). When too many accounts of one
+     * provider are missing at once, none of them is judged.
      *
      * @return bool Whether a provider's breaker stopped its verdicts.
      */
@@ -335,6 +337,10 @@ class CheckStaticCredentials extends Command
 
                     return;
                 }
+
+                // Asked about itself: an account the list leaves out may still
+                // be reached another way. Only a "no" flags it.
+                $absent = $absent->filter(fn (SocialAccount $account) => $this->stillReachable($connector, $token, $account) === false);
 
                 $listed++;
 
@@ -419,6 +425,16 @@ class CheckStaticCredentials extends Command
         $current->markNeedsReconnect($reason);
 
         return $current->status === AccountStatus::NeedsReconnect;
+    }
+
+    /** The connector's answer about one account, an exception taken as no answer. */
+    protected function stillReachable(ListsReachableAccounts $connector, SocialToken $token, SocialAccount $account): ?bool
+    {
+        try {
+            return $connector->isStillReachable($token, $account);
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

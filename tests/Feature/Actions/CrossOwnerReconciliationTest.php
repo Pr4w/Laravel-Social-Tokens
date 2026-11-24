@@ -38,6 +38,11 @@ function crossOwnerFakeMeta(array $pagesByUserToken): void
 
         $userToken = Str::after($request->header('Authorization')[0] ?? '', 'Bearer ');
 
+        // An Instagram account asked about itself: no longer reached
+        if (! str_contains($request->url(), '/me') && ($request['fields'] ?? null) === 'id') {
+            return Http::response(['error' => ['message' => 'Object with ID does not exist, cannot be loaded due to missing permissions', 'type' => 'GraphMethodException', 'code' => 100, 'error_subcode' => 33]], 400);
+        }
+
         return str_contains($request->url(), '/me/accounts') && array_key_exists($userToken, $pagesByUserToken)
             ? Http::response(['data' => $pagesByUserToken[$userToken]])
             : Http::response(['error' => ['message' => 'Unexpected Graph call', 'code' => 100]], 400);

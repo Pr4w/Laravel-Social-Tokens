@@ -69,6 +69,11 @@ function ownerScopedFakeMeta(array $pagesByUserToken): void
                 : Http::response(['error' => ['message' => "Unexpected test token [{$userToken}]", 'code' => 190]], 400);
         }
 
+        // An Instagram account asked about itself: no longer reached
+        if (($request['fields'] ?? null) === 'id') {
+            return Http::response(['error' => ['message' => 'Object with ID does not exist, cannot be loaded due to missing permissions', 'type' => 'GraphMethodException', 'code' => 100, 'error_subcode' => 33]], 400);
+        }
+
         return Http::response(['error' => ['message' => "Unexpected Graph call [{$url}]"]], 404);
     });
 }

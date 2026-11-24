@@ -38,6 +38,8 @@ function fakeInstagramGraph(array $o = []): void
             str_contains($url, '/debug_token') => Http::response($debug),
             str_contains($url, '/me/accounts') => Http::response($pages),
             str_contains($url, '/me') => Http::response(['id' => 'user-1']),
+            // An Instagram account asked about itself: no longer reached
+            ($request['fields'] ?? null) === 'id' => Http::response(['error' => ['message' => 'Object with ID does not exist, cannot be loaded due to missing permissions', 'type' => 'GraphMethodException', 'code' => 100, 'error_subcode' => 33]], 400),
             default => Http::response([], 404),
         };
     });

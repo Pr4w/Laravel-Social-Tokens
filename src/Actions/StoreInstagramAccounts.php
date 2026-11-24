@@ -237,13 +237,16 @@ class StoreInstagramAccounts implements StoresConnections
         }
 
         // 5. Reconcile Instagram accounts this user no longer manages, under
-        // every owner: Meta grants access per user, not per connection.
+        // every owner: Meta grants access per user, not per connection. Only
+        // those Meta says the token no longer reaches: one reached through
+        // Business Manager is not on /me/accounts, yet posts.
         SocialAccount::query()
             ->where('provider', 'instagram')
             ->where('provider_holder_id', $userId)
             ->where('status', AccountStatus::Active->value)
             ->when($managedIgIds !== [], fn ($query) => $query->whereNotIn('provider_user_id', $managedIgIds))
             ->get()
+            ->filter(fn (SocialAccount $account) => $facebook->instagramAccountReachable($userToken, (string) $account->provider_user_id) === false)
             ->each(fn (SocialAccount $account) => $account->markNeedsReconnect(
                 'Instagram account no longer managed by the connected Facebook user.'
             ));

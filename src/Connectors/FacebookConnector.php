@@ -262,6 +262,52 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
         ), fn (string $id) => $id !== ''));
     }
 
+    /**
+     * An Instagram account missing from the user's Pages may still be theirs:
+     * one reached through Business Manager is not on /me/accounts, yet reads
+     * and posts with the user token. Asked directly (instagramAccountReachable()).
+     */
+    public function isStillReachable(SocialToken $credential, SocialAccount $account): ?bool
+    {
+        return blank($credential->access_token)
+            ? null
+            : $this->instagramAccountReachable((string) $credential->access_token, (string) $account->provider_user_id);
+    }
+
+    /**
+     * Whether a user token still reaches an Instagram account:
+     * GET /{ig-user-id}?fields=id. An answer naming it is yes. A permission
+     * or not-found error (10, 200-299, 100/33) is no. Anything else (an
+     * outage, a rate limit, a dead token) tells nothing: null.
+     */
+    public function instagramAccountReachable(#[\SensitiveParameter] string $userToken, string $igUserId): ?bool
+    {
+        $response = $this->attempt(fn () => $this->http()->withToken($userToken)
+            ->acceptJson()
+            ->get($this->graphUrl($igUserId), ['fields' => 'id'] + $this->appSecretProofQuery($userToken)));
+
+        if ($response instanceof RenewalResult) {
+            return null;
+        }
+
+        $body = $response->json();
+        $body = is_array($body) ? $body : [];
+
+        if ($response->successful() && empty($body['error']) && (string) ($body['id'] ?? '') === $igUserId) {
+            return true;
+        }
+
+        $error = $body['error'] ?? null;
+
+        if (! is_array($error)) {
+            return null;
+        }
+
+        $code = (int) ($error['code'] ?? 0);
+
+        return $code === 10 || ($code >= 200 && $code <= 299) || MetaErrorMapper::isUnreachableObject($error) ? false : null;
+    }
+
     public function unreachableAccountReason(): string
     {
         return 'Instagram account no longer managed by the connected Facebook user.';
