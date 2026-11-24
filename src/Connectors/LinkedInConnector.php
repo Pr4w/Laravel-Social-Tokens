@@ -42,6 +42,18 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
+    /**
+     * Still the unversioned /v2 endpoint. LinkedIn now documents
+     * /rest/organizationAcls (with a LinkedIn-Version header), which was checked
+     * in production on 2026-11-24 with version 202605: q=roleAssignee returned
+     * the same grants as /v2 (same organizations, roles and states), but it
+     * refuses the projection (400 "projection parameter is not allowed for
+     * this endpoint"). Moving to /rest therefore means reading names and logos
+     * with a separate /rest/organizations call, and bumping the version header
+     * before LinkedIn sunsets it. Left as is while /v2 keeps working; if it
+     * stops, connecting LinkedIn Pages fails (StoreLinkedInOrganizations throws)
+     * and the daily reconciliation decides nothing.
+     */
     protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
 
     protected const INTROSPECT_URL = 'https://www.linkedin.com/oauth/v2/introspectToken';
