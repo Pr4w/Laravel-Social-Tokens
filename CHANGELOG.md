@@ -3,6 +3,23 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **The LinkedIn member's profile syncs with `r_basicprofile`.** The sync
+  read the member's name and picture from OpenID Connect `/userinfo`, which
+  needs the `profile` scope; Community Management apps are granted
+  `r_basicprofile` (or `r_liteprofile`) instead, so their members' profiles
+  never updated. Without `profile`, the sync now reads the Profile API
+  (`GET /v2/me`): the localized first and last names, and the largest size
+  of the picture. Without the granted scopes on record, it tries
+  `/userinfo`, then `/v2/me` if `/userinfo` is refused.
+
+### Changed
+- The default Meta Graph API version is `v25.0` (it was `v23.0`), available
+  until July 2028. Meta's changelogs for v24.0 and v25.0 change none of the
+  calls the package makes. `META_GRAPH_VERSION` still sets it.
+
 ## [3.8.1]
 
 ### Changed

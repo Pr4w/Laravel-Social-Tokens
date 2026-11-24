@@ -284,6 +284,8 @@ return [
         'facebook' => [
             'driver' => FacebookConnector::class,
             'credentials' => 'facebook',
+            // The Graph API version of the package's calls: set
+            // META_GRAPH_VERSION to the one your app calls Meta with.
             'graph_version' => env('META_GRAPH_VERSION', MetaGraphConnector::DEFAULT_GRAPH_VERSION),
             // Off by default. When on, Graph calls made with a user or Page
             // token carry appsecret_proof, so the Meta app can turn on

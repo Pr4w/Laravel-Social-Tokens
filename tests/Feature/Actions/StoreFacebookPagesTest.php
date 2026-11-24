@@ -130,7 +130,7 @@ it('stores pages spread over several result pages and flags none of them', funct
         ? Http::response(['data' => [['id' => 'page-26', 'name' => 'Page 26', 'access_token' => 'pt-26']]])
         : Http::response([
             'data' => [['id' => 'page-1', 'name' => 'Page One', 'access_token' => 'pt-1']],
-            'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=NEXT'],
+            'paging' => ['next' => 'https://graph.facebook.com/v25.0/me/accounts?after=NEXT'],
         ]),
     ]);
 
@@ -150,7 +150,7 @@ it('flags nothing when a later result page fails', function () {
         ? Http::response(['error' => ['code' => 2, 'message' => 'Service temporarily unavailable']], 500)
         : Http::response([
             'data' => [['id' => 'page-1', 'name' => 'Page One', 'access_token' => 'pt-1']],
-            'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=NEXT'],
+            'paging' => ['next' => 'https://graph.facebook.com/v25.0/me/accounts?after=NEXT'],
         ]),
     ]);
 

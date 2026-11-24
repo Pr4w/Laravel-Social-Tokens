@@ -1,5 +1,17 @@
 # Upgrading
 
+## From 3.8 to 3.9
+
+Nothing to change, no migration.
+
+- The package now calls Meta with Graph API `v25.0` by default (it was
+  `v23.0`). If your app calls Meta with another version, set
+  `META_GRAPH_VERSION` to it, so both see the same API.
+- A LinkedIn member's name and picture now sync when the member granted
+  `r_basicprofile` rather than OpenID's `profile` (Community Management
+  apps): expect `AccountProfileUpdated` for those members on the next sync,
+  since their stored picture URL was never refreshed.
+
 ## From 3.8.0 to 3.8.1
 
 Nothing to change. A LinkedIn organization missing from its member's list

@@ -204,7 +204,7 @@ it('keeps the user token out of the reason when a later /me/accounts page cannot
         if (! str_contains($request->url(), 'after=')) {
             return Http::response([
                 'data' => [['id' => '1001', 'name' => 'Page 1', 'access_token' => 'page-token-1']],
-                'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?access_token='
+                'paging' => ['next' => 'https://graph.facebook.com/v25.0/me/accounts?access_token='
                     .noSecretsInErrorsUserToken().'&fields=id%2Cname&limit=100&after=CURSOR1'],
             ]);
         }

@@ -5,6 +5,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Pr4w\SocialTokens\Actions\StoreConnection;
 use Pr4w\SocialTokens\Connectors\InstagramLoginConnector;
+use Pr4w\SocialTokens\Connectors\MetaGraphConnector;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
@@ -142,7 +143,7 @@ it('checks a token on graph.instagram.com/me', function () {
 
     expect(instagramLogin()->checkCredential(instagramLoginCredential())->succeeded())->toBeTrue();
 
-    Http::assertSent(fn (Request $request) => str_starts_with($request->url(), 'https://graph.instagram.com/v23.0/me?')
+    Http::assertSent(fn (Request $request) => str_starts_with($request->url(), 'https://graph.instagram.com/'.MetaGraphConnector::DEFAULT_GRAPH_VERSION.'/me?')
         && $request['access_token'] === 'long-lived');
 });
 

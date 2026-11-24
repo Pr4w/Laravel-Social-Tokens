@@ -228,6 +228,87 @@ it('reads the LinkedIn member\'s own profile from /userinfo', function () {
         ->and($member->fresh()->nickname)->toBe('old_handle');
 });
 
+/**
+ * The member as GET /v2/me answers with r_basicprofile and the picture's
+ * playableStreams decorated (Profile API), its sizes out of order.
+ */
+function linkedInMe(): array
+{
+    $size = fn (int $width) => [
+        'data' => ['com.linkedin.digitalmedia.mediaartifact.StillImage' => ['storageSize' => ['width' => $width, 'height' => $width]]],
+        'identifiers' => [['identifier' => "https://media.licdn.com/ada-{$width}.jpg?e=1", 'identifierType' => 'EXTERNAL_URL']],
+    ];
+
+    return [
+        'id' => 'member-1',
+        'localizedFirstName' => 'Ada',
+        'localizedLastName' => 'Lovelace',
+        'profilePicture' => [
+            'displayImage' => 'urn:li:digitalmediaAsset:C4E03AQ',
+            'displayImage~' => ['elements' => [$size(100), $size(800), $size(400)]],
+        ],
+    ];
+}
+
+/*
+ * Community Management apps are granted r_basicprofile, not OpenID's
+ * profile: /userinfo refuses them, the Profile API answers.
+ */
+it('reads the LinkedIn member\'s profile from /v2/me with r_basicprofile', function () {
+    Http::fake(['api.linkedin.com/v2/me*' => Http::response(linkedInMe())]);
+    $member = profileAccount('linkedin', ['provider_user_id' => 'member-1', 'provider_holder_id' => 'member-1'], [
+        'provider_holder_id' => 'member-1',
+        'scopes' => ['r_basicprofile', 'w_member_social', 'rw_organization_admin', 'w_organization_social'],
+    ]);
+
+    expect(syncProfile($member)->outcome)->toBe(ProfileSyncOutcome::Updated)
+        ->and($member->fresh()->name)->toBe('Ada Lovelace')
+        ->and($member->fresh()->avatar)->toBe('https://media.licdn.com/ada-800.jpg?e=1')
+        ->and($member->fresh()->nickname)->toBe('old_handle');
+
+    Http::assertSentCount(1);
+    Http::assertSent(fn (Request $request) => $request['projection'] === '(id,localizedFirstName,localizedLastName,profilePicture(displayImage~:playableStreams))'
+        && $request->hasHeader('Authorization', 'Bearer linkedin-token')
+        && $request->hasHeader('X-Restli-Protocol-Version', '2.0.0'));
+});
+
+it('asks /v2/me when /userinfo refuses a member whose scopes are not on record', function () {
+    Http::fake([
+        'api.linkedin.com/v2/userinfo' => Http::response(['message' => 'Not enough permissions to access: userinfo.GET.NO_VERSION'], 403),
+        'api.linkedin.com/v2/me*' => Http::response(linkedInMe()),
+    ]);
+    $member = profileAccount('linkedin', ['provider_user_id' => 'member-1', 'provider_holder_id' => 'member-1']);
+
+    syncProfile($member);
+
+    expect($member->fresh()->name)->toBe('Ada Lovelace');
+    Http::assertSentCount(2);
+});
+
+it('reads only /userinfo when the profile scope is granted', function () {
+    Http::fake(['api.linkedin.com/v2/userinfo' => Http::response(['sub' => 'member-1', 'name' => 'Ada Lovelace', 'picture' => 'https://media.licdn.com/ada.jpg?e=1'])]);
+    $member = profileAccount('linkedin', ['provider_user_id' => 'member-1', 'provider_holder_id' => 'member-1'], [
+        'provider_holder_id' => 'member-1',
+        'scopes' => ['openid', 'profile', 'r_basicprofile'],
+    ]);
+
+    syncProfile($member);
+
+    expect($member->fresh()->avatar)->toBe('https://media.licdn.com/ada.jpg?e=1');
+    Http::assertSentCount(1);
+});
+
+it('leaves the LinkedIn member alone without a profile scope, or when /v2/me refuses', function (array $scopes, int $status) {
+    Http::fake(['api.linkedin.com/v2/me*' => Http::response(['message' => 'Not enough permissions'], $status)]);
+    $member = profileAccount('linkedin', ['provider_user_id' => 'member-1', 'provider_holder_id' => 'member-1'], ['provider_holder_id' => 'member-1', 'scopes' => $scopes]);
+
+    expect(syncProfile($member)->outcome)->toBe(ProfileSyncOutcome::Unavailable)
+        ->and($member->fresh()->name)->toBe('Old name');
+})->with([
+    'no profile scope' => [['w_member_social', 'w_organization_social'], 200],
+    '/v2/me refused' => [['r_basicprofile', 'w_member_social'], 403],
+]);
+
 it('reads LinkedIn organizations from one listing of the member\'s', function () {
     Http::fake(linkedInRest(Http::response(['elements' => [
         ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization' => 'urn:li:organization:111', 'organization~' => ['id' => 111, 'localizedName' => 'Acme']],

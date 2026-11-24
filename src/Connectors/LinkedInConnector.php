@@ -84,6 +84,12 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
 
     protected const USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
 
+    /** The member's profile with r_basicprofile or r_liteprofile (Profile API). */
+    protected const ME_URL = 'https://api.linkedin.com/v2/me';
+
+    /** The member's name and picture, the picture's sizes decorated with their URLs. */
+    protected const ME_PROJECTION = '(id,localizedFirstName,localizedLastName,profilePicture(displayImage~:playableStreams))';
+
     /** How long a member's organization list, read for their profiles, serves their other organizations. */
     protected const ORGANIZATION_LIST_SECONDS = 300;
 
@@ -174,23 +180,22 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
     }
 
     /**
-     * The member's own profile (OpenID Connect /userinfo: name and picture,
-     * with the `profile` scope), or an organization's name and logo, read from
+     * The member's own profile, or an organization's name and logo, read from
      * the member's organization list as a connection reads them. An
-     * organization the member no longer administers is left to the next
-     * connection's reconciliation.
+     * organization the member no longer administers is left to the
+     * reconciliation.
+     *
+     * The member's name and picture come from OpenID Connect /userinfo with
+     * the `profile` scope, or else from the Profile API (/v2/me) with
+     * `r_basicprofile` or `r_liteprofile`, which Community Management apps
+     * are granted instead: the localized first and last names, and the
+     * largest size of the picture. Without the granted scopes on record, it
+     * tries /userinfo, then /v2/me if /userinfo is refused.
      */
     public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
     {
         if ((string) $account->provider_user_id === (string) $account->provider_holder_id) {
-            if ($this->grantsNoneOf($account, ['profile'])) {
-                return null;
-            }
-
-            $token = $accessToken();
-            $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()->get(self::USERINFO_URL)), 'the LinkedIn profile');
-
-            return is_array($body) ? AccountProfile::from($body['name'] ?? null, null, $body['picture'] ?? null) : $body;
+            return $this->memberProfile($account, $accessToken);
         }
 
         $organizations = $this->organizationListOf($accessToken());
@@ -206,6 +211,70 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
             data_get($organization, 'name') === null => RenewalResult::unknownFailure('LinkedIn did not describe the organization (/rest/organizations).'),
             default => AccountProfile::from(data_get($organization, 'name'), null, data_get($organization, 'logo')),
         };
+    }
+
+    /**
+     * @param  Closure(): string  $accessToken
+     */
+    protected function memberProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        $openId = ! $this->grantsNoneOf($account, ['profile']);
+        $basic = ! $this->grantsNoneOf($account, ['r_basicprofile', 'r_liteprofile']);
+
+        if (! $openId && ! $basic) {
+            return null;
+        }
+
+        $token = $accessToken();
+
+        if ($openId) {
+            $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()->get(self::USERINFO_URL)), 'the LinkedIn profile');
+
+            // An answer, a failure, or no other way to ask.
+            if ($body !== null || ! $basic) {
+                return is_array($body) ? AccountProfile::from($body['name'] ?? null, null, $body['picture'] ?? null) : $body;
+            }
+        }
+
+        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
+            ->withHeaders(['X-Restli-Protocol-Version' => '2.0.0'])
+            ->get(self::ME_URL, ['projection' => self::ME_PROJECTION])), 'the LinkedIn profile');
+
+        if (! is_array($body)) {
+            return $body;
+        }
+
+        $name = trim(implode(' ', array_filter([$body['localizedFirstName'] ?? null, $body['localizedLastName'] ?? null], 'is_string')));
+
+        return AccountProfile::from($name, null, $this->largestPicture(data_get($body, 'profilePicture.displayImage~.elements')));
+    }
+
+    /**
+     * The URL of the largest size among a picture's playableStreams, by the
+     * width LinkedIn gives each (the last, which LinkedIn lists largest, when
+     * it gives none).
+     */
+    protected function largestPicture(mixed $sizes): ?string
+    {
+        $best = null;
+        $bestWidth = -1;
+
+        foreach (is_array($sizes) ? $sizes : [] as $size) {
+            $url = is_array($size) ? data_get($size, 'identifiers.0.identifier') : null;
+
+            if (! is_string($url) || $url === '') {
+                continue;
+            }
+
+            $image = is_array($size['data'] ?? null) ? ($size['data']['com.linkedin.digitalmedia.mediaartifact.StillImage'] ?? null) : null;
+            $width = is_array($image) ? (int) data_get($image, 'storageSize.width', 0) : 0;
+
+            if ($width >= $bestWidth) {
+                [$best, $bestWidth] = [$url, $width];
+            }
+        }
+
+        return $best;
     }
 
     /** A member's organizations: the linkedin accounts other than their profile. */

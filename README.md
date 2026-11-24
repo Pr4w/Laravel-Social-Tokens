@@ -532,6 +532,15 @@ manages, so it cannot reach these.
   `graph.facebook.com`. Code that picks Instagram accounts by
   `provider = 'instagram'` must include `instagram_login`.
 
+### Meta: Graph API version
+
+The package calls `graph.facebook.com` and `graph.instagram.com` with
+`v25.0` (`MetaGraphConnector::DEFAULT_GRAPH_VERSION`, available until July
+2028), unless `META_GRAPH_VERSION` names another: set it to the version your
+app calls Meta with, so both see the same API. Meta routes a call to an
+expired version to the oldest one it still serves rather than refusing it.
+Threads (`graph.threads.net`) has its own versions.
+
 ### Meta: Require App Secret
 
 Off by default. Set `META_APPSECRET_PROOF=true` (the `appsecret_proof` option
@@ -546,7 +555,7 @@ Sign your own publishing calls the same way:
 ```php
 $proof = app(SocialTokens::class)->connector('instagram')->appSecretProof($token); // or 'facebook'
 
-Http::withToken($token)->post("https://graph.facebook.com/v23.0/{$igUserId}/media", array_filter([
+Http::withToken($token)->post("https://graph.facebook.com/v25.0/{$igUserId}/media", array_filter([
     'image_url' => $imageUrl,
     'appsecret_proof' => $proof, // null when signing is off
 ]));

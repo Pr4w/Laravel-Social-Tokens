@@ -54,7 +54,7 @@ it('follows paging.next until every page is listed', function () {
         return str_contains($request->url(), 'after=CURSOR2')
             ? Http::response(['data' => [['id' => 'p2']]]) // last page: no paging.next
             : Http::response(['data' => [['id' => 'p1']], 'paging' => [
-                'next' => 'https://graph.facebook.com/v23.0/me/accounts?limit=100&after=CURSOR2',
+                'next' => 'https://graph.facebook.com/v25.0/me/accounts?limit=100&after=CURSOR2',
             ]]);
     });
 
@@ -68,14 +68,14 @@ it('fails instead of returning a partial list when a later page errors', functio
     Http::fake(function ($request) {
         return str_contains($request->url(), 'after=')
             ? Http::response(['error' => ['code' => 2, 'message' => 'Service temporarily unavailable']], 500)
-            : Http::response(['data' => [['id' => 'p1']], 'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=X']]);
+            : Http::response(['data' => [['id' => 'p1']], 'paging' => ['next' => 'https://graph.facebook.com/v25.0/me/accounts?after=X']]);
     });
 
     expect(facebook()->fetchPages('user-token'))->toBeInstanceOf(RenewalResult::class);
 });
 
 it('gives up with a failure rather than paginating forever', function () {
-    Http::fake(fn () => Http::response(['data' => [['id' => 'p']], 'paging' => ['next' => 'https://graph.facebook.com/v23.0/me/accounts?after=again']]));
+    Http::fake(fn () => Http::response(['data' => [['id' => 'p']], 'paging' => ['next' => 'https://graph.facebook.com/v25.0/me/accounts?after=again']]));
 
     $result = facebook()->fetchPages('user-token');
 

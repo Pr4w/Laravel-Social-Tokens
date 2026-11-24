@@ -81,8 +81,8 @@ it('signs every page of /me/accounts, adding the proof to paging.next once', fun
     Http::assertSent(fn (Request $request) => str_contains($request->url(), 'after=CURSOR2')
         && appSecretProofsIn($request) === [appSecretProofFor('user-token')]);
 })->with([
-    'without a proof' => 'https://graph.facebook.com/v23.0/me/accounts?limit=100&after=CURSOR2',
-    'with Meta\'s proof' => 'https://graph.facebook.com/v23.0/me/accounts?limit=100&appsecret_proof='.hash_hmac('sha256', 'user-token', 'facebook-secret').'&after=CURSOR2',
+    'without a proof' => 'https://graph.facebook.com/v25.0/me/accounts?limit=100&after=CURSOR2',
+    'with Meta\'s proof' => 'https://graph.facebook.com/v25.0/me/accounts?limit=100&appsecret_proof='.hash_hmac('sha256', 'user-token', 'facebook-secret').'&after=CURSOR2',
 ]);
 
 it('signs the connect-time page listing with the extended user token', function () {

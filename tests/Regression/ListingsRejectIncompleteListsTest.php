@@ -84,7 +84,7 @@ function incompleteListsGraph(array $pageIds = ['p1', 'p2', 'p3', 'p4'], ?int $b
                 'data' => array_map($page, array_slice($pageIds, 0, 2)),
                 'paging' => [
                     'cursors' => ['before' => 'CURSOR1', 'after' => 'CURSOR2'],
-                    'next' => 'https://graph.facebook.com/v23.0/me/accounts?access_token=long-user-token&fields=id%2Cname&limit=2&after=CURSOR2',
+                    'next' => 'https://graph.facebook.com/v25.0/me/accounts?access_token=long-user-token&fields=id%2Cname&limit=2&after=CURSOR2',
                 ],
             ])
             : Http::response([

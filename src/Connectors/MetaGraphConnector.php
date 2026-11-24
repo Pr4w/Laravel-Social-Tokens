@@ -33,8 +33,13 @@ abstract class MetaGraphConnector extends AbstractConnector implements VerifiesS
     use ReadsGraphProfiles;
     use SignsGraphRequests;
 
-    /** The Graph API version used when the connector's block sets none. */
-    public const DEFAULT_GRAPH_VERSION = 'v23.0';
+    /**
+     * The Graph API version used when the connector's block sets none
+     * (META_GRAPH_VERSION). Meta keeps a version available about two years
+     * (v25.0 until July 2028), and routes a call to an expired one to the
+     * oldest it still serves rather than refusing it.
+     */
+    public const DEFAULT_GRAPH_VERSION = 'v25.0';
 
     public function renewalStrategy(): RenewalStrategy
     {
