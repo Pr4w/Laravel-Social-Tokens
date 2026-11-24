@@ -4,7 +4,7 @@
 
 Nothing to change, no migration. LinkedIn organizations are now read from
 LinkedIn's versioned API (`/rest`), which needs a `LinkedIn-Version`: the
-package sends `202605` unless `LINKEDIN_API_VERSION` names another. LinkedIn
+package sends `202611` unless `LINKEDIN_API_VERSION` names another. LinkedIn
 supports each version for at least a year; from 11 months on, a daily warning
 says so. Then update the package, or set `LINKEDIN_API_VERSION` to a recent
 version from LinkedIn's versioning page. A version LinkedIn no longer serves

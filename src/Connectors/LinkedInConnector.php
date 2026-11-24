@@ -65,7 +65,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
      * LinkedIn supports each version for at least a year, then answers 426:
      * the package's releases move it forward.
      */
-    public const DEFAULT_API_VERSION = '202605';
+    public const DEFAULT_API_VERSION = '202611';
 
     /** How old the configured version gets before a daily warning asks for a newer one. */
     protected const API_VERSION_WARNING_MONTHS = 11;

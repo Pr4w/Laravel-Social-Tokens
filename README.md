@@ -707,7 +707,7 @@ organization rows.
 **LinkedIn API version.** The organizations are read from LinkedIn's versioned
 API (`/rest`; LinkedIn sunset the unversioned `/v2` Marketing APIs in 2023),
 which takes a `LinkedIn-Version` header: `connectors.linkedin.api_version`
-(`LINKEDIN_API_VERSION`), `202605` by default, moved forward by the package's
+(`LINKEDIN_API_VERSION`), `202611` by default, moved forward by the package's
 releases. LinkedIn supports each version for at least a year, then refuses it
 with HTTP 426, and every organization listing fails until the version moves:
 logged as critical, once a day. From 11 months on, a daily warning asks for a

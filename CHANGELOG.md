@@ -25,7 +25,7 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 
 ### Added
 - `connectors.linkedin.api_version` (`LINKEDIN_API_VERSION`): the
-  `LinkedIn-Version` the `/rest` calls send, `202605` by default
+  `LinkedIn-Version` the `/rest` calls send, `202611` by default
   (`LinkedInConnector::DEFAULT_API_VERSION`), moved forward by releases.
   LinkedIn supports a version for at least a year, then answers HTTP 426:
   the listing then fails with a reason naming the version, logged as critical
