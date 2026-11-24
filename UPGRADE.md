@@ -1,5 +1,21 @@
 # Upgrading
 
+## From 3.5 to 3.6
+
+Nothing to change. A new daily `social-tokens:sync-profiles` run keeps each
+active account's name, handle and picture current with its provider, one
+light call per account, and fires `AccountProfileUpdated` on a change. Expect
+those calls in your providers' usage, and stored names and pictures to change
+on their own.
+
+- If your app keeps its own job refreshing names and pictures, drop it, or
+  set `profile_sync_schedule` to `null` to keep yours.
+- If you show stored pictures, copy them from `AccountProfileUpdated` when
+  they must last: Meta, LinkedIn and TikTok picture URLs are signed and
+  expire.
+- A config published earlier has no `profile_sync_schedule`: the sync runs
+  daily, as in the shipped config.
+
 ## From 3.4 to 3.5
 
 Nothing to change. `check_renewable` is now on by default: the daily

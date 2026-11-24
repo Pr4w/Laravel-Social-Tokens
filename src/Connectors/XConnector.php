@@ -3,9 +3,14 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Illuminate\Http\Client\PendingRequest;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
@@ -28,15 +33,36 @@ use Throwable;
  * OAuth 1.0a is not supported: X is retiring it, and its token secret has no
  * column here.
  */
-class XConnector extends OAuth2Connector
+class XConnector extends OAuth2Connector implements FetchesProfile
 {
     protected const TOKEN_URL = 'https://api.x.com/2/oauth2/token';
 
     protected const REVOKE_URL = 'https://api.x.com/2/oauth2/revoke';
 
+    protected const ME_URL = 'https://api.x.com/2/users/me';
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;
+    }
+
+    /**
+     * The account's name, username and picture (GET /2/users/me, with
+     * users.read), as Socialite's x driver maps them.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        if ($this->grantsNoneOf($account, ['users.read'])) {
+            return null;
+        }
+
+        $token = $accessToken();
+        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
+            ->get(self::ME_URL, ['user.fields' => 'profile_image_url'])), 'the X profile');
+
+        return is_array($body)
+            ? AccountProfile::from(data_get($body, 'data.name'), data_get($body, 'data.username'), data_get($body, 'data.profile_image_url'))
+            : $body;
     }
 
     public function leadTime(): CarbonInterval

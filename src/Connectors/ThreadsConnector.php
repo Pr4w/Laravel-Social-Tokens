@@ -53,6 +53,11 @@ class ThreadsConnector extends LongLivedTokenConnector
         return 'Threads';
     }
 
+    protected function pictureField(): string
+    {
+        return 'threads_profile_picture_url';
+    }
+
     /**
      * Threads' exchange has always sent the client id with the secret.
      *

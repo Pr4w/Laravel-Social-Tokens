@@ -1042,7 +1042,8 @@ to avoid one query per row.
 
 Listen for `AccountConnected`, `CredentialRenewed`, `CredentialExpiringSoon`,
 `CredentialDataAccessExpiring`, `CredentialNeedsReconnect`, `CredentialRevoked`,
-`AccountNeedsReconnect` and `AccountRevoked` to drive
+`AccountNeedsReconnect`, `AccountRevoked` and `AccountProfileUpdated` (see
+[Account profiles](#account-profiles)) to drive
 notifications and a reconnect button in your panel. A dead credential fires
 `CredentialNeedsReconnect` once, not once per account: notify the user from that
 event, listing the affected accounts through `$event->token->accounts`, so a user
@@ -1229,6 +1230,70 @@ providers' push signals
 events) work the same way: verify them as the provider documents, then call
 `revokeExternalUser($provider, $externalId)`.
 
+## Account profiles
+
+Each account stores the `name`, `nickname` (handle) and `avatar` (picture URL)
+its provider showed at connect. They change: users rename their Page or their
+account and change their picture, and the picture URLs Meta, LinkedIn and
+TikTok hand out are signed and expire within days or weeks, so a stored one
+eventually stops loading. A daily `social-tokens:sync-profiles` run
+(`profile_sync_schedule`, `null` to disable) keeps them current, one light
+call per active account:
+
+| Provider | Read from | Needs |
+|---|---|---|
+| Facebook Page | `GET /{page-id}?fields=name,picture{url}` (its Page token) | — |
+| Instagram (through a Page) | `GET /{ig-user-id}?fields=username,profile_picture_url` | — |
+| Instagram Login, Threads | `GET /me?fields=username,name,…picture…` | — |
+| LinkedIn member | OpenID Connect `/v2/userinfo` | `profile` |
+| LinkedIn organization | the member's organization list, read once for all of them | — |
+| TikTok | `/v2/user/info/` (`display_name`, `avatar_url`) | `user.info.basic` |
+| Google / YouTube | OpenID Connect `/v1/userinfo` | `profile` |
+| X | `GET /2/users/me` | `users.read` |
+| Pinterest | `GET /user_account` (the Sandbox's when it is on) | `user_accounts:read` |
+| Bluesky | the public AppView, by DID | no token |
+
+The sync only ever writes those three attributes, and only values the
+provider gave: a blank one (a throttled LinkedIn decoration, a provider with no
+handle) never erases a stored one, and a picture is kept only as an http(s)
+URL. It never touches an account's ids, owner or status, never writes over an
+account flagged or disconnected during the read, and never flags anything: a
+profile it cannot read is left as it is, and whether the token still works
+stays the renewal's and `check-static`'s business. A token not granted what the
+profile needs (a scope your app did not request, a 401 or 403 on the read) is
+skipped quietly; other failures are logged once per provider and run
+(`Could not read N {provider} profile(s)`), never once per account.
+
+When something changed, `AccountProfileUpdated` fires with the account (already
+holding the new values) and `$event->previous`, the values it replaced. A
+picture URL from Meta, LinkedIn or TikTok changes on its own as it is signed
+again: if the image must last, copy it from that event to your own storage.
+
+```php
+use Pr4w\SocialTokens\Events\AccountProfileUpdated;
+
+Event::listen(function (AccountProfileUpdated $event) {
+    if (array_key_exists('avatar', $event->previous)) {
+        MirrorAvatar::dispatch($event->account); // your job: download $event->account->avatar
+    }
+});
+```
+
+To refresh one account now (when a user opens its settings page):
+
+```php
+use Pr4w\SocialTokens\Actions\SyncAccountProfile;
+use Pr4w\SocialTokens\Enums\ProfileSyncOutcome;
+
+$result = app(SyncAccountProfile::class)->handle($account);
+$result->outcome; // ProfileSyncOutcome::Updated, Unchanged, Unavailable, Failed or Skipped
+```
+
+`php artisan social-tokens:sync-profiles --provider=instagram` limits a run to
+some providers. The package draws the line at the account's identity (who it
+is, whether it is still connected): follower counts, insights and posts are
+your app's own API calls.
+
 ## Scopes
 
 The scopes granted to each account are recorded on the row, so you can check —
@@ -1288,6 +1353,13 @@ credential is refreshed under another provider's key (Instagram returns
 `renewalStrategy()` needs (LinkedIn's without a refresh token renew as
 `ReauthOnly`), `exchangeForLongLived()` for a short-to-long token swap at connect,
 and `revoke(SocialToken)` if the provider exposes a token-revocation endpoint.
+Implement `Contracts\FetchesProfile` to have `sync-profiles` keep the
+accounts' names and pictures current: `fetchProfile($account, $accessToken)`
+returns an `AccountProfile` (`AccountProfile::from($name, $nickname,
+$avatar)`), `null` when the token lacks what the profile needs, or a failure
+`RenewalResult`; `$accessToken()` hands out a valid token only when called.
+`profileBody()` and `grantsNoneOf()` (in `AbstractConnector`) read a JSON
+answer and check the stored scopes.
 A connector whose connections yield several accounts also implements
 `Contracts\FansOutConnections`: its `connectionAction()` names the action
 (implementing `Contracts\StoresConnections`) that `StoreConnection` hands them

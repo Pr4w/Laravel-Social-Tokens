@@ -3,13 +3,18 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Str;
 use Laravel\Socialite\Two\User as SocialiteUser;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Socialite\BlueskyUser;
+use Pr4w\SocialTokens\Support\AccountProfile;
+use Pr4w\SocialTokens\Support\Atproto;
 use Pr4w\SocialTokens\Support\DPoP;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use RuntimeException;
@@ -39,7 +44,7 @@ use Throwable;
  *
  * @see https://atproto.com/specs/oauth
  */
-class BlueskyConnector extends OAuth2Connector
+class BlueskyConnector extends OAuth2Connector implements FetchesProfile
 {
     public const DEFAULT_SCOPES = ['atproto', 'transition:generic'];
 
@@ -49,6 +54,29 @@ class BlueskyConnector extends OAuth2Connector
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;
+    }
+
+    /**
+     * The account's display name, handle and avatar from the public AppView,
+     * by its DID: no token needed, so none is asked for (asking would renew
+     * the minutes-long access token for nothing).
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        try {
+            $profile = Atproto::profile((string) $account->provider_user_id);
+        } catch (Throwable $e) {
+            return RenewalResult::transientFailure('Could not reach the Bluesky AppView: '.static::redactQueryStrings($e->getMessage()));
+        }
+
+        if ($profile === []) {
+            return RenewalResult::unknownFailure('Could not read the Bluesky profile from the public AppView.');
+        }
+
+        $handle = $profile['handle'] ?? null;
+        $displayName = is_string($profile['displayName'] ?? null) && trim($profile['displayName']) !== '' ? $profile['displayName'] : null;
+
+        return AccountProfile::from($displayName ?? $handle, $handle, $profile['avatar'] ?? null);
     }
 
     public function leadTime(): CarbonInterval

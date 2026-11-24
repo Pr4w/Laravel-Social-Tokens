@@ -2,8 +2,12 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
+use Closure;
 use Pr4w\SocialTokens\Actions\StoreInstagramAccounts;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
+use Pr4w\SocialTokens\Models\SocialAccount;
+use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -24,7 +28,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * connections go to the Facebook Page fan-out (connectionAction()) and its
  * credentials are renewed under "facebook".
  */
-class InstagramConnector extends MetaGraphConnector implements FansOutConnections
+class InstagramConnector extends MetaGraphConnector implements FansOutConnections, FetchesProfile
 {
     /** One account per Instagram account linked to a Page the user manages. */
     public function connectionAction(): string
@@ -46,5 +50,21 @@ class InstagramConnector extends MetaGraphConnector implements FansOutConnection
     public function exchangeForLongLived(#[\SensitiveParameter] string $accessToken): ?RenewalResult
     {
         return $this->exchangeUserToken($accessToken);
+    }
+
+    /**
+     * An Instagram account's username and picture (GET /{ig-user-id}, with the
+     * Facebook user's token), as a connection stores them: the username is its
+     * name too.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        $token = $accessToken();
+
+        $response = $this->attempt(fn () => $this->http()->withToken($token)
+            ->acceptJson()
+            ->get($this->graphUrl((string) $account->provider_user_id), ['fields' => 'username,profile_picture_url'] + $this->appSecretProofQuery($token)));
+
+        return $this->graphProfile($response, fn (array $body) => AccountProfile::from($body['username'] ?? null, $body['username'] ?? null, $body['profile_picture_url'] ?? null));
     }
 }

@@ -3,11 +3,16 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Pr4w\SocialTokens\Connectors\Concerns\ParsesSignedRequests;
+use Pr4w\SocialTokens\Connectors\Concerns\ReadsGraphProfiles;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Contracts\VerifiesSignedRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -22,9 +27,10 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * are not signed with appsecret_proof. The app's Uninstall (Deauthorize) and
  * Delete callbacks are verified with its secret (VerifiesSignedRequests).
  */
-abstract class LongLivedTokenConnector extends AbstractConnector implements ChecksCredential, VerifiesSignedRequests
+abstract class LongLivedTokenConnector extends AbstractConnector implements ChecksCredential, FetchesProfile, VerifiesSignedRequests
 {
     use ParsesSignedRequests;
+    use ReadsGraphProfiles;
 
     /** The refresh grant refuses a token less than 24 hours old (Meta docs). */
     public const MINIMUM_TOKEN_AGE_HOURS = 24;
@@ -137,6 +143,33 @@ abstract class LongLivedTokenConnector extends AbstractConnector implements Chec
         return isset($body['id'])
             ? RenewalResult::success(accessToken: $accessToken)
             : RenewalResult::unknownFailure("Malformed {$this->label()} /me response, no id.", ['status' => $response->status()]);
+    }
+
+    /** The /me field holding the account's picture (threads_profile_picture_url on Threads). */
+    protected function pictureField(): string
+    {
+        return 'profile_picture_url';
+    }
+
+    /**
+     * The account's name, username and picture (GET /me with its token): its
+     * name when it set one, its username otherwise.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        $token = $accessToken();
+        $picture = $this->pictureField();
+
+        $response = $this->attempt(fn () => $this->http()->acceptJson()->get($this->meUrl(), [
+            'fields' => "username,name,{$picture}",
+            'access_token' => $token,
+        ]));
+
+        return $this->graphProfile($response, function (array $body) use ($picture) {
+            $name = is_string($body['name'] ?? null) && trim($body['name']) !== '' ? $body['name'] : ($body['username'] ?? null);
+
+            return AccountProfile::from($name, $body['username'] ?? null, $body[$picture] ?? null);
+        });
     }
 
     /**

@@ -7,6 +7,7 @@ use Carbon\CarbonInterval;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Carbon;
 use Pr4w\SocialTokens\Connectors\Concerns\ParsesSignedRequests;
+use Pr4w\SocialTokens\Connectors\Concerns\ReadsGraphProfiles;
 use Pr4w\SocialTokens\Connectors\Concerns\SignsGraphRequests;
 use Pr4w\SocialTokens\Contracts\VerifiesSignedRequests;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
@@ -29,6 +30,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
 abstract class MetaGraphConnector extends AbstractConnector implements VerifiesSignedRequests
 {
     use ParsesSignedRequests;
+    use ReadsGraphProfiles;
     use SignsGraphRequests;
 
     /** The Graph API version used when the connector's block sets none. */

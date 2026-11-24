@@ -3,6 +3,34 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+- **Account profiles are kept current.** Each account's `name`, `nickname`
+  and `avatar` were written at connect and never again, so renames and new
+  pictures went unnoticed, and the picture URLs Meta, LinkedIn and TikTok hand
+  out, signed and expiring within days or weeks, stopped loading. A daily
+  `social-tokens:sync-profiles` run (`profile_sync_schedule`, on by default,
+  `null` disables it; `--provider=` limits a run) reads each active account's
+  profile from its provider, one light call per account (a LinkedIn member's
+  organizations share one listing; Bluesky reads the public AppView with no
+  token), and updates what changed:
+  - `Actions\SyncAccountProfile` syncs one account, for an app that wants it
+    now, and returns a `Support\ProfileSyncResult` (`ProfileSyncOutcome`:
+    Updated, Unchanged, Unavailable, Failed, Skipped, and the values it
+    replaced).
+  - `Events\AccountProfileUpdated($account, $previous)` fires on a change.
+  - `Contracts\FetchesProfile`, implemented by every built-in connector, and
+    `Support\AccountProfile`. `AbstractConnector::profileBody()` and
+    `grantsNoneOf()` help a custom connector implement it.
+
+  Only those three attributes are written, and only values the provider gave:
+  a blank one never erases a stored one, a picture must be an http(s) URL,
+  and an account flagged or disconnected during the read is not written. A
+  profile read never flags anything; a token not granted the profile (a
+  missing scope, a 401 or 403) is skipped quietly, and other failures log
+  one warning per provider and run.
+
 ## [3.5.1]
 
 ### Fixed

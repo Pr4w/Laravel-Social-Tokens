@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Laravel\Socialite\Two\User as SocialiteUser;
 use Pr4w\SocialTokens\Contracts\ProviderConnector;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
@@ -179,6 +180,46 @@ abstract class AbstractConnector implements ProviderConnector
     public static function redactQueryStrings(#[\SensitiveParameter] string $message): string
     {
         return preg_replace('~(https?://[^\s?#]+)\?[^\s#]*~i', '$1?[redacted]', $message) ?? '[redacted]';
+    }
+
+    /**
+     * Whether the account's credential is known to hold none of $scopes (its
+     * stored scopes include none of them): a profile read needing one would
+     * only be refused. Unknown scopes are no reason not to try.
+     *
+     * @param  array<int, string>  $scopes
+     */
+    protected function grantsNoneOf(SocialAccount $account, array $scopes): bool
+    {
+        $granted = $account->credential?->scopes;
+
+        return is_array($granted) && $granted !== [] && array_intersect($scopes, $granted) === [];
+    }
+
+    /**
+     * A JSON API's answer to a profile read (FetchesProfile): its body, null
+     * when refused for want of a grant (401 or 403 right after the token was
+     * handed out valid: a scope the app did not request), or a failure.
+     *
+     * @return array<string, mixed>|RenewalResult|null
+     */
+    protected function profileBody(Response|RenewalResult $response, string $what): array|RenewalResult|null
+    {
+        if ($response instanceof RenewalResult) {
+            return $response;
+        }
+
+        if (in_array($response->status(), [401, 403], true)) {
+            return null;
+        }
+
+        $body = $response->json();
+
+        if (! $response->successful() || ! is_array($body)) {
+            return RenewalResult::unknownFailure("Could not read {$what} (HTTP {$response->status()}).", ['status' => $response->status()]);
+        }
+
+        return $body;
     }
 
     /**

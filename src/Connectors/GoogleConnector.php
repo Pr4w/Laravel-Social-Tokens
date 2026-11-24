@@ -3,8 +3,13 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
@@ -18,15 +23,34 @@ use Throwable;
  *    access_type=offline and prompt=consent (see the controller note)
  *  - a revoked or stale refresh_token returns invalid_grant: reconnect needed
  */
-class GoogleConnector extends OAuth2Connector
+class GoogleConnector extends OAuth2Connector implements FetchesProfile
 {
     protected const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
     protected const REVOKE_URL = 'https://oauth2.googleapis.com/revoke';
 
+    protected const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::StableRefreshToken;
+    }
+
+    /**
+     * The Google account's name and picture (OpenID Connect /userinfo, with
+     * the `profile` scope Socialite's driver asks for), as a connection
+     * stores them.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        if ($this->grantsNoneOf($account, ['profile', 'https://www.googleapis.com/auth/userinfo.profile'])) {
+            return null;
+        }
+
+        $token = $accessToken();
+        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()->get(self::USERINFO_URL)), 'the Google profile');
+
+        return is_array($body) ? AccountProfile::from($body['name'] ?? null, null, $body['picture'] ?? null) : $body;
     }
 
     public function leadTime(): CarbonInterval

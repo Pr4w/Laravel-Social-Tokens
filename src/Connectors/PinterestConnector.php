@@ -3,10 +3,14 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Illuminate\Http\Client\PendingRequest;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
 
@@ -35,7 +39,7 @@ use Pr4w\SocialTokens\Support\Settings;
  *    `sandbox` option (services.pinterest.sandbox) points the driver and the
  *    renewals there; accounts connected in the Sandbox reconnect once it is off
  */
-class PinterestConnector extends OAuth2Connector implements ChecksCredential
+class PinterestConnector extends OAuth2Connector implements ChecksCredential, FetchesProfile
 {
     public const API_URL = 'https://api.pinterest.com/v5/';
 
@@ -44,6 +48,30 @@ class PinterestConnector extends OAuth2Connector implements ChecksCredential
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;
+    }
+
+    /**
+     * The account's business name (or username), username and picture
+     * (GET /user_account, with user_accounts:read), as the pinterest driver
+     * maps them.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        if ($this->grantsNoneOf($account, ['user_accounts:read'])) {
+            return null;
+        }
+
+        $token = $accessToken();
+        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()->get($this->apiUrl().'user_account')), 'the Pinterest profile');
+
+        if (! is_array($body)) {
+            return $body;
+        }
+
+        $username = $body['username'] ?? null;
+        $businessName = is_string($body['business_name'] ?? null) && trim($body['business_name']) !== '' ? $body['business_name'] : null;
+
+        return AccountProfile::from($businessName ?? $username, $username, $body['profile_image'] ?? null);
     }
 
     public function leadTime(): CarbonInterval

@@ -2,13 +2,16 @@
 
 namespace Pr4w\SocialTokens\Connectors;
 
+use Closure;
 use Illuminate\Support\Carbon;
 use Pr4w\SocialTokens\Actions\StoreFacebookPages;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\RenewalResult;
 
 /**
@@ -31,7 +34,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * The exchange call, the Graph version and appsecret_proof signing are
  * shared with Instagram (MetaGraphConnector).
  */
-class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections
+class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections, FetchesProfile
 {
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;
@@ -209,6 +212,21 @@ class FacebookConnector extends MetaGraphConnector implements ChecksCredential, 
         }
 
         return $pages;
+    }
+
+    /**
+     * A Page's name and picture (GET /{page-id}, with its own Page token), as
+     * a connection stores them.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        $token = $accessToken();
+
+        $response = $this->attempt(fn () => $this->http()->withToken($token)
+            ->acceptJson()
+            ->get($this->graphUrl((string) $account->provider_user_id), ['fields' => 'name,picture{url}'] + $this->appSecretProofQuery($token)));
+
+        return $this->graphProfile($response, fn (array $body) => AccountProfile::from($body['name'] ?? null, null, data_get($body, 'picture.data.url')));
     }
 
     /**

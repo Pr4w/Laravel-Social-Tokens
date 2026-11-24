@@ -3,9 +3,13 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
 
@@ -33,13 +37,26 @@ use Pr4w\SocialTokens\Support\Settings;
  *    ahead of the 60 day expiry; the credential keeps posting until then, and
  *    is flagged needs_reconnect only once it has actually expired
  */
-class LinkedInConnector extends OAuth2Connector implements ChecksCredential
+class LinkedInConnector extends OAuth2Connector implements ChecksCredential, FetchesProfile
 {
     protected const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 
     protected const ORGANIZATION_ACLS_URL = 'https://api.linkedin.com/v2/organizationAcls';
 
     protected const INTROSPECT_URL = 'https://www.linkedin.com/oauth/v2/introspectToken';
+
+    protected const USERINFO_URL = 'https://api.linkedin.com/v2/userinfo';
+
+    /** How long a member's organization list, read for their profiles, serves their other organizations. */
+    protected const ORGANIZATION_LIST_SECONDS = 300;
+
+    /**
+     * Organization lists read for profiles, by member token, so a member's
+     * organizations cost one listing per sync-profiles run. In memory only.
+     *
+     * @var array<string, array{at: int, organizations: array<int, array<string, mixed>>}>
+     */
+    private array $organizationLists = [];
 
     protected const ORGANIZATION_PAGE_SIZE = 100;
 
@@ -101,6 +118,60 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential
         return $strategy->canRenewUnattended() && ($refreshToken === null || $refreshToken === '')
             ? RenewalStrategy::ReauthOnly
             : $strategy;
+    }
+
+    /**
+     * The member's own profile (OpenID Connect /userinfo: name and picture,
+     * with the `profile` scope), or an organization's name and logo, read from
+     * the member's organization list as a connection reads them. An
+     * organization the member no longer administers is left to the next
+     * connection's reconciliation.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        if ((string) $account->provider_user_id === (string) $account->provider_holder_id) {
+            if ($this->grantsNoneOf($account, ['profile'])) {
+                return null;
+            }
+
+            $token = $accessToken();
+            $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()->get(self::USERINFO_URL)), 'the LinkedIn profile');
+
+            return is_array($body) ? AccountProfile::from($body['name'] ?? null, null, $body['picture'] ?? null) : $body;
+        }
+
+        $organizations = $this->organizationListOf($accessToken());
+
+        if ($organizations instanceof RenewalResult) {
+            return $organizations;
+        }
+
+        $organization = collect($organizations)->first(fn ($candidate) => (string) data_get($candidate, 'id', '') === (string) $account->provider_user_id);
+
+        return $organization === null ? null : AccountProfile::from(data_get($organization, 'name'), null, data_get($organization, 'logo'));
+    }
+
+    /**
+     * fetchOrganizations(), kept a few minutes per member token.
+     *
+     * @return array<int, array<string, mixed>>|RenewalResult
+     */
+    protected function organizationListOf(#[\SensitiveParameter] string $accessToken): array|RenewalResult
+    {
+        $key = hash('sha256', $accessToken);
+        $cached = $this->organizationLists[$key] ?? null;
+
+        if ($cached !== null && time() - $cached['at'] < self::ORGANIZATION_LIST_SECONDS) {
+            return $cached['organizations'];
+        }
+
+        $organizations = $this->fetchOrganizations($accessToken);
+
+        if (! $organizations instanceof RenewalResult) {
+            $this->organizationLists[$key] = ['at' => time(), 'organizations' => $organizations];
+        }
+
+        return $organizations;
     }
 
     public function leadTime(): CarbonInterval

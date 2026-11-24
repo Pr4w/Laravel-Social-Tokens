@@ -104,6 +104,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Account profiles
+    |--------------------------------------------------------------------------
+    |
+    | social-tokens:sync-profiles keeps every active account's name, handle and
+    | picture current with its provider: names change, and the picture URLs
+    | Meta, LinkedIn and TikTok hand out are signed and expire within days or
+    | weeks. One light call per account per run; AccountProfileUpdated fires on
+    | a change. It never flags anything. Same forms as dispatch_schedule; null
+    | disables it (SyncAccountProfile still syncs one account on demand).
+    |
+    */
+    'profile_sync_schedule' => 'daily',
+
+    /*
+    |--------------------------------------------------------------------------
     | Meta data access
     |--------------------------------------------------------------------------
     |

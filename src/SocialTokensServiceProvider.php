@@ -18,6 +18,7 @@ use Pr4w\SocialTokens\Console\DispatchDueRenewals;
 use Pr4w\SocialTokens\Console\MergeLinkedInCredentialsCommand;
 use Pr4w\SocialTokens\Console\PruneCredentials;
 use Pr4w\SocialTokens\Console\ReencryptTokens;
+use Pr4w\SocialTokens\Console\SyncProfiles;
 use Pr4w\SocialTokens\Socialite\BlueskyProvider;
 use Pr4w\SocialTokens\Socialite\PinterestProvider;
 use Pr4w\SocialTokens\Support\CallbackRoutes;
@@ -60,6 +61,7 @@ class SocialTokensServiceProvider extends ServiceProvider
                 PruneCredentials::class,
                 ReencryptTokens::class,
                 MergeLinkedInCredentialsCommand::class,
+                SyncProfiles::class,
             ]);
         }
 
@@ -84,6 +86,13 @@ class SocialTokensServiceProvider extends ServiceProvider
                     ->withoutOverlapping(120)
                     ->onOneServer()
                     ->runInBackground(); // N sequential provider calls must not delay the app's own tasks
+            }
+
+            if ($profileFrequency = $this->frequency('profile_sync_schedule', 'daily')) {
+                $profileFrequency($schedule->command('social-tokens:sync-profiles'))
+                    ->withoutOverlapping(120)
+                    ->onOneServer()
+                    ->runInBackground(); // one provider call per account must not delay the app's own tasks
             }
 
             // Off unless the app chooses a schedule: pruning deletes rows.

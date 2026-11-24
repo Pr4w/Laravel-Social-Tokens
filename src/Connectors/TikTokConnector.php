@@ -3,8 +3,13 @@
 namespace Pr4w\SocialTokens\Connectors;
 
 use Carbon\CarbonInterval;
+use Closure;
+use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Enums\RenewalStrategy;
+use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\Support\AccountProfile;
+use Pr4w\SocialTokens\Support\RenewalResult;
 use Throwable;
 
 /**
@@ -19,15 +24,48 @@ use Throwable;
  * The refresh flow itself lives in OAuth2Connector; this class only declares
  * TikTok's endpoint, parameter names and error codes.
  */
-class TikTokConnector extends OAuth2Connector
+class TikTokConnector extends OAuth2Connector implements FetchesProfile
 {
     protected const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
 
     protected const REVOKE_URL = 'https://open.tiktokapis.com/v2/oauth/revoke/';
 
+    protected const USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
+
     public function renewalStrategy(): RenewalStrategy
     {
         return RenewalStrategy::RotatingRefreshToken;
+    }
+
+    /**
+     * The display name and avatar (user.info.basic). TikTok answers its
+     * errors in error.code, "ok" on success.
+     */
+    public function fetchProfile(SocialAccount $account, Closure $accessToken): AccountProfile|RenewalResult|null
+    {
+        if ($this->grantsNoneOf($account, ['user.info.basic'])) {
+            return null;
+        }
+
+        $token = $accessToken();
+        $body = $this->profileBody($this->attempt(fn () => $this->http()->withToken($token)->acceptJson()
+            ->get(self::USER_INFO_URL, ['fields' => 'open_id,display_name,avatar_url'])), 'the TikTok profile');
+
+        if (! is_array($body)) {
+            return $body;
+        }
+
+        $code = data_get($body, 'error.code');
+
+        if ($code === 'scope_not_authorized') {
+            return null;
+        }
+
+        if ($code !== null && $code !== 'ok') {
+            return RenewalResult::unknownFailure('Could not read the TikTok profile: '.(is_scalar($code) ? $code : 'unknown error').'.', ['code' => is_scalar($code) ? $code : null]);
+        }
+
+        return AccountProfile::from(data_get($body, 'data.user.display_name'), null, data_get($body, 'data.user.avatar_url'));
     }
 
     public function leadTime(): CarbonInterval
