@@ -1,5 +1,15 @@
 # Upgrading
 
+## From 3.8.0 to 3.8.1
+
+Nothing to change. A LinkedIn organization missing from its member's list
+is now flagged by the daily `check-static` a day after it is first found
+missing, not in the same run: expect a line such as `1 account(s) missing
+from their list for less than a day` in between. The note lives in your
+cache store, which must keep it from one run to the next (a `database`,
+`redis` or `file` store, as the renewal locks need); clearing the cache only
+delays the verdict by a day.
+
 ## From 3.7 to 3.8
 
 Nothing to change, no migration. LinkedIn organizations are now read from

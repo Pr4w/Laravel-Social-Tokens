@@ -15,7 +15,8 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * fails. A connection reconciles them; check-static does it every day in
  * between (`reconcile_accounts`), flagging an account missing from the list,
  * as a connection would, once a second read of the list and
- * isStillReachable() confirm it.
+ * isStillReachable() confirm it, and, unless the connector also implements
+ * VerifiesMissingAccounts, once it has been missing for a day.
  */
 interface ListsReachableAccounts
 {

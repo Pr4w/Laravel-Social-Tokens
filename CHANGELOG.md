@@ -3,6 +3,27 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Changed
+- **A LinkedIn organization missing from its member's list is flagged a day
+  later.** The daily reconciliation read the list twice a second apart and
+  flagged an organization both reads left out: LinkedIn serving short lists
+  for a few hours would have cut organizations off, on an install too small
+  for the breaker (10 holders) above all. The run that first finds one
+  missing now notes when, in the cache, and a run at least 20 hours later
+  that still finds it missing flags it. An organization listed again, a new
+  token, or a lost note (a cleared cache, no run for 48 hours) starts the day
+  over; a run a breaker stopped notes nothing. Instagram accounts are still
+  flagged the same day: Meta is asked about each one first, a second sign
+  the list does not depend on. A connection's reconciliation is unchanged.
+
+### Added
+- `Contracts\VerifiesMissingAccounts`: a `ListsReachableAccounts` connector
+  whose `isStillReachable()` asks the provider about the account itself
+  implements it to be flagged the same day (`FacebookConnector` does).
+  Without it, an account missing from the list waits a day.
+
 ## [3.8.0]
 
 ### Changed

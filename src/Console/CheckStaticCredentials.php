@@ -3,9 +3,12 @@
 namespace Pr4w\SocialTokens\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
+use Pr4w\SocialTokens\Contracts\VerifiesMissingAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
@@ -54,6 +57,12 @@ use Throwable;
  */
 class CheckStaticCredentials extends Command
 {
+    /** How long an account missing from a list that is the only sign must stay missing before it is flagged. */
+    protected const MISSING_FOR_SECONDS = 20 * 3600;
+
+    /** How long a note of missing accounts waits for the run that confirms it. */
+    protected const CONFIRM_WITHIN_SECONDS = 48 * 3600;
+
     /** Consecutive non-definitive terminal checks before a credential is flagged. */
     public const STRIKES_TO_FLAG = 2;
 
@@ -270,6 +279,16 @@ class CheckStaticCredentials extends Command
      * (isStillReachable(): an Instagram account reached through Business
      * Manager is not on the list, yet posts).
      *
+     * A connector whose list is the only sign (no VerifiesMissingAccounts:
+     * LinkedIn) gets no verdict in the run that first finds an account
+     * missing: the run notes when, in the cache, and a later run flags it if
+     * it is still missing at least MISSING_FOR_SECONDS after. An account back
+     * on the list, a new token, or a cache that lost the note (cleared, or
+     * no run within CONFIRM_WITHIN_SECONDS) starts it over: a lost note only
+     * ever delays a verdict. A provider incident serving short lists for a few
+     * hours, which two reads a second apart would both see, cuts nobody off,
+     * even on an install too small for the breaker.
+     *
      * Nothing is decided for an account provider when phase 1 found its
      * credentials' provider in an incident ($trippedProviders), when too many
      * of its lists could not be read (an outage letting a few short lists
@@ -317,11 +336,14 @@ class CheckStaticCredentials extends Command
         /** @var array<string, list<array{account: SocialAccount, reason: string, cipher: mixed}>> $missing */
         $missing = [];
 
+        /** @var list<array{key: string, providers: array<int, string>, since: array<int|string, int>, noted: bool}> $notes */
+        $notes = [];
+
         SocialToken::query()
             ->whereIn('provider', array_keys($connectors))
             ->where('status', AccountStatus::Active->value)
             ->lazyById()
-            ->each(function (SocialToken $token) use ($connectors, &$lists, &$unreadable, &$holders, &$accountsChecked, &$reasons, &$missing) {
+            ->each(function (SocialToken $token) use ($connectors, &$lists, &$unreadable, &$holders, &$accountsChecked, &$reasons, &$missing, &$notes) {
                 $connector = $connectors[$token->provider];
 
                 // Never the holder's own account (a LinkedIn member's
@@ -375,6 +397,11 @@ class CheckStaticCredentials extends Command
                     $holders[$provider] = ($holders[$provider] ?? 0) + 1;
                 }
 
+                // The list alone: flagged once missing for a day.
+                if (! $connector instanceof VerifiesMissingAccounts) {
+                    [$absent, $notes[]] = $this->missingForADay($token, $cipher, $absent, $providers);
+                }
+
                 foreach ($absent as $account) {
                     $missing[$account->provider][] = ['account' => $account, 'reason' => $connector->unreachableAccountReason(), 'cipher' => $cipher];
                 }
@@ -383,6 +410,9 @@ class CheckStaticCredentials extends Command
         ['min_checked' => $minChecked, 'max_terminal_ratio' => $maxRatio] = Settings::staticCheckBreaker();
         $tripped = false;
         $flagged = 0;
+
+        /** @var array<string, true> $stopped */
+        $stopped = [];
 
         foreach ($lists as $provider => $tried) {
             $provider = (string) $provider;
@@ -412,6 +442,7 @@ class CheckStaticCredentials extends Command
                 ]);
 
                 $this->error("Aborted reconciling {$provider}: {$failed} of {$tried} lists failed and {$losing} holders lost accounts at once; none of them was flagged.");
+                $stopped[$provider] = true;
 
                 continue;
             }
@@ -429,6 +460,7 @@ class CheckStaticCredentials extends Command
             }
         }
 
+        $waiting = $this->keepNotes($notes, $stopped);
         $checked = array_sum($accountsChecked);
 
         if ($checked > 0) {
@@ -436,7 +468,88 @@ class CheckStaticCredentials extends Command
             $this->info("Checked {$checked} account(s) behind {$credentials} shared credential(s), flagged {$flagged}.");
         }
 
+        if ($waiting > 0) {
+            $this->line("{$waiting} account(s) missing from their list for less than a day: flagged if still missing then.");
+        }
+
         return $tripped;
+    }
+
+    /**
+     * Of the accounts missing from a list that is the only sign, those
+     * missing for at least MISSING_FOR_SECONDS (since a run that found them
+     * missing, as noted in the cache). Returns them, and the note this run
+     * leaves: the time each other missing account was first found missing,
+     * now for those just found. Accounts back on the list drop out of it. The
+     * note is keyed on the credential and its token: a reconnect's new token
+     * starts over.
+     *
+     * @param  Collection<int, SocialAccount>  $absent
+     * @param  array<int, string>  $providers
+     * @return array{0: Collection<int, SocialAccount>, 1: array{key: string, providers: array<int, string>, since: array<int|string, int>, noted: bool}}
+     */
+    protected function missingForADay(SocialToken $token, mixed $cipher, Collection $absent, array $providers): array
+    {
+        $key = 'social-tokens:reconcile-missing:'.$token->getKey().':'.substr(hash('sha256', is_string($cipher) ? $cipher : ''), 0, 16);
+
+        try {
+            $noted = Cache::get($key);
+        } catch (Throwable) {
+            $noted = null; // a cache it cannot read flags nothing today
+        }
+
+        $noted = is_array($noted) ? $noted : [];
+        $now = now()->getTimestamp();
+        $since = [];
+
+        $due = $absent->filter(function (SocialAccount $account) use ($noted, $now, &$since) {
+            $first = $noted[$account->getKey()] ?? null;
+
+            if (is_int($first) && $first <= $now && $now - $first >= self::MISSING_FOR_SECONDS) {
+                return true;
+            }
+
+            $since[$account->getKey()] = is_int($first) && $first <= $now ? $first : $now;
+
+            return false;
+        });
+
+        return [$due->values(), ['key' => $key, 'providers' => $providers, 'since' => $since, 'noted' => $noted !== []]];
+    }
+
+    /**
+     * Store the notes of this run, except for providers a breaker stopped
+     * (an incident must not start anyone's day). Returns how many accounts
+     * wait.
+     *
+     * @param  list<array{key: string, providers: array<int, string>, since: array<int|string, int>, noted: bool}>  $notes
+     * @param  array<string, true>  $stopped
+     */
+    protected function keepNotes(array $notes, array $stopped): int
+    {
+        $waiting = 0;
+
+        foreach ($notes as $note) {
+            if (array_intersect($note['providers'], array_keys($stopped)) !== []) {
+                continue;
+            }
+
+            try {
+                if ($note['since'] !== []) {
+                    Cache::put($note['key'], $note['since'], now()->addSeconds(self::CONFIRM_WITHIN_SECONDS));
+                    $waiting += count($note['since']);
+                } elseif ($note['noted']) {
+                    Cache::forget($note['key']);
+                }
+            } catch (Throwable $e) {
+                Log::warning('[social-tokens] check-static could not note accounts missing from their list; they wait another day.', [
+                    'exception' => $e::class,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $waiting;
     }
 
     /**

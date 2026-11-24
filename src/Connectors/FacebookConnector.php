@@ -9,6 +9,7 @@ use Pr4w\SocialTokens\Contracts\ChecksCredential;
 use Pr4w\SocialTokens\Contracts\FansOutConnections;
 use Pr4w\SocialTokens\Contracts\FetchesProfile;
 use Pr4w\SocialTokens\Contracts\ListsReachableAccounts;
+use Pr4w\SocialTokens\Contracts\VerifiesMissingAccounts;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
@@ -35,7 +36,7 @@ use Pr4w\SocialTokens\Support\RenewalResult;
  * The exchange call, the Graph version and appsecret_proof signing are
  * shared with Instagram (MetaGraphConnector).
  */
-class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections, FetchesProfile, ListsReachableAccounts
+class FacebookConnector extends MetaGraphConnector implements ChecksCredential, FansOutConnections, FetchesProfile, ListsReachableAccounts, VerifiesMissingAccounts
 {
     /** Safety cap on /me/accounts result pages (100 Pages each). */
     protected const MAX_RESULT_PAGES = 20;

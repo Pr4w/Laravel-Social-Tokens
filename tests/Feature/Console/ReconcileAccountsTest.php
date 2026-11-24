@@ -1,6 +1,8 @@
 <?php
 
+use Illuminate\Http\Client\Factory;
 use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -18,7 +20,9 @@ use Pr4w\SocialTokens\Models\SocialToken;
  * token: renewals and token checks saw nothing, the account stayed active
  * and every post as it failed, until the member's next connection reconciled
  * it. check-static now lists, every day, the accounts such a token can still
- * post as, and flags the missing ones, as a reconnect would.
+ * post as, and flags the missing ones, as a reconnect would. A LinkedIn
+ * organization, which only its list vouches for, once it has been missing
+ * for a day: LinkedIn serving short lists for a few hours must cut nobody off.
  */
 
 beforeEach(function () {
@@ -73,13 +77,23 @@ function reconcileAccount(string $provider, string $id): SocialAccount
     return SocialAccount::where('provider', $provider)->where('provider_user_id', $id)->sole();
 }
 
-it('flags an organization the member no longer administers, and nothing else', function () {
+it('flags an organization the member no longer administers, a day after, and nothing else', function () {
     Event::fake([AccountNeedsReconnect::class]);
     $token = reconcileLinkedIn();
-    reconcileOrganizations(['111'], ['111']);
+    reconcileOrganizations(['111'], ['111'], ['111'], ['111']);
+
+    $this->artisan('social-tokens:check-static')
+        ->expectsOutputToContain('Checked 2 account(s) behind 1 shared credential(s), flagged 0.')
+        ->expectsOutputToContain('1 account(s) missing from their list for less than a day: flagged if still missing then.')
+        ->assertSuccessful();
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
+
+    $this->travel(21)->hours();
 
     $this->artisan('social-tokens:check-static')
         ->expectsOutputToContain('Checked 2 account(s) behind 1 shared credential(s), flagged 1.')
+        ->doesntExpectOutputToContain('for less than a day')
         ->assertSuccessful();
 
     expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::NeedsReconnect)
@@ -89,7 +103,7 @@ it('flags an organization the member no longer administers, and nothing else', f
         ->and($token->fresh()->status)->toBe(AccountStatus::Active);
 
     Event::assertDispatchedTimes(AccountNeedsReconnect::class, 1);
-    Http::assertSentCount(2); // the second read confirms it
+    Http::assertSentCount(4); // each run reads it twice
     Http::assertSent(fn (Request $request) => $request->hasHeader('Authorization', 'Bearer member-token'));
 });
 
@@ -276,6 +290,9 @@ it('flags the accounts of one holder who lost many at once', function () {
 
     reconcileOrganizationsByMember(['agency' => []] + collect(range(1, 5))->mapWithKeys(fn (int $i) => ["m{$i}" => ["{$i}0"]])->all());
 
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.')->assertSuccessful();
+    $this->travel(21)->hours();
+
     $this->artisan('social-tokens:check-static')
         ->expectsOutputToContain('Checked 20 account(s) behind 6 shared credential(s), flagged 15.')
         ->assertSuccessful();
@@ -341,7 +358,8 @@ it('does not flag on a list read with a token a reconnect replaced during the ru
     $calls = 0;
 
     Http::fake(linkedInRest(function () use (&$calls, $token) {
-        if (++$calls === 2) {
+        // The second read of the run a day later, the one that would flag 222
+        if (++$calls === 4) {
             // The member, an admin again, reconnects: same credential, new token
             $token->fresh()->forceFill(['access_token' => 'reconnected-token'])->save();
         }
@@ -350,8 +368,11 @@ it('does not flag on a list read with a token a reconnect replaced during the ru
     }));
 
     $this->artisan('social-tokens:check-static')->assertSuccessful();
+    $this->travel(21)->hours();
+    $this->artisan('social-tokens:check-static')->assertSuccessful();
 
-    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
+    expect($calls)->toBe(4)
+        ->and(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
 });
 
 it('brings back at reconnect an Instagram account flagged as no longer managed that the token reaches', function () {
@@ -419,7 +440,8 @@ it('does not flag an account a reconnect moved to another credential during the 
         // The new token (the reconnect's) lists 222; the old one no longer does.
         $ids = $request->hasHeader('Authorization', 'Bearer new-token') ? [111, 222] : [111];
 
-        if (++$calls === 2) {
+        // The second read of the run a day later, the one that would flag 222
+        if (++$calls === 4) {
             reconcileAccount('linkedin', '222')->forceFill(['social_token_id' => $other->getKey()])->save();
         }
 
@@ -428,6 +450,8 @@ it('does not flag an account a reconnect moved to another credential during the 
         ], $ids)]);
     }));
 
+    $this->artisan('social-tokens:check-static')->assertSuccessful();
+    $this->travel(21)->hours();
     $this->artisan('social-tokens:check-static')->assertSuccessful();
 
     expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
@@ -441,4 +465,94 @@ it('can be turned off', function () {
     $this->artisan('social-tokens:check-static')->assertSuccessful();
 
     Http::assertNothingSent();
+});
+
+/*
+ * A day, not two runs: an app running check-static every hour must not flag
+ * an organization LinkedIn left out of its lists for an hour.
+ */
+it('flags an organization only once it has been missing for 20 hours, however often it runs', function () {
+    reconcileMember('member-1', ['111', '222']);
+    reconcileOrganizationsByMember(['member-1' => ['111']]);
+
+    foreach ([0, 1, 18] as $hours) {
+        $this->travel($hours)->hours();
+        $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.');
+    }
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::Active);
+
+    $this->travel(1)->hours(); // 20 hours since the first run found it missing
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 1.');
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::NeedsReconnect);
+});
+
+it('starts the day over when the organization is listed again', function () {
+    reconcileMember('member-1', ['111', '222']);
+    $lists = [['111'], ['111', '222'], ['111'], ['111']];
+    Http::fake(linkedInRest(function () use (&$lists) {
+        return Http::response(['elements' => array_map(fn (string $id) => [
+            'role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => (int) $id, 'localizedName' => "Org {$id}"],
+        ], $lists[0])]);
+    }));
+
+    // Missing, back, missing again, still missing: flagged a day after the last return.
+    foreach (['flagged 0.', 'flagged 0.', 'flagged 0.', 'flagged 1.'] as $run => $expected) {
+        $this->artisan('social-tokens:check-static')->expectsOutputToContain($expected);
+        array_shift($lists);
+        $this->travel(21)->hours();
+    }
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::NeedsReconnect);
+});
+
+it('starts the day over when the token changes, or the note is lost', function (Closure $between) {
+    $token = reconcileLinkedIn();
+    Http::fake(linkedInRest(Http::response(['elements' => [
+        ['role' => 'ADMINISTRATOR', 'state' => 'APPROVED', 'organization~' => ['id' => 111, 'localizedName' => 'Org 111']],
+    ]])));
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.');
+    $between($token);
+    $this->travel(21)->hours();
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.');
+
+    $this->travel(21)->hours();
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 1.');
+
+    expect(reconcileAccount('linkedin', '222')->status)->toBe(AccountStatus::NeedsReconnect);
+})->with([
+    'a new token' => [function (SocialToken $token) {
+        $token->forceFill(['access_token' => 'reconnected-token'])->save();
+    }],
+    'a cleared cache' => [fn () => Cache::flush()],
+    'no run for two days' => [fn () => test()->travel(28)->hours()],
+]);
+
+it('starts nobody\'s day in a run a breaker stopped', function () {
+    config(['social-tokens.check_static_breaker' => ['min_checked' => 2, 'max_terminal_ratio' => 0.2]]);
+
+    foreach (range(1, 5) as $i) {
+        reconcileMember("m{$i}", ["{$i}0"]);
+    }
+
+    $lists = collect(range(1, 5))->mapWithKeys(fn (int $i) => ["m{$i}" => []])->all();
+    reconcileOrganizationsByMember($lists); // everyone at once: an incident
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('Aborted reconciling linkedin')->assertFailed();
+
+    // A day later only m1's organization is missing: the incident's run noted nothing.
+    $this->travel(21)->hours();
+    Http::swap(new Factory);
+    Http::preventStrayRequests();
+    reconcileOrganizationsByMember(['m1' => []] + collect(range(2, 5))->mapWithKeys(fn (int $i) => ["m{$i}" => ["{$i}0"]])->all());
+
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 0.')->assertSuccessful();
+
+    $this->travel(21)->hours();
+    $this->artisan('social-tokens:check-static')->expectsOutputToContain('flagged 1.')->assertSuccessful();
+
+    expect(reconcileAccount('linkedin', '10')->status)->toBe(AccountStatus::NeedsReconnect)
+        ->and(SocialAccount::where('status', AccountStatus::Active->value)->count())->toBe(4);
 });

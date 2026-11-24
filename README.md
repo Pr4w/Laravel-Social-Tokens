@@ -867,8 +867,22 @@ the member is an admin again, brings the account back.
   reads `GET /{ig-user-id}?fields=id` and flags the account only when Meta
   answers with a permission or not-found error (10, 200–299, 100/33); any
   other answer decides nothing. A connection's reconciliation asks the same
-  way. (A LinkedIn member reaches an organization only through a role, which
-  the list shows: two reads that agree are enough.)
+  way.
+- A LinkedIn organization has no such second sign: a member reaches it only
+  through a role, which only the list shows, and two reads a second apart
+  would both miss it if LinkedIn served short lists for a few hours. So it is
+  flagged only once it has been missing for a day: the run that first finds
+  it missing notes when, in the cache, and says so ("N account(s) missing
+  from their list for less than a day"), and a run at least 20 hours later
+  that still finds it missing flags it. However often `check-static` runs,
+  it takes 20 hours. An organization listed again, a new token (a
+  reconnect), or a note the cache lost (`cache:clear`, a cache without
+  persistence, no run for 48 hours) starts the day over: a lost note only
+  ever delays a verdict. A run a breaker stopped notes nothing. A
+  connection's own reconciliation still decides at once: the member is there
+  to see it. A connector whose `isStillReachable()` asks about the account
+  itself implements `Contracts\VerifiesMissingAccounts` to be flagged the
+  same day, as Facebook does for Instagram.
 - A list that cannot be read whole (an error, a truncated page) decides
   nothing; one warning per provider says how many tokens could not be listed.
 - Nobody is judged for a provider when its token checks tripped the breaker
