@@ -3,7 +3,7 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
-## [Unreleased]
+## [3.9.2]
 
 ### Fixed
 - **A dead LinkedIn token answered `restricted_token` is flagged.** Seen in
