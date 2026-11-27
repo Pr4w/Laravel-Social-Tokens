@@ -14,6 +14,7 @@ use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
 use Pr4w\SocialTokens\Models\SocialAccount;
 use Pr4w\SocialTokens\Models\SocialToken;
+use Pr4w\SocialTokens\SocialTokens;
 use Pr4w\SocialTokens\Support\ConnectorRegistry;
 use Pr4w\SocialTokens\Support\RenewalResult;
 use Pr4w\SocialTokens\Support\Settings;
@@ -115,7 +116,8 @@ class CheckStaticCredentials extends Command
                 }
 
                 try {
-                    $result = $connector->checkCredential($token);
+                    // A check asking for a refresh to decide is settled now.
+                    $result = app(SocialTokens::class)->settleCheckByRefresh($token, $connector->checkCredential($token));
                 } catch (Throwable $e) {
                     $errors++;
 

@@ -112,6 +112,25 @@ final class RenewalResult
         return new self(outcome: RenewalOutcome::Transient, reason: $reason, context: $context, clientError: true);
     }
 
+    /**
+     * A check's answer when the provider refused the access token while its
+     * refresh token may still work: the caller refreshes the credential now
+     * and lets that decide (SocialTokens::settleCheckByRefresh()). Transient
+     * until then, and catalogued.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    public static function refreshToDecide(string $reason, array $context = []): self
+    {
+        return new self(outcome: RenewalOutcome::Transient, reason: $reason, context: ['refresh_to_decide' => true] + $context);
+    }
+
+    /** Whether a check asks for the credential to be refreshed now to decide (refreshToDecide()). */
+    public function refreshesToDecide(): bool
+    {
+        return ($this->context['refresh_to_decide'] ?? false) === true;
+    }
+
     public function succeeded(): bool
     {
         return $this->outcome === RenewalOutcome::Success;

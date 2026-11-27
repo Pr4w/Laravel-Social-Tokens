@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Exceptions;
@@ -241,7 +242,11 @@ it('takes Meta\'s posts in an app\'s web routes file, which checks CSRF tokens M
     foreach (['deauthorize', 'delete'] as $name) {
         $middleware = app('router')->gatherRouteMiddleware(app('router')->getRoutes()->getByName("social-tokens.callbacks.{$name}"));
 
-        expect(collect($middleware)->contains(fn ($class) => is_string($class) && is_a($class, VerifyCsrfToken::class, true)))->toBeFalse();
+        // PreventRequestForgery where Laravel has it: the web group's, which
+        // VerifyCsrfToken now extends (a VerifyCsrfToken check alone missed it).
+        $csrf = class_exists(PreventRequestForgery::class) ? PreventRequestForgery::class : VerifyCsrfToken::class;
+
+        expect(collect($middleware)->contains(fn ($class) => is_string($class) && is_a($class, $csrf, true)))->toBeFalse();
     }
 });
 

@@ -377,10 +377,10 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
         }
 
         // LinkedIn documents 401 as "Invalid client secret" and 400 as
-        // "Invalid client id or token": an invalid_client, a bare 401, or a
-        // 400 naming the client is the app's client, which also renews every
-        // LinkedIn token. A restricted token is not: LinkedIn will not
-        // introspect it, whatever the client.
+        // "Invalid client id or token". Only invalid_client, or a 401 that
+        // says nothing else, is the app's client, which also renews every
+        // LinkedIn token: a 400 may be about the token, and LinkedIn answers
+        // some tokens 401 restricted_token, whatever the client.
         $error = $this->introspectionError($response);
 
         if ($error['error'] === 'restricted_token') {
@@ -388,10 +388,9 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
         }
 
         if ($error['error'] === 'invalid_client'
-            || ($response->status() === 401 && $error['error'] === null)
-            || ($response->status() === 400 && str_contains(strtolower((string) $error['error_description']), 'client'))) {
+            || ($response->status() === 401 && $error['error'] === null && $error['error_description'] === null)) {
             return RenewalResult::clientFailure(
-                "LinkedIn refused the app's client for token introspection (HTTP {$response->status()}, invalid client secret): check the client_id and client_secret the linkedin connector reads (services.".$this->credentialsKey().', or connectors.linkedin). Refreshing LinkedIn tokens uses them too.',
+                "LinkedIn refused the app's client for token introspection (HTTP {$response->status()}): check the client_id and client_secret the linkedin connector reads (services.".$this->credentialsKey().', or connectors.linkedin). Refreshing LinkedIn tokens uses them too.',
                 $error,
             );
         }
@@ -420,7 +419,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
         return match (true) {
             $status === 'revoked' => RenewalResult::terminalFailure('LinkedIn token revoked.', ['definitive' => true]),
             $status === 'expired' && ! $this->renewalStrategyFor($token)->canRenewUnattended() => RenewalResult::terminalFailure('LinkedIn token expired.', ['definitive' => true]),
-            $status === 'expired' => RenewalResult::transientFailure('LinkedIn access token expired; renewal refreshes it.'),
+            $status === 'expired' => RenewalResult::refreshToDecide('LinkedIn access token expired ahead of its renewal; refreshing it to decide.', ['token_status' => $status]),
             default => RenewalResult::unknownFailure(
                 'LinkedIn token introspection answered inactive without a reason; if every LinkedIn credential does, the tokens were issued to another LinkedIn app than the configured client (services.linkedin or connectors.linkedin.client_id).',
                 ['token_status' => $status],
@@ -429,35 +428,33 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
     }
 
     /**
-     * A token LinkedIn answered `restricted_token`, checked with the first
-     * read it is allowed, by the scopes it was granted (all of them, in turn,
-     * when they are not on record): OpenID /userinfo (`profile`), the Profile
-     * API /v2/me (`r_basicprofile`, `r_liteprofile`), then one organization
-     * grant (`r_organization_admin`, `rw_organization_admin`). A read refused
-     * for want of a scope (403) moves on to the next.
+     * A token LinkedIn answered `restricted_token`, checked with a read: the
+     * ones its scopes allow first, then the others (a scope list on record
+     * may be incomplete): OpenID /userinfo (`profile`), the Profile API
+     * /v2/me (`r_basicprofile`, `r_liteprofile`), one organization grant
+     * (`r_organization_admin`, `rw_organization_admin`).
      *
      * An answer is the token working: only its introspection is restricted.
-     * A 401 is the API refusing it too (seen in production as 401
-     * AUTHENTICATION_FAILED "Could not authenticate" for a token whose posts
-     * had started failing): two signs from LinkedIn, a definitive verdict,
-     * unless the token merely expired, which is left to the renewal when it
-     * can refresh. With no read to check it with, the restriction alone is a
-     * verdict the next run must confirm. Anything else decides nothing.
+     * A 403 is LinkedIn authenticating the token and refusing the read for
+     * want of a scope: the next read is tried, and when every read gets one,
+     * nothing is decided. A 401 is the API refusing the token too (seen in
+     * production: 401 AUTHENTICATION_FAILED for a token whose posts failed);
+     * probeVerdict() says what it is worth.
      */
     protected function probeRestrictedToken(SocialToken $token, #[\SensitiveParameter] string $accessToken): RenewalResult
     {
-        $granted = is_array($token->scopes) && $token->scopes !== [] ? $token->scopes : null;
-        $probes = [
+        $granted = SocialToken::normaliseScopes($token->scopes);
+        $reads = [
             [['profile'], fn () => $this->http()->withToken($accessToken)->acceptJson()->get(self::USERINFO_URL)],
             [['r_basicprofile', 'r_liteprofile'], fn () => $this->http()->withToken($accessToken)->acceptJson()->get(self::ME_URL)],
             [['r_organization_admin', 'rw_organization_admin'], fn () => $this->rest($accessToken)->get(self::ORGANIZATION_ACLS_URL, ['q' => 'roleAssignee', 'start' => 0, 'count' => 1])],
         ];
+        $allowed = fn (array $scopes): bool => $granted !== null && array_intersect($scopes, $granted) !== [];
 
-        foreach ($probes as [$scopes, $read]) {
-            if ($granted !== null && array_intersect($scopes, $granted) === []) {
-                continue;
-            }
+        // The reads the scopes allow first, in order (a stable sort).
+        usort($reads, fn (array $a, array $b) => (int) $allowed($b[0]) <=> (int) $allowed($a[0]));
 
+        foreach ($reads as [$scopes, $read]) {
             $response = $this->attempt($read);
 
             if ($response instanceof RenewalResult) {
@@ -476,17 +473,29 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
                 return $this->restFailure($response, 'Could not check the LinkedIn token');
             }
 
-            return $this->probeVerdict($token, $response);
+            return $this->probeVerdict($token, $response, $allowed($scopes));
         }
 
-        return RenewalResult::terminalFailure(
-            'LinkedIn token restricted (restricted_token), with no read to confirm it: flagged if the next check finds it restricted too.',
+        return RenewalResult::unknownFailure(
+            'LinkedIn token restricted (restricted_token), yet LinkedIn authenticated it: every read was refused for want of a scope (403). Nothing decided.',
             ['error' => 'restricted_token'],
         );
     }
 
-    /** What a LinkedIn API read refused with an error says of a restricted token. */
-    protected function probeVerdict(SocialToken $token, Response $response): RenewalResult
+    /**
+     * What a LinkedIn API read that refused a restricted token says of it.
+     *
+     * A credential that can refresh lets its refresh decide
+     * (RenewalResult::refreshToDecide()): LinkedIn documents the refresh's
+     * errors, not these. Otherwise, a 401 that names the token
+     * (AUTHENTICATION_FAILED, REVOKED_ACCESS_TOKEN or 65601,
+     * INVALID_ACCESS_TOKEN or 65600, EXPIRED_ACCESS_TOKEN or 65602), on a
+     * read the token's scopes allow, is a definitive verdict: LinkedIn
+     * refused to introspect the token and its API refuses it. Any other 401
+     * (no name, or a read the scopes on record do not vouch for) must be
+     * confirmed by the next check.
+     */
+    protected function probeVerdict(SocialToken $token, Response $response, bool $allowed): RenewalResult
     {
         $code = $response->json('code');
         $code = is_string($code) && $code !== '' ? $code : null;
@@ -500,18 +509,18 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
             return RenewalResult::unknownFailure("Could not check the LinkedIn token LinkedIn restricted (HTTP {$response->status()}).", $context);
         }
 
-        $expired = $code === 'EXPIRED_ACCESS_TOKEN' || $service === 65602 || str_contains(strtolower((string) $message), 'expired');
-
-        if ($expired && $this->renewalStrategyFor($token)->canRenewUnattended()) {
-            return RenewalResult::transientFailure('LinkedIn access token expired; renewal refreshes it.');
-        }
-
         $said = $code ?? ($service !== null ? (string) $service : 'HTTP 401');
 
-        return RenewalResult::terminalFailure(
-            "LinkedIn token restricted and refused by the API ({$said}): the member must reconnect.",
-            ['definitive' => true] + $context,
-        );
+        if ($this->renewalStrategyFor($token)->canRenewUnattended()) {
+            return RenewalResult::refreshToDecide("LinkedIn token restricted and refused by the API ({$said}).", $context);
+        }
+
+        $named = in_array($code, ['AUTHENTICATION_FAILED', 'REVOKED_ACCESS_TOKEN', 'INVALID_ACCESS_TOKEN', 'EXPIRED_ACCESS_TOKEN'], true)
+            || in_array($service, [65600, 65601, 65602], true);
+
+        return $named && $allowed
+            ? RenewalResult::terminalFailure("LinkedIn token restricted and refused by the API ({$said}): the member must reconnect.", ['definitive' => true] + $context)
+            : RenewalResult::terminalFailure("LinkedIn token restricted and refused by the API ({$said}): flagged if the next check agrees.", $context);
     }
 
     /**

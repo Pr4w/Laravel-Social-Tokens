@@ -14,22 +14,36 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
   `AUTHENTICATION_FAILED`) and its posts failed. The check logged an
   uncatalogued "Unexpected LinkedIn token introspection response" every day
   and flagged nothing, from `check-static` or `reportRejected()`. A
-  restricted token is now checked with a read its scopes allow:
-  `/v2/userinfo` (`profile`), `/v2/me` (`r_basicprofile`, `r_liteprofile`),
-  or one organization grant (`r_organization_admin`,
-  `rw_organization_admin`). An answer is the token working; a 401 flags the
-  credential at once ("LinkedIn token restricted and refused by the API"),
-  unless the token merely expired and can be refreshed. With no read to
-  check it with, the restriction flags it once the next run confirms it.
-- An introspection refused for the app's client (`invalid_client`, or a bare
-  401, which LinkedIn documents as "Invalid client secret") is a client
-  failure, as an invalid client is at renewal: `check-static` logs one
-  critical "linkedin rejected the app's OAuth client" per run, naming the
-  services entry the connector reads, and flags nobody. Any other unexpected
-  answer now carries LinkedIn's `error` and `error_description` in the log.
-- **Meta's callbacks in the `web` group got a 419 again on Laravel 13.44.**
-  Its `web` group now runs `PreventRequestForgery`, which `VerifyCsrfToken`
-  and `ValidateCsrfToken` extend: the callback routes excluded
+  restricted token is now checked with a read: the ones its scopes allow
+  first (`/v2/userinfo` for `profile`, `/v2/me` for `r_basicprofile` or
+  `r_liteprofile`, one organization grant for `r_organization_admin` or
+  `rw_organization_admin`), then the others.
+  - An answer is the token working; a 403 on every read is LinkedIn
+    authenticating it, and decides nothing.
+  - A 401 on a credential that can refresh: the credential is refreshed at
+    once, and the refresh decides, since LinkedIn documents its errors. A
+    refresh refused flags the credential ("LinkedIn token restricted and
+    refused by the API (AUTHENTICATION_FAILED); refreshing it failed too");
+    a new token is checked again, and flagged if refused again.
+  - A 401 on a credential that cannot refresh: definitive when it names the
+    token (`AUTHENTICATION_FAILED`, `REVOKED_ACCESS_TOKEN` / 65601,
+    `INVALID_ACCESS_TOKEN` / 65600, `EXPIRED_ACCESS_TOKEN` / 65602) on a
+    read its scopes allow; otherwise the next check must agree.
+- An introspection `expired` ahead of the renewal, on a credential that can
+  refresh, is refreshed at once (`RenewalResult::refreshToDecide()`,
+  `SocialTokens::settleCheckByRefresh()`), instead of waiting, posts
+  failing, for a renewal weeks away.
+- An introspection refused for the app's client (`invalid_client`, or a 401
+  that says nothing else, which LinkedIn documents as "Invalid client
+  secret") is a client failure, as an invalid client is at renewal:
+  `check-static` logs one critical "linkedin rejected the app's OAuth client"
+  per run, naming the services entry the connector reads, and flags nobody.
+  A 400 ("Invalid client id or token") is not: it may be about the token.
+  Any other unexpected answer now carries LinkedIn's `error` and
+  `error_description` in the log.
+- **Meta's callbacks in the `web` group got a 419 on recent Laravel 13.**
+  Its `web` group runs `PreventRequestForgery` (13.34 at least), which
+  `VerifyCsrfToken` and `ValidateCsrfToken` extend: the callback routes excluded
   `VerifyCsrfToken`, which no longer excluded the group's check. They now
   exclude `PreventRequestForgery` where Laravel has it. Only callbacks placed
   in the `web` group (`CallbackRoutes::register()` in `routes/web.php`, or

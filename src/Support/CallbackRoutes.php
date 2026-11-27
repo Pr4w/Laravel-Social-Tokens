@@ -22,9 +22,10 @@ use Pr4w\SocialTokens\Actions\ShowDataDeletionStatus;
  * callback was refused with a 419 before it was verified. The signed_request
  * is their authentication.
  *
- * Laravel 13.44's web group runs PreventRequestForgery, which VerifyCsrfToken
- * and ValidateCsrfToken now extend: excluding VerifyCsrfToken no longer
- * excluded the web group's check, and Meta's posts got a 419 again.
+ * Recent Laravel 13 releases (13.34 at least) run PreventRequestForgery in the
+ * web group, which VerifyCsrfToken and ValidateCsrfToken now extend:
+ * excluding VerifyCsrfToken no longer excluded the web group's check, and
+ * Meta's posts got a 419 again.
  * Excluding a class excludes its subclasses, so the routes exclude the
  * newest base there is.
  */

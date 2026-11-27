@@ -1121,6 +1121,12 @@ class SocialTokens
             return false;
         }
 
+        // Refreshed to decide, and refused again: the verdict is on the token
+        // the refresh stored.
+        if (($result->context['refreshed'] ?? false) === true) {
+            $checkedToken = (string) $token->fresh()?->access_token;
+        }
+
         // The provider's reason ("password changed") is the real cause.
         return $token->markNeedsReconnectOnce($result->reason ?? $reason, $checkedToken);
     }
@@ -1132,7 +1138,63 @@ class SocialTokens
      */
     protected function checkAtProvider(ChecksCredential $connector, SocialToken $token): RenewalResult
     {
-        return $connector->checkCredential($token);
+        return $this->settleCheckByRefresh($token, $connector->checkCredential($token));
+    }
+
+    /**
+     * @internal A check answered RenewalResult::refreshToDecide() (the
+     * provider refused the access token, and the refresh token may still
+     * work) is settled by refreshing the credential now, under the renewal
+     * lock. A refresh the provider refuses is a definitive verdict, as at
+     * renewal. One that works stores the new token, which is checked once
+     * more: refused again, the credential is dead whatever its refresh token
+     * says; otherwise the new check's answer stands. Anything else decides
+     * nothing. Any other check result is returned as it is.
+     */
+    public function settleCheckByRefresh(SocialToken $token, RenewalResult $result): RenewalResult
+    {
+        if (! $result->refreshesToDecide()) {
+            return $result;
+        }
+
+        // Refresh now, however far the expiry: a token that would not stay
+        // valid until a minute past it is renewed.
+        if ($token->expires_at === null) {
+            return RenewalResult::unknownFailure($result->reason.' No expiry on record to refresh it before.', $result->context);
+        }
+
+        try {
+            $renewed = $this->renewCredential($token, max(30, (int) now()->diffInSeconds($token->expires_at, false) + 60));
+        } catch (Throwable $e) {
+            return RenewalResult::unknownFailure($result->reason.' Refreshing it threw '.$e::class.'.', $result->context);
+        }
+
+        if ($renewed->outcome === RenewalOutcome::Terminal) {
+            return RenewalResult::terminalFailure(
+                rtrim((string) $result->reason, '.').'; refreshing it failed too: '.$renewed->reason,
+                ['definitive' => true] + $result->context,
+            );
+        }
+
+        if (! $renewed->succeeded()) {
+            return $renewed;
+        }
+
+        $fresh = $token->fresh();
+        $connector = $fresh !== null ? $this->registry->for($fresh->provider) : null;
+
+        if ($fresh === null || ! $connector instanceof ChecksCredential) {
+            return $renewed;
+        }
+
+        $again = $connector->checkCredential($fresh);
+
+        return $again->refreshesToDecide()
+            ? RenewalResult::terminalFailure(
+                rtrim((string) $result->reason, '.').'; refused again with a freshly refreshed token.',
+                ['definitive' => true, 'refreshed' => true] + $result->context,
+            )
+            : $again;
     }
 
     /**
