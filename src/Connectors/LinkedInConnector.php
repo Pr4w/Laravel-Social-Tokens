@@ -370,6 +370,18 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
             return $response;
         }
 
+        // LinkedIn documents 401 as "Invalid client secret" and 400 as
+        // "Invalid client id or token": a 401, or a 400 naming the client, is
+        // the app's client, which also renews every LinkedIn token.
+        $error = $this->introspectionError($response);
+
+        if ($response->status() === 401 || ($response->status() === 400 && str_contains(strtolower(implode(' ', array_filter([$error['error'], $error['error_description']]))), 'client'))) {
+            return RenewalResult::clientFailure(
+                "LinkedIn refused the app's client for token introspection (HTTP {$response->status()}, invalid client secret): check the client_id and client_secret the linkedin connector reads (services.".$this->credentialsKey().', or connectors.linkedin). Refreshing LinkedIn tokens uses them too.',
+                $error,
+            );
+        }
+
         $active = $response->json('active');
 
         if ($active === true) {
@@ -377,7 +389,7 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
         }
 
         if ($active !== false) {
-            return RenewalResult::unknownFailure('Unexpected LinkedIn token introspection response.', ['status' => $response->status()]);
+            return RenewalResult::unknownFailure('Unexpected LinkedIn token introspection response.', $error);
         }
 
         $status = $response->json('status');
@@ -400,6 +412,25 @@ class LinkedInConnector extends OAuth2Connector implements ChecksCredential, Fet
                 ['token_status' => $status],
             ),
         };
+    }
+
+    /**
+     * What LinkedIn said, for the log: the status, and its error and
+     * description if it gave any (they hold no secret), shortened.
+     *
+     * @return array{status: int, error: ?string, error_description: ?string}
+     */
+    protected function introspectionError(Response $response): array
+    {
+        $text = function (mixed $value): ?string {
+            return is_string($value) && trim($value) !== '' ? mb_substr(trim($value), 0, 200) : null;
+        };
+
+        return [
+            'status' => $response->status(),
+            'error' => $text($response->json('error') ?? $response->json('code')),
+            'error_description' => $text($response->json('error_description') ?? $response->json('message')),
+        ];
     }
 
     protected function tokenUrl(): string

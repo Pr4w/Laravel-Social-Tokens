@@ -285,13 +285,21 @@ class StoreLinkedInOrganizations
      * it: details left out of $member keep their stored value.
      *
      * @param  array<string, string|null>  $member
-     * @param  array<string, mixed>  $withScopes
+     * @param  array{scopes?: mixed}  $withScopes
      */
     protected function storeMember(string $memberId, array $member, SocialToken $credential, ?Model $owner, ?Model $connectedBy, array $withScopes): SocialAccount
     {
+        $details = [];
+
+        foreach (['name', 'nickname', 'email', 'avatar'] as $attribute) {
+            if (array_key_exists($attribute, $member)) {
+                $details[$attribute] = $member[$attribute];
+            }
+        }
+
         $account = SocialAccount::query()
             ->firstOrNew(['provider' => 'linkedin', 'provider_user_id' => $memberId] + SocialAccount::ownerKey($owner))
-            ->fill(array_intersect_key($member, array_flip(['name', 'nickname', 'email', 'avatar'])) + [
+            ->fill($details + [
                 'social_token_id' => $credential->getKey(),
                 'provider_holder_id' => $memberId,
                 'status' => AccountStatus::Active,

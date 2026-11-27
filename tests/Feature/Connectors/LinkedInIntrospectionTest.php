@@ -11,6 +11,7 @@
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Pr4w\SocialTokens\Enums\AccountStatus;
 use Pr4w\SocialTokens\Enums\RenewalOutcome;
 use Pr4w\SocialTokens\Events\CredentialNeedsReconnect;
@@ -103,6 +104,55 @@ it('leaves an expired access token to the refresh when refresh tokens are enable
     $result = linkedInIntrospectionCheck(linkedInIntrospectionCredential('member-refresh'));
 
     expect($result->outcome)->toBe(RenewalOutcome::Transient);
+});
+
+/*
+ * LinkedIn documents a 401 from introspectToken as "Invalid client secret":
+ * the app's client, not the member. It was logged every day as an
+ * uncatalogued error on each credential, saying nothing of the secret.
+ */
+it('takes a 401 as the app\'s client being refused, never as a verdict', function (int $status, array $body) {
+    Http::fake(['www.linkedin.com/oauth/v2/introspectToken' => Http::response($body, $status)]);
+
+    $result = linkedInIntrospectionCheck(linkedInIntrospectionCredential());
+
+    expect($result->outcome)->toBe(RenewalOutcome::Transient)
+        ->and($result->clientError)->toBeTrue()
+        ->and($result->reason)->toContain('client_secret')->toContain('services.linkedin')
+        ->and($result->context['status'])->toBe($status);
+})->with([
+    '401' => [401, ['error' => 'invalid_client', 'error_description' => 'Client authentication failed']],
+    '401 without a body' => [401, []],
+    '400 naming the client' => [400, ['error' => 'invalid_client', 'error_description' => 'The passed in client_id is invalid']],
+]);
+
+it('says what LinkedIn answered when the introspection is unexpected', function () {
+    Http::fake(['www.linkedin.com/oauth/v2/introspectToken' => Http::response(['error' => 'invalid_request', 'error_description' => 'A required parameter "token" is missing'], 400)]);
+
+    $result = linkedInIntrospectionCheck(linkedInIntrospectionCredential());
+
+    expect($result->clientError)->toBeFalse()
+        ->and($result->unknown)->toBeTrue()
+        ->and($result->context)->toBe(['status' => 400, 'error' => 'invalid_request', 'error_description' => 'A required parameter "token" is missing']);
+});
+
+it('alerts once about the refused client in check-static, and flags nobody', function () {
+    config(['social-tokens.check_renewable' => true]);
+    Log::spy();
+    Http::fake(['www.linkedin.com/oauth/v2/introspectToken' => Http::response(['error' => 'invalid_client'], 401)]);
+    $first = linkedInIntrospectionCredential();
+    $second = linkedInIntrospectionCredential();
+
+    Artisan::call('social-tokens:check-static');
+    Artisan::call('social-tokens:check-static');
+
+    expect($first->fresh()->status)->toBe(AccountStatus::Active)
+        ->and($second->fresh()->failed_checks)->toBe(0);
+
+    Log::shouldHaveReceived('critical')->withArgs(fn (string $message, array $context) => str_contains($message, "linkedin rejected the app's OAuth client")
+        && $context['credentials'] === 2)->twice(); // once a run, for both
+    Log::shouldNotHaveReceived('error', [Mockery::on(fn ($message) => str_contains((string) $message, 'Uncatalogued')), Mockery::any()]);
+    Event::assertNotDispatched(CredentialNeedsReconnect::class);
 });
 
 it('never flags LinkedIn credentials on a bare active:false in check-static', function () {

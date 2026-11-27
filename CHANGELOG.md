@@ -3,6 +3,28 @@
 All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **A LinkedIn introspection refused with HTTP 401 is the app's client.**
+  LinkedIn documents a 401 from `introspectToken` as "Invalid client secret";
+  the check logged it every day, for each credential, as an uncatalogued
+  "Unexpected LinkedIn token introspection response" with only the status.
+  It is now a client failure, as an invalid client is at renewal:
+  `check-static` logs one critical "linkedin rejected the app's OAuth client"
+  per run, naming the services entry the connector reads, and
+  `reportRejected()` alerts the same way; neither flags anyone. So is a 400
+  that names the client. Any other unexpected answer now carries LinkedIn's
+  `error` and `error_description` in the log.
+- **Meta's callbacks in the `web` group got a 419 again on Laravel 13.44.**
+  Its `web` group now runs `PreventRequestForgery`, which `VerifyCsrfToken`
+  and `ValidateCsrfToken` extend: the callback routes excluded
+  `VerifyCsrfToken`, which no longer excluded the group's check. They now
+  exclude `PreventRequestForgery` where Laravel has it. Only callbacks placed
+  in the `web` group (`CallbackRoutes::register()` in `routes/web.php`, or
+  `callbacks.middleware` naming `web`) were affected; the default
+  registration, without middleware, was not.
+
 ## [3.9.1]
 
 ### Fixed
