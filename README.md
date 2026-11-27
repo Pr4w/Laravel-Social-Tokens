@@ -1095,11 +1095,15 @@ LinkedIn app that issued the member tokens. LinkedIn answers a bare "inactive"
 for a token of another app, so the package flags a LinkedIn credential only
 when the answer says the token was `revoked`, or `expired` without refresh
 tokens; anything else is logged as an uncatalogued check error, with what
-LinkedIn said. An HTTP 401 means LinkedIn refused the configured client secret
-(a secret regenerated in the LinkedIn developer portal, or the secret of
-another app): `check-static` logs one critical "linkedin rejected the app's
-OAuth client" per run and flags nobody, but fix it before the tokens come up
-for renewal, which uses the same secret. If you obtain member tokens from a
+LinkedIn said. LinkedIn refuses to introspect some tokens (a Community
+Management app's: 401 `restricted_token`): those are checked with a read
+their scopes allow (`/v2/userinfo`, `/v2/me`, or one organization grant), and
+flagged once two runs in a row get a revoked or invalid token. An
+`invalid_client`, or a bare 401, means LinkedIn refused the configured client
+secret (a secret regenerated in the LinkedIn developer portal, or another
+app's): `check-static` logs one critical "linkedin rejected the app's OAuth
+client" per run and flags nobody, but fix it before the tokens come up for
+renewal, which uses the same secret. If you obtain member tokens from a
 separate app (a Community Management app next to your Sign In app), point the
 `linkedin` connector at that app.
 

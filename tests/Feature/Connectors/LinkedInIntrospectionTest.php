@@ -155,6 +155,90 @@ it('alerts once about the refused client in check-static, and flags nobody', fun
     Event::assertNotDispatched(CredentialNeedsReconnect::class);
 });
 
+/*
+ * LinkedIn refuses to introspect some tokens (a Community Management app's,
+ * seen in production): 401 {"error": "restricted_token", "error_description":
+ * "Token restricted"}, undocumented. Not the client: the same client renewed
+ * the token. The token is checked with a read it is allowed instead.
+ */
+function linkedInRestricted(array $reads = []): void
+{
+    Http::fake(['www.linkedin.com/oauth/v2/introspectToken' => Http::response(['error' => 'restricted_token', 'error_description' => 'Token restricted'], 401)] + $reads);
+}
+
+function linkedInRestrictedCredential(?array $scopes, ?string $refreshToken = 'refresh-1'): SocialToken
+{
+    $token = linkedInIntrospectionCredential($refreshToken);
+    $token->forceFill(['scopes' => $scopes])->save();
+
+    return $token->fresh();
+}
+
+it('checks a token LinkedIn will not introspect with a read it is allowed', function (?array $scopes, array $reads, string $read) {
+    linkedInRestricted(array_map(fn (array $answer) => Http::response($answer[0], $answer[1] ?? 200), $reads));
+
+    $result = linkedInIntrospectionCheck(linkedInRestrictedCredential($scopes));
+
+    expect($result->succeeded())->toBeTrue()
+        ->and($result->clientError)->toBeFalse();
+
+    Http::assertSent(fn ($request) => str_starts_with($request->url(), $read)
+        && $request->hasHeader('Authorization', 'Bearer member-token'));
+})->with([
+    'r_basicprofile: /v2/me' => [['r_basicprofile', 'w_member_social', 'w_organization_social'], ['api.linkedin.com/v2/me' => [['id' => 'member-1']]], 'https://api.linkedin.com/v2/me'],
+    'profile: /userinfo' => [['openid', 'profile', 'w_member_social'], ['api.linkedin.com/v2/userinfo' => [['sub' => 'member-1']]], 'https://api.linkedin.com/v2/userinfo'],
+    'organization admin: one grant' => [['rw_organization_admin', 'w_organization_social'], ['api.linkedin.com/rest/organizationAcls*' => [['elements' => []]]], 'https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&start=0&count=1'],
+    'scopes not on record: past a refused /userinfo' => [null, [
+        'api.linkedin.com/v2/userinfo' => [['message' => 'Not enough permissions'], 403],
+        'api.linkedin.com/v2/me' => [['id' => 'member-1']],
+    ], 'https://api.linkedin.com/v2/me'],
+]);
+
+it('takes a revoked or invalid answer about a restricted token as a verdict, confirmed by the next run', function (array $answer) {
+    config(['social-tokens.check_renewable' => true]);
+    linkedInRestricted(['api.linkedin.com/v2/me' => Http::response($answer, 401)]);
+    $credential = linkedInRestrictedCredential(['r_basicprofile', 'w_member_social']);
+
+    $result = linkedInIntrospectionCheck($credential);
+
+    expect($result->outcome)->toBe(RenewalOutcome::Terminal)
+        ->and($result->context['definitive'] ?? false)->toBeFalse(); // undocumented codes: two runs
+
+    Artisan::call('social-tokens:check-static');
+
+    expect($credential->fresh()->status)->toBe(AccountStatus::Active)
+        ->and($credential->fresh()->failed_checks)->toBe(1);
+
+    Artisan::call('social-tokens:check-static');
+
+    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+})->with([
+    'revoked' => [['serviceErrorCode' => 65601, 'message' => 'The token used in the request has been revoked by the user', 'status' => 401]],
+    'revoked, /rest style' => [['status' => 401, 'code' => 'REVOKED_ACCESS_TOKEN', 'message' => 'The token used in the request has been revoked']],
+    'invalid' => [['serviceErrorCode' => 65600, 'message' => 'Invalid access token', 'status' => 401]],
+]);
+
+it('leaves an expired restricted token to the renewal when it can refresh', function (?string $refreshToken, RenewalOutcome $outcome) {
+    linkedInRestricted(['api.linkedin.com/v2/me' => Http::response(['serviceErrorCode' => 65602, 'message' => 'The token used in the request has expired', 'status' => 401], 401)]);
+
+    expect(linkedInIntrospectionCheck(linkedInRestrictedCredential(['r_basicprofile'], $refreshToken))->outcome)->toBe($outcome);
+})->with([
+    'with a refresh token' => ['refresh-1', RenewalOutcome::Transient],
+    'without' => [null, RenewalOutcome::Terminal],
+]);
+
+it('decides nothing about a restricted token it has no read to check with', function () {
+    linkedInRestricted();
+
+    $result = linkedInIntrospectionCheck(linkedInRestrictedCredential(['w_member_social', 'w_organization_social']));
+
+    expect($result->unknown)->toBeTrue()
+        ->and($result->clientError)->toBeFalse()
+        ->and($result->reason)->toContain('restricted_token');
+
+    Http::assertSentCount(1);
+});
+
 it('never flags LinkedIn credentials on a bare active:false in check-static', function () {
     config(['social-tokens.check_renewable' => true]);
     linkedInIntrospectionAnswers(['active' => false]);

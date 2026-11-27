@@ -6,16 +6,26 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 ## [Unreleased]
 
 ### Fixed
-- **A LinkedIn introspection refused with HTTP 401 is the app's client.**
-  LinkedIn documents a 401 from `introspectToken` as "Invalid client secret";
-  the check logged it every day, for each credential, as an uncatalogued
-  "Unexpected LinkedIn token introspection response" with only the status.
-  It is now a client failure, as an invalid client is at renewal:
-  `check-static` logs one critical "linkedin rejected the app's OAuth client"
-  per run, naming the services entry the connector reads, and
-  `reportRejected()` alerts the same way; neither flags anyone. So is a 400
-  that names the client. Any other unexpected answer now carries LinkedIn's
-  `error` and `error_description` in the log.
+- **LinkedIn tokens LinkedIn will not introspect are checked another way.**
+  LinkedIn answers `introspectToken` for some tokens (a Community Management
+  app's, seen in production) with HTTP 401 `restricted_token`, "Token
+  restricted", which it does not document: the check logged it every day as
+  an uncatalogued "Unexpected LinkedIn token introspection response", and
+  could never tell a revoked token, so neither `check-static` nor a
+  `reportRejected()` ever flagged one. Such a token is now checked with a
+  read it is allowed, by its scopes: `/v2/userinfo` (`profile`), `/v2/me`
+  (`r_basicprofile`, `r_liteprofile`), or one organization grant
+  (`r_organization_admin`, `rw_organization_admin`). An answer is the token
+  working; a 401 naming a revoked or invalid token (`REVOKED_ACCESS_TOKEN`
+  / 65601, `INVALID_ACCESS_TOKEN` / 65600, undocumented as well) flags the
+  credential once two runs in a row say so; an expired one is left to the
+  renewal.
+- An introspection refused for the app's client (`invalid_client`, or a bare
+  401, which LinkedIn documents as "Invalid client secret") is a client
+  failure, as an invalid client is at renewal: `check-static` logs one
+  critical "linkedin rejected the app's OAuth client" per run, naming the
+  services entry the connector reads, and flags nobody. Any other unexpected
+  answer now carries LinkedIn's `error` and `error_description` in the log.
 - **Meta's callbacks in the `web` group got a 419 again on Laravel 13.44.**
   Its `web` group now runs `PreventRequestForgery`, which `VerifyCsrfToken`
   and `ValidateCsrfToken` extend: the callback routes excluded
