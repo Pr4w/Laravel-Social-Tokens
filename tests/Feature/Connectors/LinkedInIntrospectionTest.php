@@ -156,10 +156,13 @@ it('alerts once about the refused client in check-static, and flags nobody', fun
 });
 
 /*
- * LinkedIn refuses to introspect some tokens (a Community Management app's,
- * seen in production): 401 {"error": "restricted_token", "error_description":
- * "Token restricted"}, undocumented. Not the client: the same client renewed
- * the token. The token is checked with a read it is allowed instead.
+ * Seen in production: introspectToken answered one token 401 {"error":
+ * "restricted_token", "error_description": "Token restricted"}, undocumented,
+ * while the same client introspected some thirty others with a 200. Not the
+ * client: that token. /v2/me answered it 401 AUTHENTICATION_FAILED, and its
+ * posts were failing; the check logged "Unexpected LinkedIn token
+ * introspection response" every day and flagged nothing. A restricted token
+ * is checked with a read it is allowed.
  */
 function linkedInRestricted(array $reads = []): void
 {
@@ -194,7 +197,7 @@ it('checks a token LinkedIn will not introspect with a read it is allowed', func
     ], 'https://api.linkedin.com/v2/me'],
 ]);
 
-it('takes a revoked or invalid answer about a restricted token as a verdict, confirmed by the next run', function (array $answer) {
+it('flags a restricted token the API refuses too, at once', function (array $answer) {
     config(['social-tokens.check_renewable' => true]);
     linkedInRestricted(['api.linkedin.com/v2/me' => Http::response($answer, 401)]);
     $credential = linkedInRestrictedCredential(['r_basicprofile', 'w_member_social']);
@@ -202,21 +205,28 @@ it('takes a revoked or invalid answer about a restricted token as a verdict, con
     $result = linkedInIntrospectionCheck($credential);
 
     expect($result->outcome)->toBe(RenewalOutcome::Terminal)
-        ->and($result->context['definitive'] ?? false)->toBeFalse(); // undocumented codes: two runs
+        ->and($result->context['definitive'])->toBeTrue()
+        ->and($result->context['error'])->toBe('restricted_token');
 
     Artisan::call('social-tokens:check-static');
 
-    expect($credential->fresh()->status)->toBe(AccountStatus::Active)
-        ->and($credential->fresh()->failed_checks)->toBe(1);
-
-    Artisan::call('social-tokens:check-static');
-
-    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect)
+        ->and($credential->fresh()->last_error)->toStartWith('LinkedIn token restricted and refused by the API');
+    Event::assertDispatched(CredentialNeedsReconnect::class);
 })->with([
+    'authentication failed (production)' => [['status' => 401, 'code' => 'AUTHENTICATION_FAILED', 'message' => 'Could not authenticate']],
     'revoked' => [['serviceErrorCode' => 65601, 'message' => 'The token used in the request has been revoked by the user', 'status' => 401]],
     'revoked, /rest style' => [['status' => 401, 'code' => 'REVOKED_ACCESS_TOKEN', 'message' => 'The token used in the request has been revoked']],
     'invalid' => [['serviceErrorCode' => 65600, 'message' => 'Invalid access token', 'status' => 401]],
 ]);
+
+it('flags a restricted token on the publish failure the app reports', function () {
+    linkedInRestricted(['api.linkedin.com/v2/me' => Http::response(['status' => 401, 'code' => 'AUTHENTICATION_FAILED', 'message' => 'Could not authenticate'], 401)]);
+    $credential = linkedInRestrictedCredential(['r_basicprofile', 'w_member_social']);
+
+    expect(app(SocialTokens::class)->reportRejected($credential->accounts()->first(), 'HTTP 401 from the Posts API', terminal: false))->toBeTrue()
+        ->and($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
+});
 
 it('leaves an expired restricted token to the renewal when it can refresh', function (?string $refreshToken, RenewalOutcome $outcome) {
     linkedInRestricted(['api.linkedin.com/v2/me' => Http::response(['serviceErrorCode' => 65602, 'message' => 'The token used in the request has expired', 'status' => 401], 401)]);
@@ -227,16 +237,25 @@ it('leaves an expired restricted token to the renewal when it can refresh', func
     'without' => [null, RenewalOutcome::Terminal],
 ]);
 
-it('decides nothing about a restricted token it has no read to check with', function () {
+it('flags a restricted token it has no read to check with once the next run confirms it', function () {
+    config(['social-tokens.check_renewable' => true]);
     linkedInRestricted();
+    $credential = linkedInRestrictedCredential(['w_member_social', 'w_organization_social']);
 
-    $result = linkedInIntrospectionCheck(linkedInRestrictedCredential(['w_member_social', 'w_organization_social']));
+    $result = linkedInIntrospectionCheck($credential);
 
-    expect($result->unknown)->toBeTrue()
+    expect($result->outcome)->toBe(RenewalOutcome::Terminal)
+        ->and($result->context['definitive'] ?? false)->toBeFalse()
         ->and($result->clientError)->toBeFalse()
         ->and($result->reason)->toContain('restricted_token');
 
     Http::assertSentCount(1);
+
+    Artisan::call('social-tokens:check-static');
+    expect($credential->fresh()->status)->toBe(AccountStatus::Active);
+
+    Artisan::call('social-tokens:check-static');
+    expect($credential->fresh()->status)->toBe(AccountStatus::NeedsReconnect);
 });
 
 it('never flags LinkedIn credentials on a bare active:false in check-static', function () {

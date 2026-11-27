@@ -6,20 +6,21 @@ All notable changes to `pr4w/laravel-social-tokens`. This project adheres to
 ## [Unreleased]
 
 ### Fixed
-- **LinkedIn tokens LinkedIn will not introspect are checked another way.**
-  LinkedIn answers `introspectToken` for some tokens (a Community Management
-  app's, seen in production) with HTTP 401 `restricted_token`, "Token
-  restricted", which it does not document: the check logged it every day as
-  an uncatalogued "Unexpected LinkedIn token introspection response", and
-  could never tell a revoked token, so neither `check-static` nor a
-  `reportRejected()` ever flagged one. Such a token is now checked with a
-  read it is allowed, by its scopes: `/v2/userinfo` (`profile`), `/v2/me`
-  (`r_basicprofile`, `r_liteprofile`), or one organization grant
-  (`r_organization_admin`, `rw_organization_admin`). An answer is the token
-  working; a 401 naming a revoked or invalid token (`REVOKED_ACCESS_TOKEN`
-  / 65601, `INVALID_ACCESS_TOKEN` / 65600, undocumented as well) flags the
-  credential once two runs in a row say so; an expired one is left to the
-  renewal.
+- **A dead LinkedIn token answered `restricted_token` is flagged.** Seen in
+  production: `introspectToken` answered one token HTTP 401
+  `{"error": "restricted_token", "error_description": "Token restricted"}`,
+  which LinkedIn does not document, while the same client introspected some
+  thirty others; the API refused that token (`/v2/me`: 401
+  `AUTHENTICATION_FAILED`) and its posts failed. The check logged an
+  uncatalogued "Unexpected LinkedIn token introspection response" every day
+  and flagged nothing, from `check-static` or `reportRejected()`. A
+  restricted token is now checked with a read its scopes allow:
+  `/v2/userinfo` (`profile`), `/v2/me` (`r_basicprofile`, `r_liteprofile`),
+  or one organization grant (`r_organization_admin`,
+  `rw_organization_admin`). An answer is the token working; a 401 flags the
+  credential at once ("LinkedIn token restricted and refused by the API"),
+  unless the token merely expired and can be refreshed. With no read to
+  check it with, the restriction flags it once the next run confirms it.
 - An introspection refused for the app's client (`invalid_client`, or a bare
   401, which LinkedIn documents as "Invalid client secret") is a client
   failure, as an invalid client is at renewal: `check-static` logs one
